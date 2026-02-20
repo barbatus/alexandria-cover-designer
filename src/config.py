@@ -34,6 +34,8 @@ FAL_API_KEY = os.getenv("FAL_API_KEY", "")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN", "")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY", "")
+GDRIVE_OUTPUT_FOLDER_ID = os.getenv("GDRIVE_OUTPUT_FOLDER_ID", "1Vr184ZsX3k38xpmZkd8g2vwB5y9LYMRC")
+GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
 
 ALL_MODELS = [
     m.strip()
@@ -148,6 +150,8 @@ class Config:
     replicate_api_token: str = REPLICATE_API_TOKEN
     openai_api_key: str = OPENAI_API_KEY
     google_api_key: str = GOOGLE_API_KEY
+    gdrive_output_folder_id: str = GDRIVE_OUTPUT_FOLDER_ID
+    google_credentials_path: str = GOOGLE_CREDENTIALS_PATH
 
     request_delay: float = REQUEST_DELAY
     max_retries: int = MAX_RETRIES
