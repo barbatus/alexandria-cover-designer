@@ -46,6 +46,13 @@
       <label>Book</label>
       <select id="bookSelect"></select>
 
+      <label>Provider</label>
+      <div class="row" style="margin-bottom:8px;">
+        <select id="providerSelect"></select>
+        <button id="testConnectionBtn" type="button">Test Connection</button>
+      </div>
+      <div class="status" id="providerStatus">Connection not tested.</div>
+
       <label>Models</label>
       <div class="row" style="margin-bottom:8px;">
         <button id="selectAllModels" type="button">Select All</button>
@@ -97,12 +104,15 @@
     const app = {
       books: [],
       models: [],
+      providers: [],
+      providerModels: {},
       anchors: [],
       promptLibrary: [],
       selectedAnchors: new Set(),
       latestResults: [],
       history: [],
       fitOverlayEnabled: false,
+      selectedProvider: 'all',
     };
 
     async function init() {
@@ -110,10 +120,14 @@
       const data = await res.json();
       app.books = data.books || [];
       app.models = data.models || [];
+      app.providers = data.providers || [];
+      app.providerModels = data.provider_models || {};
       app.anchors = data.style_anchors || [];
       app.promptLibrary = data.prompt_library || [];
+      app.selectedProvider = 'all';
 
       renderBooks();
+      renderProviders();
       renderModels();
       renderAnchors();
       renderLibrary();
@@ -129,9 +143,26 @@
       select.innerHTML = app.books.map(book => `<option value="${book.number}">${book.number}. ${book.title}</option>`).join('');
     }
 
+    function renderProviders() {
+      const select = document.getElementById('providerSelect');
+      const providerList = ['all'].concat(app.providers);
+      select.innerHTML = providerList.map(provider => {
+        const selected = provider === app.selectedProvider ? 'selected' : '';
+        return `<option value="${provider}" ${selected}>${provider}</option>`;
+      }).join('');
+    }
+
     function renderModels() {
       const box = document.getElementById('modelsBox');
-      box.innerHTML = app.models.map(model => `
+      const provider = app.selectedProvider || 'all';
+      const models = provider === 'all'
+        ? app.models
+        : (app.providerModels[provider] || []);
+      if (!models.length) {
+        box.innerHTML = '<em>No models configured for this provider.</em>';
+        return;
+      }
+      box.innerHTML = models.map(model => `
         <label><input type="checkbox" value="${model}" checked /> ${model}</label>
       `).join('');
     }
@@ -217,11 +248,18 @@
 
     async function generate() {
       const book = currentBook();
+      const provider = document.getElementById('providerSelect').value || 'all';
+      const models = selectedModels();
+      if (!models.length) {
+        document.getElementById('resultStatus').textContent = 'Select at least one model before generating.';
+        return;
+      }
       const payload = {
         book: Number(book.number),
-        models: selectedModels(),
+        models,
         variants: Number(document.getElementById('variationCount').value),
         prompt: document.getElementById('promptEditor').value,
+        provider,
       };
 
       document.getElementById('resultStatus').textContent = 'Generating...';
@@ -236,6 +274,21 @@
       renderResults();
       loadHistory(book.number);
       document.getElementById('resultStatus').textContent = data.message || 'Generation complete';
+    }
+
+    async function testConnection() {
+      const provider = document.getElementById('providerSelect').value || 'all';
+      const statusEl = document.getElementById('providerStatus');
+      statusEl.textContent = 'Testing connection...';
+
+      const res = await fetch('/api/test-connection', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ provider }),
+      });
+      const data = await res.json();
+      const rows = (data.report && data.report.providers) || [];
+      statusEl.textContent = rows.map(row => `${row.provider}: ${row.status}`).join(' | ') || 'No provider results.';
     }
 
     function renderResults() {
@@ -327,12 +380,17 @@
 
     function bindEvents() {
       document.getElementById('bookSelect').addEventListener('change', onBookChange);
+      document.getElementById('providerSelect').addEventListener('change', (event) => {
+        app.selectedProvider = event.target.value || 'all';
+        renderModels();
+      });
       document.getElementById('selectAllModels').addEventListener('click', () => {
         document.querySelectorAll('#modelsBox input[type="checkbox"]').forEach(i => i.checked = true);
       });
       document.getElementById('clearModels').addEventListener('click', () => {
         document.querySelectorAll('#modelsBox input[type="checkbox"]').forEach(i => i.checked = false);
       });
+      document.getElementById('testConnectionBtn').addEventListener('click', testConnection);
       document.getElementById('generateBtn').addEventListener('click', generate);
       document.getElementById('savePromptBtn').addEventListener('click', savePromptToLibrary);
       document.getElementById('toggleOverlayBtn').addEventListener('click', () => {

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 import threading
 import uuid
@@ -27,11 +28,13 @@ try:
     from src import config
     from src import cover_compositor
     from src import image_generator
+    from src import pipeline as pipeline_runner
     from src.prompt_library import LibraryPrompt, PromptLibrary
 except ModuleNotFoundError:  # pragma: no cover
     import config  # type: ignore
     import cover_compositor  # type: ignore
     import image_generator  # type: ignore
+    import pipeline as pipeline_runner  # type: ignore
     from prompt_library import LibraryPrompt, PromptLibrary  # type: ignore
 
 
@@ -153,6 +156,14 @@ def write_review_data(output_dir: Path, *, max_books: int | None = None) -> Path
 def write_iterate_data(*, prompts_path: Path = config.PROMPTS_PATH) -> Path:
     prompts = json.loads(prompts_path.read_text(encoding="utf-8"))
     library = PromptLibrary(config.PROMPT_LIBRARY_PATH)
+    runtime = config.get_config()
+
+    provider_models: dict[str, list[str]] = {}
+    for model in runtime.all_models:
+        provider = runtime.resolve_model_provider(model)
+        provider_models.setdefault(provider, []).append(model)
+    for provider in runtime.provider_keys.keys():
+        provider_models.setdefault(provider, [])
 
     books = []
     for book in prompts.get("books", []):
@@ -168,7 +179,10 @@ def write_iterate_data(*, prompts_path: Path = config.PROMPTS_PATH) -> Path:
 
     payload = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
-        "models": config.ALL_MODELS,
+        "models": runtime.all_models,
+        "providers": sorted(runtime.provider_keys.keys()),
+        "provider_models": provider_models,
+        "default_provider": runtime.ai_provider,
         "books": books,
         "style_anchors": [asdict(anchor) for anchor in library.get_style_anchors()],
         "prompt_library": [asdict(item) for item in library.get_prompts()],
@@ -247,8 +261,29 @@ render();
     return output_path
 
 
-def serve_review_webapp(output_dir: Path, port: int = 8001) -> None:
+def _health_payload() -> dict[str, Any]:
+    runtime = config.get_config()
+    book_count = 0
+    try:
+        catalog = json.loads(runtime.book_catalog_path.read_text(encoding="utf-8"))
+        if isinstance(catalog, list):
+            book_count = len(catalog)
+    except Exception:
+        book_count = 0
+
+    configured_keys = [provider for provider, key in runtime.provider_keys.items() if key.strip()]
+    return {
+        "status": "ok",
+        "version": "1.0.0",
+        "books_cataloged": book_count,
+        "models_configured": runtime.all_models,
+        "api_keys_configured": configured_keys,
+    }
+
+
+def serve_review_webapp(output_dir: Path, port: int = 8001, host: str | None = None) -> None:
     """Serve /review and /iterate pages with lightweight API."""
+    bind_host = (host or os.getenv("HOST", "0.0.0.0")).strip() or "0.0.0.0"
     write_review_data(output_dir)
     write_iterate_data()
     generate_review_gallery(output_dir)
@@ -274,6 +309,8 @@ def serve_review_webapp(output_dir: Path, port: int = 8001) -> None:
                 return self._send_json(_load_json(REVIEW_DATA_PATH, {"books": []}))
             if path == "/api/iterate-data":
                 return self._send_json(_load_json(ITERATE_DATA_PATH, {"books": [], "models": []}))
+            if path == "/api/health":
+                return self._send_json(_health_payload())
             if path == "/api/history":
                 book = int(parse_qs(parsed.query).get("book", ["0"])[0])
                 history_payload = _load_json(HISTORY_PATH, {"items": []})
@@ -320,14 +357,22 @@ def serve_review_webapp(output_dir: Path, port: int = 8001) -> None:
                 write_iterate_data()
                 return self._send_json({"ok": True, "prompt_id": prompt.id})
 
+            if path == "/api/test-connection":
+                provider = str(body.get("provider", "")).strip().lower()
+                selected = [provider] if provider and provider != "all" else None
+                report = pipeline_runner.test_api_keys(runtime=config.get_config(), providers=selected)
+                return self._send_json({"ok": True, "report": report})
+
             if path == "/api/generate":
                 book = int(body.get("book", 0))
                 models = list(body.get("models", []))
                 variants = int(body.get("variants", 5))
                 prompt = str(body.get("prompt", ""))
+                provider = str(body.get("provider", "")).strip().lower()
 
                 runtime = config.get_config()
                 dry_run = not runtime.has_any_api_key()
+                provider_override = provider if provider and provider != "all" else None
 
                 with lock:
                     results = image_generator.generate_single_book(
@@ -337,6 +382,7 @@ def serve_review_webapp(output_dir: Path, port: int = 8001) -> None:
                         models=models or runtime.all_models,
                         variants=variants,
                         prompt_text=prompt,
+                        provider_override=provider_override,
                         resume=False,
                         dry_run=dry_run,
                     )
@@ -405,9 +451,10 @@ def serve_review_webapp(output_dir: Path, port: int = 8001) -> None:
             self.end_headers()
             self.wfile.write(data)
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
-    logger.info("Review webapp running at http://127.0.0.1:%d/review", port)
-    logger.info("Iteration page running at http://127.0.0.1:%d/iterate", port)
+    server = ThreadingHTTPServer((bind_host, port), Handler)
+    shown_host = bind_host if bind_host not in {"0.0.0.0", "::"} else "127.0.0.1"
+    logger.info("Review webapp running at http://%s:%d/review", shown_host, port)
+    logger.info("Iteration page running at http://%s:%d/iterate", shown_host, port)
     server.serve_forever()
 
 
@@ -543,6 +590,7 @@ def main() -> int:
     parser.add_argument("--max-books", type=int, default=None)
     parser.add_argument("--serve", action="store_true")
     parser.add_argument("--port", type=int, default=8001)
+    parser.add_argument("--host", type=str, default=os.getenv("HOST", "0.0.0.0"))
     parser.add_argument("--grid", type=Path, default=None, help="Create one comparison grid image")
     parser.add_argument("--book", type=int, default=None, help="Book number for comparison grid")
 
@@ -577,7 +625,7 @@ def main() -> int:
     generate_review_gallery(args.output_dir, max_books=args.max_books)
 
     if args.serve:
-        serve_review_webapp(args.output_dir, port=args.port)
+        serve_review_webapp(args.output_dir, port=args.port, host=args.host)
         return 0
 
     print(f"Wrote review data: {REVIEW_DATA_PATH}")

@@ -87,6 +87,7 @@ MIN_QUALITY_SCORE = float(os.getenv("MIN_QUALITY_SCORE", "0.6"))
 MAX_COST_USD = float(os.getenv("MAX_COST_USD", "200.00"))
 
 BOOK_SCOPE_LIMIT = int(os.getenv("BOOK_SCOPE_LIMIT", "20"))
+MAX_EXPORT_VARIANTS = int(os.getenv("MAX_EXPORT_VARIANTS", "20"))
 
 FAILURES_PATH = DATA_DIR / "generation_failures.json"
 GENERATION_PLAN_PATH = DATA_DIR / "generation_plan.json"
@@ -173,6 +174,7 @@ class Config:
     generation_plan_path: Path = GENERATION_PLAN_PATH
 
     book_scope_limit: int = BOOK_SCOPE_LIMIT
+    max_export_variants: int = MAX_EXPORT_VARIANTS
 
     # Compatibility aliases
     input_covers_dir: Path = INPUT_DIR

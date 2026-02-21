@@ -109,6 +109,7 @@ def export_book_variants(
     composited_root: Path,
     output_root: Path,
     catalog_path: Path = config.BOOK_CATALOG_PATH,
+    max_variants: int | None = None,
 ) -> list[Path]:
     """Export all composited variants for one book to final folder structure."""
     catalog = json.loads(catalog_path.read_text(encoding="utf-8"))
@@ -127,7 +128,7 @@ def export_book_variants(
 
     variant_images = sorted(composited_dir.glob("variant_*.jpg"), key=lambda p: _parse_variant(p.stem))
     if not variant_images:
-        variant_images = _fallback_collect_variant_images(composited_dir)
+        variant_images = _fallback_collect_variant_images(composited_dir, max_variants=max_variants)
 
     output_paths: list[Path] = []
     final_book_dir = output_root / folder_name
@@ -148,6 +149,7 @@ def batch_export(
     output_root: Path,
     books: list[int] | None = None,
     max_books: int = 20,
+    max_variants: int | None = None,
 ) -> dict[str, Any]:
     """Batch export with D23 default scope (20 books)."""
     available_books = sorted(
@@ -174,6 +176,7 @@ def batch_export(
                 book_number=book_number,
                 composited_root=composited_root,
                 output_root=output_root,
+                max_variants=max_variants,
             )
             summary["success_books"] += 1
             summary["files_exported"] += len(exported)
@@ -185,8 +188,12 @@ def batch_export(
     return summary
 
 
-def _fallback_collect_variant_images(composited_dir: Path) -> list[Path]:
+def _fallback_collect_variant_images(composited_dir: Path, *, max_variants: int | None = None) -> list[Path]:
     """Fallback for model-grouped composited outputs (no default variant files)."""
+    runtime = config.get_config()
+    limit = int(max_variants if max_variants is not None else runtime.max_export_variants)
+    limit = max(1, limit)
+
     grouped = sorted(composited_dir.glob("*/variant_*.jpg"), key=lambda p: (p.parent.name, _parse_variant(p.stem)))
     selected: list[Path] = []
     used_variants: set[int] = set()
@@ -197,7 +204,7 @@ def _fallback_collect_variant_images(composited_dir: Path) -> list[Path]:
             continue
         selected.append(path)
         used_variants.add(variant)
-        if len(selected) >= 5:
+        if len(selected) >= limit:
             break
 
     return selected
@@ -238,6 +245,7 @@ def main() -> int:
     parser.add_argument("--book", type=int, default=None)
     parser.add_argument("--books", type=str, default=None)
     parser.add_argument("--max-books", type=int, default=20)
+    parser.add_argument("--max-variants", type=int, default=None)
     parser.add_argument("--inspect-ai", type=Path, default=None)
 
     args = parser.parse_args()
@@ -252,6 +260,7 @@ def main() -> int:
             book_number=args.book,
             composited_root=args.composited_root,
             output_root=args.output_root,
+            max_variants=args.max_variants,
         )
         logger.info("Exported %d files for book %s", len(exported), args.book)
         return 0
@@ -261,6 +270,7 @@ def main() -> int:
         output_root=args.output_root,
         books=_parse_books(args.books),
         max_books=args.max_books,
+        max_variants=args.max_variants,
     )
     logger.info("Batch export summary: %s", summary)
     return 0

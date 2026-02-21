@@ -272,12 +272,17 @@ class OpenRouterProvider(BaseProvider):
 
         payload = {
             "model": self.model,
-            "prompt": f"{prompt}\nAvoid: {negative_prompt}",
-            "size": f"{width}x{height}",
-            "response_format": "b64_json",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": f"{prompt}\nAvoid: {negative_prompt}\nTarget size: {width}x{height}.",
+                }
+            ],
+            "modalities": ["image"],
+            "stream": False,
         }
         response = requests.post(
-            "https://openrouter.ai/api/v1/images/generations",
+            "https://openrouter.ai/api/v1/chat/completions",
             headers={
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
@@ -296,12 +301,36 @@ class OpenRouterProvider(BaseProvider):
             raise GenerationError(f"OpenRouter error {response.status_code}: {response.text[:300]}")
 
         body = response.json()
-        candidate = body.get("data", [{}])[0]
-        if candidate.get("b64_json"):
-            image_bytes = base64.b64decode(candidate["b64_json"])
-            return Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        if candidate.get("url"):
-            return _download_image(candidate["url"], timeout=self.timeout)
+        choices = body.get("choices") or []
+        if choices:
+            message = choices[0].get("message", {})
+            images = message.get("images") or []
+            for image_row in images:
+                image_url = ""
+                if isinstance(image_row, dict):
+                    image_ref = image_row.get("image_url")
+                    if isinstance(image_ref, dict):
+                        image_url = str(image_ref.get("url", ""))
+                    elif isinstance(image_ref, str):
+                        image_url = image_ref
+                if not image_url:
+                    continue
+                if image_url.startswith("data:image") and "," in image_url:
+                    encoded = image_url.split(",", 1)[1]
+                    image_bytes = base64.b64decode(encoded)
+                    return Image.open(io.BytesIO(image_bytes)).convert("RGB")
+                if image_url.startswith("http"):
+                    return _download_image(image_url, timeout=self.timeout)
+
+        # Backward-compatible fallback (older OpenAI-compatible image schema).
+        candidate = (body.get("data") or [{}])[0]
+        if isinstance(candidate, dict):
+            if candidate.get("b64_json"):
+                image_bytes = base64.b64decode(candidate["b64_json"])
+                return Image.open(io.BytesIO(image_bytes)).convert("RGB")
+            if candidate.get("url"):
+                return _download_image(candidate["url"], timeout=self.timeout)
+
         raise GenerationError("OpenRouter response missing image payload")
 
 
@@ -362,11 +391,11 @@ class ReplicateProvider(BaseProvider):
         create_response = requests.post(
             "https://api.replicate.com/v1/predictions",
             headers={
-                "Authorization": f"Token {self.api_key}",
+                "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
             },
             json={
-                "model": self.model,
+                "version": self.model,
                 "input": {
                     "prompt": prompt,
                     "negative_prompt": negative_prompt,
@@ -397,7 +426,7 @@ class ReplicateProvider(BaseProvider):
         while time.time() < deadline:
             poll = requests.get(
                 poll_url,
-                headers={"Authorization": f"Token {self.api_key}"},
+                headers={"Authorization": f"Bearer {self.api_key}"},
                 timeout=self.timeout,
             )
             if poll.status_code in RETRYABLE_STATUS_CODES:
@@ -411,7 +440,12 @@ class ReplicateProvider(BaseProvider):
             if status == "succeeded":
                 output = body.get("output")
                 if isinstance(output, list) and output:
-                    return _download_image(str(output[0]), timeout=self.timeout)
+                    first = output[0]
+                    if isinstance(first, dict):
+                        output_url = first.get("url")
+                        if output_url:
+                            return _download_image(str(output_url), timeout=self.timeout)
+                    return _download_image(str(first), timeout=self.timeout)
                 if isinstance(output, str):
                     return _download_image(output, timeout=self.timeout)
                 raise GenerationError("Replicate succeeded but output is empty")
@@ -432,15 +466,36 @@ class GoogleCloudProvider(BaseProvider):
             raise GenerationError("Missing GOOGLE_API_KEY")
 
         model_name = self.model if self.model.startswith("models/") else f"models/{self.model}"
-        url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent?key={self.api_key}"
+        url = f"https://generativelanguage.googleapis.com/v1beta/{model_name}:generateContent"
+        prompt_text = f"{prompt}. Avoid: {negative_prompt}"
         payload = {
-            "contents": [{"parts": [{"text": f"{prompt}. Avoid: {negative_prompt}"}]}],
+            "contents": [{"parts": [{"text": prompt_text}]}],
             "generationConfig": {
                 "responseModalities": ["IMAGE"],
                 "imageConfig": {"width": width, "height": height},
             },
         }
-        response = requests.post(url, json=payload, timeout=self.timeout)
+        response = requests.post(
+            url,
+            headers={"x-goog-api-key": self.api_key, "Content-Type": "application/json"},
+            json=payload,
+            timeout=self.timeout,
+        )
+
+        # Some models reject width/height imageConfig; retry once with modality-only config.
+        if response.status_code == 400:
+            fallback_payload = {
+                "contents": [{"parts": [{"text": prompt_text}]}],
+                "generationConfig": {
+                    "responseModalities": ["IMAGE"],
+                },
+            }
+            response = requests.post(
+                url,
+                headers={"x-goog-api-key": self.api_key, "Content-Type": "application/json"},
+                json=fallback_payload,
+                timeout=self.timeout,
+            )
 
         if response.status_code in RETRYABLE_STATUS_CODES:
             raise RetryableGenerationError(
@@ -455,11 +510,18 @@ class GoogleCloudProvider(BaseProvider):
         for candidate in candidates:
             parts = candidate.get("content", {}).get("parts", [])
             for part in parts:
-                inline = part.get("inlineData", {})
+                inline = part.get("inlineData", {}) or part.get("inline_data", {})
                 data = inline.get("data")
                 if data:
                     image_bytes = base64.b64decode(data)
                     return Image.open(io.BytesIO(image_bytes)).convert("RGB")
+
+        generated_images = body.get("generatedImages", []) or body.get("generated_images", [])
+        for item in generated_images:
+            encoded = item.get("image", {}).get("imageBytes") if isinstance(item, dict) else None
+            if encoded:
+                image_bytes = base64.b64decode(encoded)
+                return Image.open(io.BytesIO(image_bytes)).convert("RGB")
 
         raise GenerationError("Google response missing image bytes")
 

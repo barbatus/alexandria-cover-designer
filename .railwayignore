@@ -1,0 +1,11 @@
+Input Covers/
+Output Covers/
+tmp/
+.env
+.git/
+__pycache__/
+*.pyc
+data/generation_*.json
+Codex Prompts/
+Codex Output Answers/
+*.pdf

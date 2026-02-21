@@ -11,6 +11,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+import requests
+
 try:
     from src import config
     from src import cover_analyzer
@@ -37,6 +39,7 @@ logger = logging.getLogger(__name__)
 PIPELINE_STATE_PATH = config.DATA_DIR / "pipeline_state.json"
 PIPELINE_SUMMARY_PATH = config.DATA_DIR / "pipeline_summary.json"
 PIPELINE_SUMMARY_MD_PATH = config.DATA_DIR / "pipeline_summary.md"
+SUPPORTED_PROVIDERS = ["openrouter", "openai", "replicate", "fal", "google"]
 
 
 @dataclass(slots=True)
@@ -218,6 +221,44 @@ def get_pipeline_status(output_dir: Path) -> dict[str, Any]:
     }
 
 
+def test_api_keys(
+    *,
+    runtime: config.Config | None = None,
+    providers: list[str] | None = None,
+    timeout: float = 12.0,
+) -> dict[str, Any]:
+    """Validate configured provider keys using low-cost account/models endpoints."""
+    runtime = runtime or config.get_config()
+    chosen = _normalize_providers(providers)
+
+    rows: list[dict[str, str]] = []
+    for provider in chosen:
+        key = runtime.get_api_key(provider).strip()
+        if not key:
+            rows.append(
+                {
+                    "provider": provider,
+                    "status": "KEY_MISSING",
+                    "detail": "No key configured.",
+                }
+            )
+            continue
+
+        ok, detail = _probe_provider_key(provider=provider, api_key=key, timeout=timeout)
+        rows.append(
+            {
+                "provider": provider,
+                "status": "KEY_VALID" if ok else "KEY_INVALID",
+                "detail": detail,
+            }
+        )
+
+    return {
+        "checked_at": _utc_now(),
+        "providers": rows,
+    }
+
+
 def _run_single_book(
     *,
     book_number: int,
@@ -368,6 +409,53 @@ def _run_single_book(
     )
 
 
+def _probe_provider_key(*, provider: str, api_key: str, timeout: float) -> tuple[bool, str]:
+    provider = provider.strip().lower()
+    try:
+        if provider == "openrouter":
+            response = requests.get(
+                "https://openrouter.ai/api/v1/models/user",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=timeout,
+            )
+        elif provider == "openai":
+            response = requests.get(
+                "https://api.openai.com/v1/models",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=timeout,
+            )
+        elif provider == "replicate":
+            response = requests.get(
+                "https://api.replicate.com/v1/account",
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=timeout,
+            )
+        elif provider == "fal":
+            response = requests.get(
+                "https://api.fal.ai/v1/models?limit=1",
+                headers={"Authorization": f"Key {api_key}"},
+                timeout=timeout,
+            )
+        elif provider == "google":
+            response = requests.get(
+                "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1",
+                headers={"x-goog-api-key": api_key},
+                timeout=timeout,
+            )
+        else:
+            return False, f"Unsupported provider '{provider}'."
+    except requests.RequestException as exc:
+        return False, f"Network error: {exc}"
+
+    if 200 <= response.status_code < 300:
+        return True, f"HTTP {response.status_code}"
+
+    body = response.text.strip().replace("\n", " ")
+    if len(body) > 240:
+        body = body[:240] + "..."
+    return False, f"HTTP {response.status_code}: {body or 'empty response'}"
+
+
 def _ensure_prerequisites(*, input_dir: Path) -> None:
     runtime = config.get_config()
 
@@ -385,6 +473,20 @@ def _ensure_prerequisites(*, input_dir: Path) -> None:
 
     if not runtime.prompt_library_path.exists():
         PromptLibrary(runtime.prompt_library_path)
+
+
+def _normalize_providers(providers: list[str] | None) -> list[str]:
+    if not providers:
+        return SUPPORTED_PROVIDERS[:]
+
+    selected: list[str] = []
+    for provider in providers:
+        token = str(provider).strip().lower()
+        if not token:
+            continue
+        if token not in selected:
+            selected.append(token)
+    return selected
 
 
 def _find_book_entry(prompts_payload: dict[str, Any], book_number: int) -> dict[str, Any]:
@@ -505,6 +607,22 @@ def _parse_books(raw: str | None) -> list[int] | None:
     return sorted(values)
 
 
+def _format_api_key_report(report: dict[str, Any]) -> str:
+    rows = report.get("providers", [])
+    if not isinstance(rows, list):
+        return "No providers checked."
+    lines = []
+    for row in rows:
+        provider = str(row.get("provider", "unknown")).upper()
+        status = str(row.get("status", "KEY_INVALID"))
+        detail = str(row.get("detail", "")).strip()
+        if detail:
+            lines.append(f"{provider} — {status} — {detail}")
+        else:
+            lines.append(f"{provider} — {status}")
+    return "\n".join(lines)
+
+
 def _resolve_variant_options(variants_arg: str | None, variant_arg: int | None, runtime: config.Config) -> tuple[int, list[int]]:
     if variant_arg is not None:
         return 1, [int(variant_arg)]
@@ -553,12 +671,19 @@ def main() -> int:
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--status", action="store_true")
+    parser.add_argument("--test-api-keys", action="store_true")
 
     args = parser.parse_args()
     runtime = config.get_config()
 
     if args.status:
         print(json.dumps(get_pipeline_status(args.output_dir), indent=2))
+        return 0
+
+    if args.test_api_keys:
+        providers = [args.provider] if args.provider else None
+        report = test_api_keys(runtime=runtime, providers=providers)
+        print(_format_api_key_report(report))
         return 0
 
     if args.book is not None:

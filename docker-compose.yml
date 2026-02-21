@@ -1,0 +1,12 @@
+version: "3.8"
+services:
+  cover-designer:
+    build: .
+    ports:
+      - "${PORT:-8001}:8001"
+    env_file: .env
+    volumes:
+      - "./Input Covers:/app/Input Covers:ro"
+      - "./Output Covers:/app/Output Covers"
+      - "./tmp:/app/tmp"
+      - "./data:/app/data"

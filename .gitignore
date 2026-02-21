@@ -9,11 +9,13 @@ Sample Output style covers/
 
 # Environment / secrets
 .env
+config/credentials.json
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
+*.egg-info/
 venv/
 .venv/
 
@@ -23,6 +25,8 @@ Thumbs.db
 
 # Runtime data (generated at runtime, not source)
 data/
+data/generation_history.json
+data/generation_failures.json
 tmp/
 logs/
 
