@@ -11,8 +11,16 @@ from typing import Any, Iterator
 
 try:
     from src import database
+    from src.logger import get_logger
 except ModuleNotFoundError:  # pragma: no cover
     import database  # type: ignore
+    import logging  # type: ignore
+
+    def get_logger(name: str):  # type: ignore[no-redef]
+        return logging.getLogger(name)
+
+
+logger = get_logger(__name__)
 
 
 class Database:
@@ -41,8 +49,8 @@ class Database:
     def __del__(self):  # pragma: no cover - defensive finalizer
         try:
             self.close()
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Database finalizer close failed: %s", exc)
 
     @contextmanager
     def connection(self) -> Iterator[sqlite3.Connection]:
@@ -99,6 +107,7 @@ class Database:
                 conn.execute("BEGIN IMMEDIATE")
                 yield conn
                 conn.execute("COMMIT")
-            except Exception:
+            except Exception as exc:
+                logger.warning("Database transaction failed, rolling back: %s", exc)
                 conn.execute("ROLLBACK")
                 raise

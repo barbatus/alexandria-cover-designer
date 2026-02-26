@@ -79,6 +79,28 @@ def test_thumbnail_rejects_non_image_source(tmp_path: Path):
     assert server.thumbnail_for(relative_path=rel, size="small") is None
 
 
+def test_thumbnail_rejects_mismatched_magic_bytes(tmp_path: Path):
+    project_root = tmp_path / "project"
+    source = project_root / "Output Covers" / "book1" / "variant_1.jpg"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("not really a jpg", encoding="utf-8")
+
+    server = ThumbnailServer(project_root=project_root, cache_dir=project_root / "tmp" / "thumbs")
+    rel = str(source.relative_to(project_root))
+    assert server.thumbnail_for(relative_path=rel, size="small") is None
+
+
+def test_thumbnail_rejects_non_image_mime_even_if_under_allowed_root(tmp_path: Path):
+    project_root = tmp_path / "project"
+    source = project_root / "Output Covers" / "book1" / "payload.json"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("{\"ok\":true}", encoding="utf-8")
+
+    server = ThumbnailServer(project_root=project_root, cache_dir=project_root / "tmp" / "thumbs")
+    rel = str(source.relative_to(project_root))
+    assert server.thumbnail_for(relative_path=rel, size="small") is None
+
+
 def test_thumbnail_rejects_source_outside_allowed_roots(tmp_path: Path):
     project_root = tmp_path / "project"
     source = project_root / "config" / "secret.jpg"

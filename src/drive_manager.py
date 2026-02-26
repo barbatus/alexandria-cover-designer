@@ -72,11 +72,18 @@ def _safe_resolved_child(root: Path, candidate_rel: str) -> Path | None:
     rel = str(candidate_rel or "").strip().lstrip("/")
     if not rel:
         return None
+    if "\x00" in rel:
+        return None
+    if ".." in rel.replace("\\", "/"):
+        return None
     root_resolved = root.resolve()
     candidate = (root_resolved / rel).resolve()
     try:
         candidate.relative_to(root_resolved)
     except ValueError:
+        return None
+    # Reject symlink traversal and escape attempts when the final path resolves outside root.
+    if not str(os.path.realpath(candidate)).startswith(str(root_resolved)):
         return None
     return candidate
 

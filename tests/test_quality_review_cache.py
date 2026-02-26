@@ -6,7 +6,7 @@ from types import SimpleNamespace
 
 import scripts.quality_review as qr
 from scripts.quality_review import DataCache, RequestTracker
-from scripts.quality_review import RollingSLOTracker, SLOAlertManager, SimpleRateLimiter
+from scripts.quality_review import RollingSLOTracker, SLOAlertManager, SSEConnectionLimiter, SimpleRateLimiter
 
 
 def test_data_cache_set_get_and_stats():
@@ -35,6 +35,25 @@ def test_data_cache_invalidate_prefix():
     assert cache.get("catalog:/api/review-data") is None
 
 
+def test_data_cache_enforces_lru_max_entries():
+    cache = DataCache(ttl_seconds=60, max_entries=2)
+    cache.set("a", 1)
+    cache.set("b", 2)
+    assert cache.get("a") == 1  # touch a so b becomes oldest
+    cache.set("c", 3)
+    assert cache.get("b") is None
+    assert cache.get("a") == 1
+    assert cache.get("c") == 3
+    assert cache.stats()["evictions"] >= 1
+
+
+def test_data_cache_invalidate_exact():
+    cache = DataCache(ttl_seconds=60, max_entries=10)
+    cache.set("catalog:/api/health", {"ok": True})
+    assert cache.invalidate_exact("catalog:/api/health") == 1
+    assert cache.invalidate_exact("catalog:/api/health") == 0
+
+
 def test_request_tracker_start_finish():
     tracker = RequestTracker()
     assert tracker.start("generate:1") is True
@@ -50,6 +69,22 @@ def test_simple_rate_limiter():
     assert limiter.allow("ip-a") is True
     assert limiter.allow("ip-a") is False
     assert limiter.allow("ip-b") is True
+
+
+def test_sse_connection_limiter():
+    limiter = SSEConnectionLimiter(per_client=2)
+    assert limiter.start("ip-a:classics") is True
+    assert limiter.start("ip-a:classics") is True
+    assert limiter.start("ip-a:classics") is False
+    assert limiter.active("ip-a:classics") == 2
+    limiter.finish("ip-a:classics")
+    assert limiter.active("ip-a:classics") == 1
+
+
+def test_mutation_limiter_scopes_by_catalog():
+    limiter_a, _limit_a = qr._mutation_limiter("/api/generate", catalog_id="classics")
+    limiter_b, _limit_b = qr._mutation_limiter("/api/generate", catalog_id="modern")
+    assert limiter_a is not limiter_b
 
 
 def test_rolling_slo_tracker(tmp_path: Path):

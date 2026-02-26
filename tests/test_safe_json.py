@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -141,3 +142,28 @@ def test_atomic_write_many_json_rolls_back_new_file_on_partial_failure(tmp_path:
 
     assert safe_json.load_json(one, {})["value"] == "old-one"
     assert not two.exists()
+
+
+def test_atomic_write_json_parallel_writers_keep_valid_json(tmp_path: Path):
+    path = tmp_path / "parallel.json"
+    safe_json.atomic_write_json(path, {"count": 0})
+    errors: list[Exception] = []
+
+    def _writer(seed: int) -> None:
+        try:
+            for step in range(40):
+                safe_json.atomic_write_json(path, {"seed": seed, "step": step})
+        except Exception as exc:  # pragma: no cover - defensive
+            errors.append(exc)
+
+    threads = [threading.Thread(target=_writer, args=(idx,)) for idx in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert errors == []
+    payload = safe_json.load_json(path, {})
+    assert isinstance(payload, dict)
+    assert "seed" in payload
+    assert "step" in payload

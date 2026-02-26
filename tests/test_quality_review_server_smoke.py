@@ -326,6 +326,59 @@ def test_quality_review_server_provider_runtime_reset_endpoint():
         _stop_server(process)
 
 
+def test_quality_review_server_generate_requires_explicit_models():
+    process, base_url = _start_server()
+    try:
+        request = Request(
+            f"{base_url}/api/generate",
+            method="POST",
+            data=json.dumps(
+                {
+                    "catalog": "classics",
+                    "book": 1,
+                    "models": [],
+                    "variants": 1,
+                    "prompt": "test",
+                    "provider": "all",
+                    "dry_run": True,
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urlopen(request, timeout=20)
+            raise AssertionError("Expected missing-model payload to fail")
+        except HTTPError as exc:
+            assert exc.code == 400
+            body = json.loads(exc.read().decode("utf-8"))
+            assert body.get("ok") is False
+            assert body.get("error_code") == "MODELS_REQUIRED"
+    finally:
+        _stop_server(process)
+
+
+def test_quality_review_server_rejects_invalid_json_body():
+    process, base_url = _start_server()
+    try:
+        request = Request(
+            f"{base_url}/api/generate",
+            method="POST",
+            data=b"{not-json",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            urlopen(request, timeout=20)
+            raise AssertionError("Expected invalid JSON to fail")
+        except HTTPError as exc:
+            assert exc.code == 400
+            body = json.loads(exc.read().decode("utf-8"))
+            assert body.get("ok") is False
+            assert body.get("error_code") == "INVALID_JSON_BODY"
+            assert isinstance(body.get("request_id"), str)
+    finally:
+        _stop_server(process)
+
+
 def test_quality_review_server_request_id_headers_are_consistent():
     process, base_url = _start_server()
     try:

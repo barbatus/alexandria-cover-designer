@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import OrderedDict
 import gzip
 import hashlib
 import io
@@ -13,6 +14,7 @@ import math
 import mimetypes
 import os
 import queue
+import re
 import sqlite3
 import shutil
 import subprocess
@@ -54,6 +56,7 @@ try:
     from src import export_amazon
     from src import export_ingram
     from src import export_social
+    from src import export_utils
     from src import export_web
     from src import gdrive_sync
     from src import image_generator
@@ -87,6 +90,7 @@ except ModuleNotFoundError:  # pragma: no cover
     import export_amazon  # type: ignore
     import export_ingram  # type: ignore
     import export_social  # type: ignore
+    import export_utils  # type: ignore
     import export_web  # type: ignore
     import gdrive_sync  # type: ignore
     import image_generator  # type: ignore
@@ -155,6 +159,8 @@ SLO_MONITOR_INTERVAL_SECONDS = max(0, int(os.getenv("SLO_MONITOR_INTERVAL_SECOND
 MUTATION_API_TOKEN = os.getenv("WEB_API_TOKEN", "").strip()
 MUTATION_RATE_LIMIT_PER_MINUTE = max(10, int(os.getenv("WEB_RATE_LIMIT_PER_MINUTE", "120")))
 READ_RATE_LIMIT_PER_MINUTE = max(60, int(os.getenv("WEB_READ_RATE_LIMIT_PER_MINUTE", "300")))
+DATA_CACHE_MAX_ENTRIES = max(100, int(os.getenv("DATA_CACHE_MAX_ENTRIES", "1000")))
+SSE_MAX_CONNECTIONS_PER_CLIENT = max(1, int(os.getenv("SSE_MAX_CONNECTIONS_PER_CLIENT", "3")))
 ALLOW_SYNC_GENERATION = str(os.getenv("ALLOW_SYNC_GENERATION", "0")).strip().lower() in {"1", "true", "yes", "on"}
 
 
@@ -194,12 +200,14 @@ def _job_stale_recovery_config(runtime: config.Config | None = None) -> tuple[in
 class DataCache:
     """Small in-memory TTL cache for expensive GET responses."""
 
-    def __init__(self, *, ttl_seconds: int = 60):
+    def __init__(self, *, ttl_seconds: int = 60, max_entries: int = DATA_CACHE_MAX_ENTRIES):
         self.ttl_seconds = max(1, int(ttl_seconds))
-        self._rows: dict[str, tuple[float, Any]] = {}
+        self.max_entries = max(1, int(max_entries))
+        self._rows: OrderedDict[str, tuple[float, Any]] = OrderedDict()
         self._lock = threading.Lock()
         self.hits = 0
         self.misses = 0
+        self.evictions = 0
 
     def _expired(self, ts: float) -> bool:
         return (time.time() - ts) > self.ttl_seconds
@@ -216,11 +224,17 @@ class DataCache:
                 self.misses += 1
                 return None
             self.hits += 1
+            self._rows.move_to_end(key)
             return value
 
     def set(self, key: str, value: Any) -> None:
         with self._lock:
+            if key in self._rows:
+                self._rows.pop(key, None)
             self._rows[key] = (time.time(), value)
+            while len(self._rows) > self.max_entries:
+                self._rows.popitem(last=False)
+                self.evictions += 1
 
     def clear(self) -> None:
         with self._lock:
@@ -233,6 +247,13 @@ class DataCache:
                 self._rows.pop(key, None)
             return len(keys)
 
+    def invalidate_exact(self, key: str) -> int:
+        with self._lock:
+            if key in self._rows:
+                self._rows.pop(key, None)
+                return 1
+            return 0
+
     def stats(self) -> dict[str, Any]:
         with self._lock:
             expired = 0
@@ -242,10 +263,12 @@ class DataCache:
                     expired += 1
             return {
                 "ttl_seconds": self.ttl_seconds,
+                "max_entries": self.max_entries,
                 "entries": len(self._rows),
                 "expired_entries": expired,
                 "hits": self.hits,
                 "misses": self.misses,
+                "evictions": self.evictions,
             }
 
 
@@ -299,6 +322,38 @@ class SimpleRateLimiter:
             history.append(now)
             self._rows[token] = history
             return True
+
+
+class SSEConnectionLimiter:
+    """Track concurrent SSE streams per client key."""
+
+    def __init__(self, *, per_client: int):
+        self.per_client = max(1, int(per_client))
+        self._rows: dict[str, int] = {}
+        self._lock = threading.Lock()
+
+    def start(self, client_key: str) -> bool:
+        token = str(client_key or "unknown").strip() or "unknown"
+        with self._lock:
+            active = int(self._rows.get(token, 0) or 0)
+            if active >= self.per_client:
+                return False
+            self._rows[token] = active + 1
+            return True
+
+    def finish(self, client_key: str) -> None:
+        token = str(client_key or "unknown").strip() or "unknown"
+        with self._lock:
+            active = int(self._rows.get(token, 0) or 0)
+            if active <= 1:
+                self._rows.pop(token, None)
+            else:
+                self._rows[token] = active - 1
+
+    def active(self, client_key: str) -> int:
+        token = str(client_key or "unknown").strip() or "unknown"
+        with self._lock:
+            return int(self._rows.get(token, 0) or 0)
 
 
 class RollingSLOTracker:
@@ -970,6 +1025,11 @@ mutation_rate_limiter = SimpleRateLimiter(per_minute=MUTATION_RATE_LIMIT_PER_MIN
 read_rate_limiter = SimpleRateLimiter(per_minute=READ_RATE_LIMIT_PER_MINUTE)
 generation_rate_limiter = SimpleRateLimiter(per_minute=max(1, int(os.getenv("GENERATION_RATE_LIMIT_PER_MINUTE", "5"))))
 admin_rate_limiter = SimpleRateLimiter(per_minute=max(5, int(os.getenv("ADMIN_RATE_LIMIT_PER_MINUTE", "30"))))
+sse_connection_limiter = SSEConnectionLimiter(per_client=SSE_MAX_CONNECTIONS_PER_CLIENT)
+_catalog_mutation_limiters: dict[str, SimpleRateLimiter] = {}
+_catalog_generation_limiters: dict[str, SimpleRateLimiter] = {}
+_catalog_admin_limiters: dict[str, SimpleRateLimiter] = {}
+_catalog_rate_limiter_lock = threading.Lock()
 slo_tracker = RollingSLOTracker(SLO_METRICS_PATH)
 slo_alert_manager = SLOAlertManager(
     state_path=SLO_ALERT_STATE_PATH,
@@ -1291,13 +1351,45 @@ def _books_filters_from_query(query: dict[str, list[str]]) -> dict[str, Any]:
     }
 
 
-def _mutation_limiter(path: str) -> tuple[SimpleRateLimiter, int]:
+def _catalog_scoped_limiter(
+    *,
+    catalog_id: str | None,
+    default_limiter: SimpleRateLimiter,
+    catalog_rows: dict[str, SimpleRateLimiter],
+) -> SimpleRateLimiter:
+    token = str(catalog_id or "").strip().lower()
+    if not token:
+        return default_limiter
+    with _catalog_rate_limiter_lock:
+        limiter = catalog_rows.get(token)
+        if limiter is None:
+            limiter = SimpleRateLimiter(per_minute=default_limiter.per_minute)
+            catalog_rows[token] = limiter
+        return limiter
+
+
+def _mutation_limiter(path: str, *, catalog_id: str | None = None) -> tuple[SimpleRateLimiter, int]:
     token = str(path or "").strip().lower()
     if token.startswith("/api/generate") or token.startswith("/api/jobs") or token.startswith("/api/export") or token.startswith("/api/delivery"):
-        return generation_rate_limiter, generation_rate_limiter.per_minute
+        limiter = _catalog_scoped_limiter(
+            catalog_id=catalog_id,
+            default_limiter=generation_rate_limiter,
+            catalog_rows=_catalog_generation_limiters,
+        )
+        return limiter, limiter.per_minute
     if token.startswith("/api/admin"):
-        return admin_rate_limiter, admin_rate_limiter.per_minute
-    return mutation_rate_limiter, mutation_rate_limiter.per_minute
+        limiter = _catalog_scoped_limiter(
+            catalog_id=catalog_id,
+            default_limiter=admin_rate_limiter,
+            catalog_rows=_catalog_admin_limiters,
+        )
+        return limiter, limiter.per_minute
+    limiter = _catalog_scoped_limiter(
+        catalog_id=catalog_id,
+        default_limiter=mutation_rate_limiter,
+        catalog_rows=_catalog_mutation_limiters,
+    )
+    return limiter, limiter.per_minute
 
 
 def _worker_runtime_status(*, worker_mode: str | None = None) -> dict[str, Any]:
@@ -1493,6 +1585,8 @@ def _default_job_checkpoint(*, runtime: config.Config, job_id: str, book: int, d
             "generate": {"status": "pending"},
             "composite": {"status": "pending"},
             "persist": {"status": "pending"},
+            "deliver": {"status": "pending"},
+            "sync": {"status": "pending"},
         },
         "updated_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -1515,7 +1609,7 @@ def _load_job_checkpoint(*, runtime: config.Config, job_id: str, book: int, dry_
     stages = payload.get("stages")
     if not isinstance(stages, dict):
         stages = {}
-    for stage_name in ("generate", "composite", "persist"):
+    for stage_name in ("generate", "composite", "persist", "deliver", "sync"):
         entry = stages.get(stage_name)
         if not isinstance(entry, dict):
             stages[stage_name] = {"status": "pending"}
@@ -1543,6 +1637,26 @@ def _clear_job_checkpoint(*, runtime: config.Config, job_id: str) -> None:
     path = _job_checkpoint_path(runtime=runtime, job_id=job_id)
     if path.exists():
         path.unlink(missing_ok=True)
+
+
+def _cleanup_stale_checkpoints(*, runtime: config.Config, max_age_hours: int = 24) -> int:
+    """Remove stale checkpoint files to avoid orphaned resume state."""
+    checkpoint_root = runtime.data_dir / "job_checkpoints" / _checkpoint_catalog_token(runtime.catalog_id)
+    if not checkpoint_root.exists():
+        return 0
+    now_ts = time.time()
+    max_age_seconds = max(1, int(max_age_hours)) * 3600
+    removed = 0
+    for row in checkpoint_root.glob("*.json"):
+        try:
+            age_seconds = now_ts - float(row.stat().st_mtime)
+            if age_seconds <= max_age_seconds:
+                continue
+            row.unlink(missing_ok=True)
+            removed += 1
+        except OSError:
+            continue
+    return removed
 
 
 def _checkpoint_stage_completed(checkpoint: dict[str, Any], stage: str) -> bool:
@@ -1631,6 +1745,8 @@ def _execute_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
     dry_run = forced_dry_run or (not runtime.has_any_api_key())
     job_id = str(payload.get("job_id", "")).strip()
     provider_override = provider if provider and provider != "all" else None
+
+    _cleanup_stale_checkpoints(runtime=runtime)
 
     checkpoint = (
         _load_job_checkpoint(runtime=runtime, job_id=job_id, book=book, dry_run=dry_run)
@@ -1814,6 +1930,8 @@ def _execute_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
             ) from exc
         if checkpoint:
             _set_checkpoint_stage(checkpoint, stage="persist", status="completed")
+            for trailing_stage in ("deliver", "sync"):
+                _set_checkpoint_stage(checkpoint, stage=trailing_stage, status="skipped")
             _save_job_checkpoint(runtime=runtime, checkpoint=checkpoint)
 
     stage_snapshot: dict[str, Any] = {}
@@ -3208,11 +3326,20 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
             "reason": drive_mode_error if drive_enabled else "folder_not_configured",
         }
     )
+    active_jobs = (
+        int(status_counts.get("queued", 0) or 0)
+        + int(status_counts.get("running", 0) or 0)
+        + int(status_counts.get("retrying", 0) or 0)
+    )
     return {
         "status": "ok" if overall_healthy else "degraded",
         "healthy": overall_healthy,
         "version": "2.0.0",
         "uptime_seconds": int(max(0.0, time.time() - APP_STARTED_AT)),
+        "database": "connected" if str(database_check.get("status", "")).strip().lower() == "ok" else "disconnected",
+        "drive": "connected" if str(drive_check.get("status", "")).strip().lower() == "ok" else "disconnected",
+        "disk_space_gb": free_gb,
+        "active_jobs": active_jobs,
         "books_cataloged": book_count,
         "books_generated": int(summary.get("books_generated", 0)),
         "total_images": len(quality_rows) if quality_rows else len(output_files),
@@ -5000,12 +5127,26 @@ def serve_review_webapp(
             self._set_active_runtime(None)
             self._set_request_id(str(self.headers.get("X-Request-Id", "")).strip() or str(uuid.uuid4()))
             size = int(self.headers.get("Content-Length", "0"))
-            body_raw = self.rfile.read(size) if size > 0 else b"{}"
-
-            try:
-                body = json.loads(body_raw.decode("utf-8"))
-            except json.JSONDecodeError:
-                body = {}
+            body_raw = self.rfile.read(size) if size > 0 else b""
+            body: dict[str, Any] = {}
+            if body_raw.strip():
+                try:
+                    parsed_body = json.loads(body_raw.decode("utf-8"))
+                except json.JSONDecodeError:
+                    return self._send_error(
+                        code="INVALID_JSON_BODY",
+                        message="Request body must be valid JSON",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                if not isinstance(parsed_body, dict):
+                    return self._send_error(
+                        code="INVALID_JSON_BODY",
+                        message="Request JSON body must be an object",
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                body = parsed_body
             requested_catalog_raw = str(body.get("catalog", query.get("catalog", [default_runtime.catalog_id])[0])).strip()
             try:
                 requested_catalog = security.validate_catalog_id(requested_catalog_raw) if requested_catalog_raw else default_runtime.catalog_id
@@ -5033,7 +5174,7 @@ def serve_review_webapp(
                         endpoint=path,
                     )
 
-            limiter, limit_per_minute = _mutation_limiter(path)
+            limiter, limit_per_minute = _mutation_limiter(path, catalog_id=runtime_req.catalog_id)
             if not limiter.allow(f"{client_ip}:{path}"):
                 return self._send_error(
                     code="RATE_LIMITED",
@@ -5685,6 +5826,7 @@ def serve_review_webapp(
                         status=HTTPStatus.NOT_FOUND,
                         endpoint=path,
                     )
+                _clear_job_checkpoint(runtime=runtime_req, job_id=token)
                 _record_audit_event(
                     action="job_cancel",
                     impact="destructive",
@@ -6481,6 +6623,29 @@ def serve_review_webapp(
                     }
                 )
 
+            if path.startswith("/api/export/validate/"):
+                token = path.split("/api/export/validate/", 1)[1].strip("/")
+                book_number = _safe_int(token, 0)
+                if book_number <= 0:
+                    return self._send_error(
+                        code="INVALID_BOOK_NUMBER",
+                        message="book number must be a positive integer",
+                        details={"book": token},
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                try:
+                    validation = _validate_export_readiness_for_book(runtime=runtime_req, book_number=book_number)
+                except Exception as exc:
+                    return self._send_error(
+                        code="EXPORT_VALIDATION_FAILED",
+                        message=str(exc),
+                        details={"book": book_number},
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                        endpoint=path,
+                    )
+                return self._send_json(validation, status=HTTPStatus.OK if bool(validation.get("ok", False)) else HTTPStatus.UNPROCESSABLE_ENTITY)
+
             if path == "/api/export/amazon" or path.startswith("/api/export/amazon/"):
                 book = 0
                 if path.startswith("/api/export/amazon/"):
@@ -6683,6 +6848,17 @@ def serve_review_webapp(
             if path == "/api/delivery/batch":
                 platforms_token = str(query.get("platforms", [body.get("platforms", "")])[0] or body.get("platforms", ""))
                 platforms = [token.strip().lower() for token in platforms_token.split(",") if token.strip()] if platforms_token else None
+                if platforms:
+                    valid_platforms = set(delivery_pipeline.DEFAULT_PLATFORMS)
+                    invalid_platforms = sorted({token for token in platforms if token not in valid_platforms})
+                    if invalid_platforms:
+                        return self._send_error(
+                            code="INVALID_DELIVERY_PLATFORMS",
+                            message="One or more delivery platforms are invalid.",
+                            details={"invalid": invalid_platforms, "valid": sorted(valid_platforms)},
+                            status=HTTPStatus.BAD_REQUEST,
+                            endpoint=path,
+                        )
                 books_param = str(query.get("books", [body.get("books", "")])[0] or body.get("books", ""))
                 books = _parse_books(books_param)
                 if not books:
@@ -6828,11 +7004,9 @@ def serve_review_webapp(
                     )
                 active_models = [str(item).strip() for item in models if str(item).strip()]
                 if not active_models:
-                    active_models = runtime_req.all_models[:]
-                if not active_models:
                     return self._send_error(
                         code="MODELS_REQUIRED",
-                        message="At least one model is required",
+                        message="Select at least one model before generating.",
                         details={"models": models},
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
@@ -7353,7 +7527,7 @@ def serve_review_webapp(
                         endpoint=path,
                     )
 
-            limiter, limit_per_minute = _mutation_limiter(path)
+            limiter, limit_per_minute = _mutation_limiter(path, catalog_id=runtime_req.catalog_id)
             if not limiter.allow(f"{client_ip}:{path}"):
                 return self._send_error(
                     code="RATE_LIMITED",
@@ -7465,6 +7639,26 @@ def serve_review_webapp(
             catalog_id: str | None = None,
         ):
             normalized = dict(payload)
+            request_id = self._current_request_id()
+            normalized["request_id"] = request_id
+
+            is_error_response = int(status) >= 400 or bool(normalized.get("ok") is False)
+            if is_error_response:
+                normalized["ok"] = False
+                message = ""
+                if isinstance(normalized.get("error"), str) and str(normalized.get("error", "")).strip():
+                    message = str(normalized.get("error", "")).strip()
+                elif isinstance(normalized.get("error_message"), str) and str(normalized.get("error_message", "")).strip():
+                    message = str(normalized.get("error_message", "")).strip()
+                elif isinstance(normalized.get("message"), str) and str(normalized.get("message", "")).strip():
+                    message = str(normalized.get("message", "")).strip()
+                else:
+                    message = "Request failed"
+                normalized["error"] = message
+                normalized["error_message"] = message
+                if "error_code" not in normalized:
+                    normalized["error_code"] = str(normalized.get("code", "REQUEST_FAILED"))
+
             if "success" not in normalized:
                 if "ok" in normalized:
                     normalized["success"] = bool(normalized.get("ok"))
@@ -7475,7 +7669,6 @@ def serve_review_webapp(
             raw = json.dumps(normalized, ensure_ascii=False).encode("utf-8")
             use_gzip = "gzip" in str(self.headers.get("Accept-Encoding", "")).lower() and len(raw) >= 1200
             data = gzip.compress(raw) if use_gzip else raw
-            request_id = self._current_request_id()
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
             self.send_header("Cache-Control", cache_control)
@@ -7555,7 +7748,19 @@ def serve_review_webapp(
         ):
             scoped_job_id = str(job_id or "").strip()
             scoped_batch_id = str(batch_id or "").strip()
-            token, client_queue = job_event_broker.subscribe()
+            client_ip = str(self.client_address[0] if self.client_address else "unknown")
+            sse_key = f"{client_ip}:{str(catalog_id or '*').strip().lower() or '*'}"
+            if not sse_connection_limiter.start(sse_key):
+                return self._send_error(
+                    code="SSE_CONNECTION_LIMIT",
+                    message="Too many active event streams for this client/catalog. Close an existing stream and retry.",
+                    details={"limit_per_client": SSE_MAX_CONNECTIONS_PER_CLIENT},
+                    status=HTTPStatus.TOO_MANY_REQUESTS,
+                    endpoint=self.path,
+                    headers={"Retry-After": "10"},
+                )
+            token = ""
+            client_queue: queue.Queue[dict[str, Any]] | None = None
             self.send_response(HTTPStatus.OK)
             self.send_header("Content-Type", "text/event-stream; charset=utf-8")
             self.send_header("Cache-Control", "no-cache")
@@ -7564,6 +7769,7 @@ def serve_review_webapp(
             self.end_headers()
 
             try:
+                token, client_queue = job_event_broker.subscribe()
                 bootstrap = {
                     "event": "ready",
                     "catalog_id": str(catalog_id or ""),
@@ -7575,7 +7781,7 @@ def serve_review_webapp(
                 self.wfile.flush()
                 while True:
                     try:
-                        event = client_queue.get(timeout=20.0)
+                        event = client_queue.get(timeout=20.0) if client_queue is not None else {}
                     except queue.Empty:
                         keepalive = f": ping {datetime.now(timezone.utc).isoformat()}\n\n".encode("utf-8")
                         self.wfile.write(keepalive)
@@ -7602,7 +7808,9 @@ def serve_review_webapp(
             except (BrokenPipeError, ConnectionResetError, TimeoutError, OSError):
                 return
             finally:
-                job_event_broker.unsubscribe(token)
+                if token:
+                    job_event_broker.unsubscribe(token)
+                sse_connection_limiter.finish(sse_key)
 
         def _send_error(
             self,
@@ -7631,10 +7839,28 @@ def serve_review_webapp(
                 )
             except Exception:  # pragma: no cover - best effort
                 pass
-            payload = api_responses.error_payload(code=code, message=message, details=details)
-            payload["ok"] = False
-            payload["error_message"] = message
-            payload["request_id"] = self._current_request_id()
+            safe_message = str(message or "Request failed").strip() or "Request failed"
+            for pattern in (
+                r"\bsk-[A-Za-z0-9_-]{12,}\b",
+                r"\bsk-proj-[A-Za-z0-9_-]{12,}\b",
+                r"\bsk-or-v1-[A-Za-z0-9_-]{12,}\b",
+                r"\bAIza[0-9A-Za-z_-]{20,}\b",
+            ):
+                safe_message = re.sub(pattern, lambda m: security.mask_api_key(m.group(0)), safe_message)
+            raw_details = details if isinstance(details, dict) else {}
+            safe_details = security.scrub_sensitive(raw_details)
+            if "idempotency_key" in raw_details:
+                safe_details["idempotency_key"] = str(raw_details.get("idempotency_key", ""))
+            payload = {
+                "ok": False,
+                "error": safe_message,
+                "error_message": safe_message,
+                "error_code": str(code or "REQUEST_FAILED"),
+                "code": str(code or "REQUEST_FAILED"),
+                "message": safe_message,
+                "details": safe_details,
+                "request_id": self._current_request_id(),
+            }
             return self._send_json(payload, status=status, headers=headers, catalog_id=runtime_for_error.catalog_id)
 
     server = ThreadingHTTPServer((bind_host, port), Handler)
@@ -8426,6 +8652,129 @@ def _export_status_by_book(*, runtime: config.Config) -> dict[int, dict[str, Any
             continue
         out.setdefault(book, {})[platform] = row
     return out
+
+
+def _validate_export_readiness_for_book(*, runtime: config.Config, book_number: int) -> dict[str, Any]:
+    winners = export_utils.load_winner_books(
+        catalog_path=runtime.book_catalog_path,
+        output_root=runtime.output_dir,
+        selections_path=_winner_path_for_runtime(runtime),
+        quality_path=_quality_scores_path_for_runtime(runtime),
+    )
+    winner = winners.get(int(book_number))
+    if winner is None:
+        return {
+            "ok": False,
+            "book_number": int(book_number),
+            "catalog": runtime.catalog_id,
+            "error": f"Winner not available for book {book_number}",
+            "platforms": {
+                "amazon": {"ready": False, "status": "failed", "reasons": ["missing_winner_selection"]},
+                "ingram": {"ready": False, "status": "failed", "reasons": ["missing_winner_selection"]},
+                "social": {"ready": False, "status": "failed", "reasons": ["missing_winner_selection"]},
+                "web": {"ready": False, "status": "failed", "reasons": ["missing_winner_selection"]},
+            },
+        }
+
+    cover_path = Path(winner.cover_path)
+    if not cover_path.exists():
+        return {
+            "ok": False,
+            "book_number": int(book_number),
+            "catalog": runtime.catalog_id,
+            "error": f"Winner cover file not found: {cover_path}",
+            "platforms": {
+                "amazon": {"ready": False, "status": "failed", "reasons": ["missing_cover_file"]},
+                "ingram": {"ready": False, "status": "failed", "reasons": ["missing_cover_file"]},
+                "social": {"ready": False, "status": "failed", "reasons": ["missing_cover_file"]},
+                "web": {"ready": False, "status": "failed", "reasons": ["missing_cover_file"]},
+            },
+        }
+
+    with Image.open(cover_path) as cover:
+        source_mode = str(cover.mode or "").upper()
+        source_width, source_height = cover.size
+        source_dpi = cover.info.get("dpi", ())
+        front, _spine, _back, _detail = export_utils.crop_cover_regions(cover.convert("RGB"))
+
+    front_width, front_height = front.size
+    front_ratio = float(front_height) / float(max(1, front_width))
+    front_file_size_mb = round(float(cover_path.stat().st_size) / (1024.0 * 1024.0), 4)
+    dpi_value = tuple(source_dpi) if isinstance(source_dpi, tuple) else ()
+    dpi_x = _safe_int(dpi_value[0] if len(dpi_value) > 0 else 0, 0)
+    dpi_y = _safe_int(dpi_value[1] if len(dpi_value) > 1 else 0, 0)
+
+    amazon_reasons: list[str] = []
+    if front_width < 625 or front_height < 1000:
+        amazon_reasons.append("front_cover_too_small_for_kdp")
+    if front_ratio < 1.45 or front_ratio > 1.75:
+        amazon_reasons.append("front_cover_aspect_ratio_out_of_range")
+    if source_mode not in {"RGB", "RGBA", "CMYK"}:
+        amazon_reasons.append("unsupported_source_color_mode")
+
+    ingram_reasons: list[str] = []
+    if source_width < 1200 or source_height < 1800:
+        ingram_reasons.append("cover_resolution_too_small_for_print")
+    if source_mode not in {"RGB", "RGBA", "CMYK"}:
+        ingram_reasons.append("unsupported_source_color_mode")
+    if int(getattr(winner, "page_count", 0) or 0) <= 0:
+        ingram_reasons.append("missing_page_count")
+
+    social_reasons: list[str] = []
+    if source_width < 1080 or source_height < 1080:
+        social_reasons.append("cover_too_small_for_social_derivatives")
+
+    web_reasons: list[str] = []
+    if source_width < 600 or source_height < 900:
+        web_reasons.append("cover_too_small_for_web_derivatives")
+
+    platforms = {
+        "amazon": {
+            "ready": len(amazon_reasons) == 0,
+            "status": "completed" if len(amazon_reasons) == 0 else "failed",
+            "reasons": amazon_reasons,
+            "checks": {
+                "front_size": [front_width, front_height],
+                "target_size": [1600, 2560],
+                "front_ratio": round(front_ratio, 6),
+                "source_mode": source_mode,
+                "source_dpi": [dpi_x, dpi_y],
+                "source_file_size_mb": front_file_size_mb,
+            },
+        },
+        "ingram": {
+            "ready": len(ingram_reasons) == 0,
+            "status": "completed" if len(ingram_reasons) == 0 else "failed",
+            "reasons": ingram_reasons,
+            "checks": {
+                "cover_size": [source_width, source_height],
+                "source_mode": source_mode,
+                "expected_mode": "CMYK (converted during export)",
+                "source_dpi": [dpi_x, dpi_y],
+                "page_count": int(getattr(winner, "page_count", 0) or 0),
+            },
+        },
+        "social": {
+            "ready": len(social_reasons) == 0,
+            "status": "completed" if len(social_reasons) == 0 else "failed",
+            "reasons": social_reasons,
+            "checks": {"cover_size": [source_width, source_height]},
+        },
+        "web": {
+            "ready": len(web_reasons) == 0,
+            "status": "completed" if len(web_reasons) == 0 else "failed",
+            "reasons": web_reasons,
+            "checks": {"cover_size": [source_width, source_height]},
+        },
+    }
+    return {
+        "ok": all(bool(row.get("ready")) for row in platforms.values()),
+        "book_number": int(book_number),
+        "catalog": runtime.catalog_id,
+        "winner_variant": int(getattr(winner, "winner_variant", 0) or 0),
+        "winner_cover_path": _to_project_relative(cover_path),
+        "platforms": platforms,
+    }
 
 
 def _load_export_manifest(runtime: config.Config) -> dict[str, Any]:
@@ -10236,6 +10585,7 @@ def _build_api_docs_html() -> str:
         ("POST", "/api/regenerate", "Re-generate weak book(s)", "{\"book\":15,\"variants\":5,\"use_library\":true}", "{\"ok\":true,\"summary\":{...}}", "Run targeted re-generation workflow."),
         ("POST", "/api/similarity/recompute", "Recompute similarity cache", "{\"threshold\":0.25}", "{\"ok\":true,\"job\":{...}}", "Trigger background full similarity recompute."),
         ("POST", "/api/similarity/update", "Incremental similarity update", "{\"book\":15}", "{\"ok\":true}", "Recompute similarity pairs for one book only."),
+        ("POST", "/api/export/validate/{book_number}", "Validate export readiness", "-", "{\"ok\":true,\"platforms\":{...}}", "Validate winner cover readiness for Amazon/Ingram/Social/Web without writing exports."),
         ("POST", "/api/export/amazon", "Amazon export", "{\"books\":\"1-20\"}", "{\"ok\":true,\"export_id\":\"...\"}", "Generate Amazon listing assets for winners."),
         ("POST", "/api/export/amazon/{book_number}", "Amazon export (single)", "-", "{\"ok\":true}", "Generate Amazon assets for one title."),
         ("POST", "/api/export/ingram", "Ingram export", "{\"books\":\"1-20\"}", "{\"ok\":true}", "Generate IngramSpark print package."),

@@ -191,7 +191,9 @@ def test_api_contract_error_payload_shape():
         assert "application/json" in content_type.lower()
         assert payload.get("ok") is False
         assert payload.get("success") is False
-        assert payload.get("error") is True
+        assert isinstance(payload.get("error"), str)
+        assert isinstance(payload.get("error_code"), str)
+        assert isinstance(payload.get("request_id"), str)
         assert isinstance(payload.get("message"), str)
         assert isinstance(payload.get("error_message"), str)
 
@@ -200,13 +202,17 @@ def test_api_contract_error_payload_shape():
         assert "application/json" in content_type.lower()
         assert payload.get("ok") is False
         assert isinstance(payload.get("error"), str)
+        assert isinstance(payload.get("error_code"), str)
+        assert isinstance(payload.get("request_id"), str)
         assert payload.get("success") is False
 
         status, payload, content_type = _request_json(base_url, "/api/archive/restore/0", method="POST", payload={})
         assert status == 400
         assert "application/json" in content_type.lower()
         assert payload.get("ok") is False
-        assert payload.get("error") is True
+        assert isinstance(payload.get("error"), str)
+        assert isinstance(payload.get("error_code"), str)
+        assert isinstance(payload.get("request_id"), str)
         assert isinstance(payload.get("message"), str)
         assert isinstance(payload.get("error_message"), str)
         assert payload.get("success") is False
@@ -240,5 +246,23 @@ def test_api_contract_mutation_endpoints_return_json_and_success_flags():
                 assert isinstance(err, (str, bool)), path
                 if isinstance(err, bool):
                     assert isinstance(body.get("message"), str), path
+    finally:
+        _stop_server(process)
+
+
+def test_api_contract_export_validate_endpoint_shapes():
+    process, base_url = _start_server()
+    try:
+        status, payload, content_type = _request_json(base_url, "/api/export/validate/not-a-book", method="POST", payload={})
+        assert status == 400
+        assert "application/json" in content_type.lower()
+        assert payload.get("ok") is False
+        assert isinstance(payload.get("error_code"), str)
+
+        status, payload, content_type = _request_json(base_url, "/api/export/validate/1", method="POST", payload={})
+        assert status in {200, 422}
+        assert "application/json" in content_type.lower()
+        assert isinstance(payload.get("platforms"), dict)
+        assert isinstance(payload.get("request_id"), str)
     finally:
         _stop_server(process)

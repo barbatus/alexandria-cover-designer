@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import json
+import os
 import queue
 import sqlite3
 import time
@@ -1390,6 +1391,8 @@ def test_execute_generation_payload_resumes_after_composite_failure(tmp_path: Pa
     assert result["stages"]["generate"]["status"] == "completed"
     assert result["stages"]["composite"]["status"] == "completed"
     assert result["stages"]["persist"]["status"] == "completed"
+    assert result["stages"]["deliver"]["status"] == "skipped"
+    assert result["stages"]["sync"]["status"] == "skipped"
     assert str(result["results"][0]["composited_path"]).endswith("/tmp/composited/1/variant_1.jpg")
     assert generate_calls["count"] == 1
     assert composite_calls["count"] == 2
@@ -1397,6 +1400,25 @@ def test_execute_generation_payload_resumes_after_composite_failure(tmp_path: Pa
     assert all(call.get("job_id") == "job-ckpt-1" for call in append_calls)
     assert result["results"][0]["job_id"] == "job-ckpt-1"
     assert not checkpoint_path.exists()
+
+
+def test_cleanup_stale_checkpoints_removes_old_files(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    stale_dir = cfg.data_dir / "job_checkpoints" / "classics"
+    stale_dir.mkdir(parents=True, exist_ok=True)
+    stale = stale_dir / "stale.json"
+    fresh = stale_dir / "fresh.json"
+    stale.write_text("{}", encoding="utf-8")
+    fresh.write_text("{}", encoding="utf-8")
+    old = time.time() - (26 * 3600)
+    now = time.time()
+    os.utime(stale, (old, old))
+    os.utime(fresh, (now, now))
+
+    removed = qr._cleanup_stale_checkpoints(runtime=cfg, max_age_hours=24)
+    assert removed == 1
+    assert not stale.exists()
+    assert fresh.exists()
 
 
 def test_assert_composite_validation_within_limits(tmp_path: Path):

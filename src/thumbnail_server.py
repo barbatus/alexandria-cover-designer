@@ -3,10 +3,41 @@
 from __future__ import annotations
 
 import hashlib
+import mimetypes
 from pathlib import Path
 from typing import Iterable
 
 from PIL import Image
+
+try:
+    from src.logger import get_logger
+except Exception:  # pragma: no cover - fallback when package imports are unavailable
+    import logging
+
+    def get_logger(name: str):  # type: ignore[no-redef]
+        return logging.getLogger(name)
+
+
+logger = get_logger(__name__)
+
+
+_ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
+
+
+def _matches_magic_bytes(source: Path) -> bool:
+    try:
+        head = source.read_bytes()[:16]
+    except OSError:
+        return False
+    if len(head) < 3:
+        return False
+    if head.startswith(b"\xff\xd8\xff"):  # JPEG
+        return True
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):  # PNG
+        return True
+    if head.startswith(b"RIFF") and head[8:12] == b"WEBP":  # WEBP
+        return True
+    return False
 
 
 class ThumbnailServer:
@@ -49,6 +80,11 @@ class ThumbnailServer:
             return None
         if not source.exists() or not source.is_file():
             return None
+        mime_type, _encoding = mimetypes.guess_type(str(source))
+        if str(mime_type or "").strip().lower() not in _ALLOWED_MIME_TYPES:
+            return None
+        if not _matches_magic_bytes(source):
+            return None
         return source
 
     def thumbnail_for(self, *, relative_path: str, size: str) -> Path | None:
@@ -68,15 +104,18 @@ class ThumbnailServer:
         target.parent.mkdir(parents=True, exist_ok=True)
         try:
             with Image.open(source) as img:
+                img.verify()
+            with Image.open(source) as img:
                 rgb = img.convert("RGB")
                 rgb.thumbnail((max_dim, max_dim), Image.LANCZOS)
                 rgb.save(target, format="JPEG", quality=82, optimize=True)
-        except Exception:
+        except Exception as exc:
             # Non-image/corrupt sources should fail closed without bubbling to API handlers.
+            logger.warning("Thumbnail generation rejected source: %s", exc)
             try:
                 if target.exists():
                     target.unlink()
-            except Exception:
-                pass
+            except Exception as cleanup_exc:
+                logger.warning("Thumbnail cleanup failed: %s", cleanup_exc)
             return None
         return target
