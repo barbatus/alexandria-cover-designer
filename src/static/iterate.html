@@ -357,6 +357,8 @@
 
     function qs(id) { return document.getElementById(id); }
     function catalogQuery() { return `catalog=${encodeURIComponent(app.catalog)}`; }
+    const ITERATE_DATA_PAGE_SIZE = 500;
+    const ITERATE_DATA_MAX_PAGES = 50;
     async function fetchJson(url, { timeoutMs = 12000, options = {} } = {}) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), Math.max(500, Number(timeoutMs) || 12000));
@@ -378,6 +380,63 @@
       } finally {
         clearTimeout(timer);
       }
+    }
+
+    function mergeBookRows(rows) {
+      const byNumber = new Map();
+      const withoutNumber = [];
+      (rows || []).forEach((row) => {
+        if (!row || typeof row !== 'object') return;
+        const bookNumber = Number(row.number || 0);
+        if (bookNumber > 0) {
+          if (!byNumber.has(bookNumber)) byNumber.set(bookNumber, row);
+          return;
+        }
+        withoutNumber.push(row);
+      });
+      const numbered = Array.from(byNumber.entries())
+        .sort((a, b) => a[0] - b[0])
+        .map((entry) => entry[1]);
+      return numbered.concat(withoutNumber);
+    }
+
+    async function fetchAllIterateData({ timeoutMs = 15000 } = {}) {
+      const makeUrl = (offset) => `/api/iterate-data?${catalogQuery()}&limit=${ITERATE_DATA_PAGE_SIZE}&offset=${Math.max(0, Number(offset) || 0)}`;
+      const { res, data } = await fetchJson(makeUrl(0), { timeoutMs });
+      if (!res.ok) return { res, data };
+
+      let books = Array.isArray(data.books) ? data.books.slice() : [];
+      let pagination = (data && typeof data.pagination === 'object' && data.pagination) ? data.pagination : {};
+      let hasMore = Boolean(pagination.has_more);
+      let limit = Math.max(1, Number(pagination.limit || ITERATE_DATA_PAGE_SIZE));
+      let offset = Math.max(0, Number(pagination.offset || 0));
+      let pagesFetched = 1;
+
+      while (hasMore && pagesFetched < ITERATE_DATA_MAX_PAGES) {
+        offset += limit;
+        const { res: pageRes, data: pageData } = await fetchJson(makeUrl(offset), { timeoutMs });
+        if (!pageRes.ok) break;
+        const pageBooks = Array.isArray(pageData.books) ? pageData.books : [];
+        books = books.concat(pageBooks);
+        pagination = (pageData && typeof pageData.pagination === 'object' && pageData.pagination) ? pageData.pagination : {};
+        hasMore = Boolean(pagination.has_more) && pageBooks.length > 0;
+        limit = Math.max(1, Number(pagination.limit || ITERATE_DATA_PAGE_SIZE));
+        pagesFetched += 1;
+      }
+
+      const mergedBooks = mergeBookRows(books);
+      const totalBooks = Math.max(Number(data.total_books || 0), mergedBooks.length);
+      const mergedData = Object.assign({}, data, {
+        books: mergedBooks,
+        total_books: totalBooks,
+        pagination: {
+          total: totalBooks,
+          limit: mergedBooks.length || 1,
+          offset: 0,
+          has_more: false,
+        },
+      });
+      return { res, data: mergedData };
     }
 
     function nowIso() {
@@ -556,7 +615,7 @@
         if (!app.catalog && catalogData.active_catalog) app.catalog = catalogData.active_catalog;
         renderCatalogs();
 
-        const { res, data } = await fetchJson(`/api/iterate-data?${catalogQuery()}`, { timeoutMs: 15000 });
+        const { res, data } = await fetchAllIterateData({ timeoutMs: 15000 });
         if (!res.ok) throw new Error(data.error || data.message || 'Failed to load iterate data.');
         app.books = data.books || [];
         app.models = data.models || [];
@@ -832,7 +891,7 @@
       refreshBtn.disabled = true;
       statusNode.textContent = 'Loading Drive covers...';
       try {
-        const { res, data } = await fetchJson(`/api/drive/input-covers?limit=300&${catalogQuery()}`, { timeoutMs: 12000 });
+        const { res, data } = await fetchJson(`/api/drive/input-covers?limit=5000&${catalogQuery()}`, { timeoutMs: 20000 });
         if (!res.ok) {
           const message = data.error || data.message || 'Drive cover load failed.';
           throw new Error(message);
@@ -848,13 +907,14 @@
         }
         const mode = String(data.mode || 'unknown');
         const count = Number(data.count || covers.length || 0);
+        const total = Number(data.total || count || 0);
         if (data.error) {
           statusNode.textContent = `Drive error: ${data.error}`;
           if (!silent) setStatus('Google Drive cover list unavailable.');
           if (!silent) showToast(`Drive error: ${data.error}`, 'error');
           return false;
         }
-        statusNode.textContent = `Loaded ${count} cover item(s) from ${mode}${count >= 300 ? ' (top 300 shown)' : ''}.`;
+        statusNode.textContent = `Loaded ${count} cover item(s) from ${mode}${total > count ? ` (showing first ${count} of ${total})` : ''}.`;
         if (!silent) showToast(`Loaded ${count} Drive cover item(s).`, 'success', 2200);
         return true;
       } catch (error) {
@@ -1237,8 +1297,10 @@
       const selected = currentBook();
       const selectedNumber = selected ? Number(selected.number) : 0;
       const selectedDriveId = app.selectedDriveCoverId;
-      const res = await fetch(`/api/iterate-data?${catalogQuery()}`);
-      const data = await res.json();
+      const { res, data } = await fetchAllIterateData({ timeoutMs: 15000 });
+      if (!res.ok) {
+        throw new Error(data.error || data.message || 'Failed to refresh iterate data.');
+      }
       app.books = data.books || [];
       app.models = data.models || app.models;
       app.providers = data.providers || app.providers;

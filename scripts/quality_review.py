@@ -4723,7 +4723,7 @@ def serve_review_webapp(
                     input_folder_id=input_folder_id,
                     credentials_path=credentials_path,
                     catalog_path=runtime_req.book_catalog_path,
-                    limit=max(1, min(2000, limit)),
+                    limit=max(1, min(5000, limit)),
                 )
                 payload["ok"] = True
                 payload["catalog"] = runtime_req.catalog_id
