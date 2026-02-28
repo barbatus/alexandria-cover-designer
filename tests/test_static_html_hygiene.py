@@ -82,3 +82,20 @@ def test_static_inline_scripts_are_valid_javascript():
                 failures.append(f"{html_path.name} script#{index}: {proc.stderr or proc.stdout}")
 
     assert failures == []
+
+
+def test_iterate_html_includes_drive_first_cover_preview_hooks():
+    iterate_html = (STATIC_DIR / "iterate.html").read_text(encoding="utf-8")
+    assert "coverPreviewBox" in iterate_html
+    assert "/api/config/cover-source-default" in iterate_html
+    assert "/cover-preview?" in iterate_html
+
+
+def test_iterate_html_keeps_cover_source_selector_outside_quick_controls():
+    iterate_html = (STATIC_DIR / "iterate.html").read_text(encoding="utf-8")
+    quick_start = iterate_html.find('<div id="quickControls"')
+    advanced_start = iterate_html.find('<div id="advancedControlsWrap"')
+    assert quick_start >= 0
+    assert advanced_start > quick_start
+    quick_block = iterate_html[quick_start:advanced_start]
+    assert "coverSourceSelect" not in quick_block

@@ -543,6 +543,107 @@ def test_list_input_covers_google_api_error_returns_unavailable(monkeypatch, tmp
     assert "drive offline" in str(payload.get("error", ""))
 
 
+def test_list_input_covers_google_api_reuses_cached_drive_listing(monkeypatch, tmp_path: Path):
+    drive_manager.clear_drive_cover_cache()
+    catalog_path = tmp_path / "book_catalog.json"
+    catalog_path.write_text('[{"number": 1, "title": "A Room with a View"}]', encoding="utf-8")
+
+    calls = {"iter": 0}
+    monkeypatch.setattr(drive_manager.gdrive_sync, "authenticate", lambda _path: object())
+
+    def _fake_iter_drive_cover_entries(**_kwargs):  # type: ignore[no-untyped-def]
+        calls["iter"] += 1
+        return (
+            [
+                {
+                    "id": "folder-1",
+                    "name": "1. A Room with a View",
+                    "kind": "folder",
+                    "book_number": 1,
+                }
+            ],
+            "input-folder-id",
+        )
+
+    monkeypatch.setattr(drive_manager, "_iter_drive_cover_entries", _fake_iter_drive_cover_entries)
+
+    first = drive_manager.list_input_covers(
+        drive_folder_id="drive-root-id",
+        input_folder_id="",
+        credentials_path=tmp_path / "credentials.json",
+        catalog_path=catalog_path,
+        limit=100,
+    )
+    second = drive_manager.list_input_covers(
+        drive_folder_id="drive-root-id",
+        input_folder_id="",
+        credentials_path=tmp_path / "credentials.json",
+        catalog_path=catalog_path,
+        limit=100,
+    )
+    drive_manager.clear_drive_cover_cache()
+
+    assert first["mode"] == "google_api"
+    assert second["mode"] == "google_api"
+    assert first["count"] == 1
+    assert second["count"] == 1
+    assert calls["iter"] == 1
+
+
+def test_clear_drive_cover_cache_forces_refetch(monkeypatch, tmp_path: Path):
+    drive_manager.clear_drive_cover_cache()
+    catalog_path = tmp_path / "book_catalog.json"
+    catalog_path.write_text('[{"number": 1, "title": "A Room with a View"}]', encoding="utf-8")
+
+    calls = {"iter": 0}
+    monkeypatch.setattr(drive_manager.gdrive_sync, "authenticate", lambda _path: object())
+
+    def _fake_iter_drive_cover_entries(**_kwargs):  # type: ignore[no-untyped-def]
+        calls["iter"] += 1
+        return (
+            [
+                {
+                    "id": "folder-1",
+                    "name": "1. A Room with a View",
+                    "kind": "folder",
+                    "book_number": 1,
+                }
+            ],
+            "input-folder-id",
+        )
+
+    monkeypatch.setattr(drive_manager, "_iter_drive_cover_entries", _fake_iter_drive_cover_entries)
+    drive_manager.list_input_covers(
+        drive_folder_id="drive-root-id",
+        input_folder_id="",
+        credentials_path=tmp_path / "credentials.json",
+        catalog_path=catalog_path,
+        limit=100,
+    )
+    drive_manager.clear_drive_cover_cache()
+    drive_manager.list_input_covers(
+        drive_folder_id="drive-root-id",
+        input_folder_id="",
+        credentials_path=tmp_path / "credentials.json",
+        catalog_path=catalog_path,
+        limit=100,
+    )
+    drive_manager.clear_drive_cover_cache()
+    assert calls["iter"] == 2
+
+
+def test_resolve_book_mapping_uses_fuzzy_title_fallback():
+    title_by_book = {2: "Moby Dick"}
+    book_by_title = {drive_manager._normalize_title_token("Moby Dick"): 2}
+    book, title = drive_manager._resolve_book_mapping(
+        name="Moby Dik",
+        title_by_book=title_by_book,
+        book_by_title=book_by_title,
+    )
+    assert book == 2
+    assert title == "Moby Dick"
+
+
 def test_ensure_local_input_cover_selected_drive_cover_mismatch_fails(monkeypatch, tmp_path: Path):
     catalog_path = tmp_path / "book_catalog.json"
     catalog_path.write_text(
@@ -575,6 +676,33 @@ def test_ensure_local_input_cover_selected_drive_cover_mismatch_fails(monkeypatc
     )
     assert payload["ok"] is False
     assert "maps to book 2" in str(payload.get("error", "")).lower()
+
+
+def test_ensure_local_input_cover_missing_drive_book_includes_title(monkeypatch, tmp_path: Path):
+    catalog_path = tmp_path / "book_catalog.json"
+    catalog_path.write_text(
+        '[{"number": 1, "folder_name": "1. Book", "title": "Book One"}]',
+        encoding="utf-8",
+    )
+    input_root = tmp_path / "Input Covers"
+
+    monkeypatch.setattr(drive_manager.gdrive_sync, "authenticate", lambda _path: object())
+    monkeypatch.setattr(
+        drive_manager,
+        "_iter_drive_cover_entries",
+        lambda **_kwargs: ([], "input-folder-id"),
+    )
+
+    payload = drive_manager.ensure_local_input_cover(
+        drive_folder_id="drive-root-id",
+        input_folder_id="input-folder-id",
+        credentials_path=tmp_path / "credentials.json",
+        catalog_path=catalog_path,
+        input_root=input_root,
+        book_number=1,
+    )
+    assert payload["ok"] is False
+    assert "book #1 'book one'" in str(payload.get("error", "")).lower()
 
 
 def test_ensure_local_input_cover_selected_drive_cover_missing_fails(monkeypatch, tmp_path: Path):

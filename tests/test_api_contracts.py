@@ -101,6 +101,7 @@ def test_api_contract_get_endpoints_status_and_content_type():
             "/api/books?limit=5&offset=0",
             "/api/review-data?limit=5&offset=0",
             "/api/iterate-data?limit=5&offset=0",
+            "/api/config/cover-source-default",
             "/api/generation-history?limit=5&offset=0",
             "/api/jobs?limit=5&offset=0",
             "/api/analytics/costs",
@@ -146,6 +147,19 @@ def test_api_contract_get_endpoints_status_and_content_type():
         with urlopen(f"{base_url}/api/docs", timeout=15) as response:
             assert int(getattr(response, "status", 200)) == 200
             assert "text/html" in str(response.headers.get("Content-Type", "")).lower()
+    finally:
+        _stop_server(process)
+
+
+def test_api_contract_cover_source_default_endpoint_shape():
+    process, base_url = _start_server()
+    try:
+        status, payload, content_type = _request_json(base_url, "/api/config/cover-source-default")
+        assert status == 200
+        assert "application/json" in content_type.lower()
+        assert payload.get("ok") is True
+        assert payload.get("default") in {"catalog", "drive"}
+        assert isinstance(payload.get("local_input_covers_available"), bool)
     finally:
         _stop_server(process)
 

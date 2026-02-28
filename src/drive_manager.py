@@ -6,6 +6,9 @@ import json
 import os
 import re
 import shutil
+import threading
+import time
+import difflib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -362,6 +365,9 @@ def get_status(
 
 
 _IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+_DRIVE_COVER_LIST_CACHE_TTL_SECONDS = max(60, int(os.getenv("DRIVE_COVER_LIST_CACHE_TTL_SECONDS", "3600")))
+_DRIVE_COVER_LIST_CACHE: dict[str, tuple[float, list[dict[str, Any]], str]] = {}
+_DRIVE_COVER_LIST_CACHE_LOCK = threading.Lock()
 
 
 def _normalize_title_token(value: str) -> str:
@@ -421,7 +427,83 @@ def _resolve_book_mapping(*, name: str, title_by_book: dict[int, str], book_by_t
         book = book_by_title.get(normalized, 0)
         if book > 0:
             return book, title_by_book.get(book, "")
+        # Fallback fuzzy title matching when number-prefix and exact token lookup miss.
+        if book_by_title:
+            candidates = difflib.get_close_matches(normalized, list(book_by_title.keys()), n=1, cutoff=0.86)
+            if candidates:
+                fuzzy_book = int(book_by_title.get(candidates[0], 0) or 0)
+                if fuzzy_book > 0:
+                    return fuzzy_book, title_by_book.get(fuzzy_book, "")
     return 0, ""
+
+
+def _drive_cover_cache_key(*, drive_folder_id: str, input_folder_id: str, catalog_path: Path) -> str:
+    return f"{str(drive_folder_id).strip()}::{str(input_folder_id).strip()}::{str(catalog_path.resolve())}"
+
+
+def _get_cached_drive_cover_entries(*, cache_key: str) -> tuple[list[dict[str, Any]], str] | None:
+    now = time.time()
+    with _DRIVE_COVER_LIST_CACHE_LOCK:
+        row = _DRIVE_COVER_LIST_CACHE.get(cache_key)
+        if row is None:
+            return None
+        ts, entries, resolved_input_folder_id = row
+        if (now - ts) > _DRIVE_COVER_LIST_CACHE_TTL_SECONDS:
+            _DRIVE_COVER_LIST_CACHE.pop(cache_key, None)
+            return None
+        # Return a defensive copy so callers cannot mutate cache state.
+        return [dict(item) for item in entries], str(resolved_input_folder_id)
+
+
+def _set_cached_drive_cover_entries(
+    *,
+    cache_key: str,
+    entries: list[dict[str, Any]],
+    resolved_input_folder_id: str,
+) -> None:
+    with _DRIVE_COVER_LIST_CACHE_LOCK:
+        _DRIVE_COVER_LIST_CACHE[cache_key] = (
+            time.time(),
+            [dict(item) for item in entries if isinstance(item, dict)],
+            str(resolved_input_folder_id or ""),
+        )
+
+
+def clear_drive_cover_cache() -> None:
+    with _DRIVE_COVER_LIST_CACHE_LOCK:
+        _DRIVE_COVER_LIST_CACHE.clear()
+
+
+def _cached_drive_cover_entries(
+    *,
+    service: Any,
+    drive_folder_id: str,
+    input_folder_id: str,
+    title_by_book: dict[int, str],
+    book_by_title: dict[str, int],
+    catalog_path: Path,
+) -> tuple[list[dict[str, Any]], str]:
+    cache_key = _drive_cover_cache_key(
+        drive_folder_id=drive_folder_id,
+        input_folder_id=input_folder_id,
+        catalog_path=catalog_path,
+    )
+    cached = _get_cached_drive_cover_entries(cache_key=cache_key)
+    if cached is not None:
+        return cached
+    entries, resolved_input_folder_id = _iter_drive_cover_entries(
+        service=service,
+        drive_folder_id=drive_folder_id,
+        input_folder_id=input_folder_id,
+        title_by_book=title_by_book,
+        book_by_title=book_by_title,
+    )
+    _set_cached_drive_cover_entries(
+        cache_key=cache_key,
+        entries=entries,
+        resolved_input_folder_id=resolved_input_folder_id,
+    )
+    return [dict(item) for item in entries], str(resolved_input_folder_id)
 
 
 def _entry_sort_key(row: dict[str, Any]) -> tuple[int, int, str]:
@@ -581,12 +663,13 @@ def list_input_covers(
 
     try:
         service = gdrive_sync.authenticate(_auth_credentials_path(credentials_path))
-        entries, resolved_input_folder_id = _iter_drive_cover_entries(
+        entries, resolved_input_folder_id = _cached_drive_cover_entries(
             service=service,
             drive_folder_id=str(drive_folder_id),
             input_folder_id=str(input_folder_id or ""),
             title_by_book=title_by_book,
             book_by_title=book_by_title,
+            catalog_path=catalog_path,
         )
         trimmed = entries[:max_rows]
         return {
@@ -702,12 +785,13 @@ def ensure_local_input_cover(
 
     service = gdrive_sync.authenticate(_auth_credentials_path(credentials_path))
     title_by_book, book_by_title = _catalog_maps(catalog_path)
-    entries, _resolved_input_folder_id = _iter_drive_cover_entries(
+    entries, _resolved_input_folder_id = _cached_drive_cover_entries(
         service=service,
         drive_folder_id=str(drive_folder_id),
         input_folder_id=str(input_folder_id or ""),
         title_by_book=title_by_book,
         book_by_title=book_by_title,
+        catalog_path=catalog_path,
     )
     candidate_entry: dict[str, Any] | None = None
     if selected_id:
@@ -731,10 +815,15 @@ def ensure_local_input_cover(
     if candidate_entry is None:
         candidate_entry = next((row for row in entries if int(row.get("book_number", 0) or 0) == int(book_number)), None)
     if candidate_entry is None:
+        book_title = str(title_by_book.get(int(book_number), "")).strip()
+        title_suffix = f" '{book_title}'" if book_title else ""
         return {
             "ok": False,
             "downloaded": False,
-            "error": f"No Drive cover found for book {book_number}",
+            "error": (
+                f"No cover found in Google Drive for book #{int(book_number)}{title_suffix}. "
+                "Upload covers to the Drive folder first."
+            ),
         }
 
     image_file: dict[str, Any] | None = None

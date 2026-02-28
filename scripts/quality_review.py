@@ -7,6 +7,7 @@ import argparse
 from collections import OrderedDict
 import gzip
 import hashlib
+import inspect
 import io
 import json
 import logging
@@ -15,6 +16,7 @@ import mimetypes
 import os
 import queue
 import re
+import signal
 import sqlite3
 import shutil
 import subprocess
@@ -146,7 +148,7 @@ STATE_DB_PATH = PROJECT_ROOT / os.getenv("STATE_DB_PATH", "data/state.sqlite3")
 JOB_WORKER_COUNT = max(1, int(os.getenv("JOB_WORKERS", "2")))
 JOB_STALE_RECOVERY_SECONDS = max(30, int(os.getenv("JOB_STALE_RECOVERY_SECONDS", "900")))
 JOB_STALE_RECOVERY_RETRY_DELAY_SECONDS = max(1.0, float(os.getenv("JOB_STALE_RECOVERY_RETRY_DELAY_SECONDS", "2.0")))
-JOB_WORKER_MODE = str(os.getenv("JOB_WORKER_MODE", "external")).strip().lower() or "external"
+JOB_WORKER_MODE = str(os.getenv("JOB_WORKER_MODE", "inline")).strip().lower() or "inline"
 JOB_WORKER_HEARTBEAT_PATH = PROJECT_ROOT / os.getenv("JOB_WORKER_HEARTBEAT_PATH", "data/worker_heartbeat.json")
 JOB_WORKER_HEARTBEAT_STALE_SECONDS = max(30, int(os.getenv("JOB_WORKER_HEARTBEAT_STALE_SECONDS", "120")))
 SLO_ALERT_COOLDOWN_SECONDS = max(60, int(os.getenv("SLO_ALERT_COOLDOWN_SECONDS", "900")))
@@ -701,12 +703,16 @@ class JobWorkerPool:
         self._started = True
         logger.info("Started job worker pool", extra={"workers": self.worker_count})
 
-    def stop(self, *, timeout_seconds: float = 8.0) -> None:
+    def stop(self, *, timeout_seconds: float = 3.0) -> None:
         if not self._started:
             return
         self._stop_event.set()
+        deadline = time.monotonic() + max(0.0, float(timeout_seconds))
         for thread in self._threads:
-            thread.join(timeout=timeout_seconds)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            thread.join(timeout=remaining)
         self._threads = []
         self._started = False
         for idx in range(self.worker_count):
@@ -827,7 +833,34 @@ class JobWorkerPool:
                 execution_payload["job_id"] = job.id
                 if batch_id:
                     execution_payload["batch_id"] = batch_id
-                result = _execute_generation_payload(execution_payload)
+
+                def _publish_stage_progress(stage_payload: dict[str, Any]) -> None:
+                    stage = str(stage_payload.get("stage", "") or "").strip()
+                    message = str(stage_payload.get("message", "") or "").strip()
+                    progress = max(0.0, min(1.0, _safe_float(stage_payload.get("progress"), 0.0)))
+                    event_payload = {
+                        "job_id": job.id,
+                        "catalog_id": job.catalog_id,
+                        "book_number": int(job.book_number or 0),
+                        "job_type": job.job_type,
+                        "status": "running",
+                        "progress": progress,
+                        "batch_id": batch_id,
+                        "stage": stage,
+                        "message": message,
+                    }
+                    job_event_broker.publish("job_progress", event_payload)
+
+                executor = _execute_generation_payload
+                stage_supported = False
+                try:
+                    stage_supported = "stage_callback" in inspect.signature(executor).parameters
+                except Exception:
+                    stage_supported = False
+                if stage_supported:
+                    result = executor(execution_payload, stage_callback=_publish_stage_progress)
+                else:
+                    result = executor(execution_payload)
                 result_rows = result.get("results", []) if isinstance(result, dict) else []
                 if isinstance(result_rows, list):
                     for row in result_rows:
@@ -1171,7 +1204,7 @@ class SLOBackgroundMonitor:
             thread.start()
             return True
 
-    def stop(self, *, timeout_seconds: float = 5.0) -> None:
+    def stop(self, *, timeout_seconds: float = 2.0) -> None:
         thread: threading.Thread | None
         with self._lock:
             thread = self._thread
@@ -1837,7 +1870,11 @@ def _is_retryable_stage_error(*, stage: str, exc: Exception) -> bool:
     return False
 
 
-def _execute_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
+def _execute_generation_payload(
+    payload: dict[str, Any],
+    *,
+    stage_callback: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
     catalog_id = str(payload.get("catalog", config.DEFAULT_CATALOG_ID))
     runtime = config.get_config(catalog_id)
 
@@ -1874,6 +1911,20 @@ def _execute_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
     dry_run = forced_dry_run or (not runtime.has_any_api_key())
     job_id = str(payload.get("job_id", "")).strip()
     provider_override = provider if provider and provider != "all" else None
+
+    def _emit_stage(stage: str, message: str, progress: float = 0.0) -> None:
+        if stage_callback is None:
+            return
+        try:
+            stage_callback(
+                {
+                    "stage": str(stage or "").strip() or "running",
+                    "message": str(message or "").strip() or "Working...",
+                    "progress": max(0.0, min(1.0, float(progress))),
+                }
+            )
+        except Exception:
+            return
 
     _cleanup_stale_checkpoints(runtime=runtime)
 
@@ -1957,6 +2008,7 @@ def _execute_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
         regions = _load_json(config.cover_regions_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir), {})
         try:
             if cover_source == "drive":
+                _emit_stage("download", "Downloading cover from Google Drive...", 0.03)
                 effective_drive_folder_id = (
                     drive_folder_id
                     or runtime.gdrive_source_folder_id
@@ -1984,6 +2036,18 @@ def _execute_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
                 )
                 if not bool(ensure_result.get("ok")):
                     raise RuntimeError(str(ensure_result.get("error") or "Failed to load input cover from Google Drive."))
+                downloaded_now = bool(ensure_result.get("downloaded", False))
+                source_label = str(ensure_result.get("source", "") or "google_drive")
+                _emit_stage(
+                    "download",
+                    (
+                        "Downloaded cover from Google Drive."
+                        if downloaded_now
+                        else f"Using cached local cover ({source_label})."
+                    ),
+                    0.15,
+                )
+            _emit_stage("composite", "Compositing generated variants onto source cover...", 0.78)
             cover_compositor.composite_all_variants(
                 book_number=book,
                 input_dir=runtime.input_dir,
@@ -2023,6 +2087,7 @@ def _execute_generation_payload(payload: dict[str, Any]) -> dict[str, Any]:
         _save_job_checkpoint(runtime=runtime, checkpoint=checkpoint)
 
     if not (checkpoint and _checkpoint_stage_completed(checkpoint, "persist")):
+        _emit_stage("persist", "Persisting generation results...", 0.92)
         try:
             _record_generation_costs(runtime=runtime, book_number=book, rows=serialized, job_id=job_id)
             if library_prompt_id and any(isinstance(row, dict) and bool(row.get("success")) for row in serialized):
@@ -3070,6 +3135,65 @@ def _local_cover_available(*, runtime: config.Config, book_number: int) -> bool:
     return folder.exists() and bool(sorted(folder.glob("*.jpg")))
 
 
+def _first_local_cover_path(*, runtime: config.Config, book_number: int) -> Path | None:
+    folder_name = _catalog_folder_name_for_book(runtime.book_catalog_path, int(book_number))
+    if not folder_name:
+        return None
+    folder = runtime.input_dir / folder_name
+    if not folder.exists() or not folder.is_dir():
+        return None
+    candidates: list[Path] = []
+    for suffix in ("*.jpg", "*.jpeg", "*.png", "*.webp"):
+        candidates.extend(sorted(folder.glob(suffix)))
+    return candidates[0] if candidates else None
+
+
+def _has_local_input_covers(*, runtime: config.Config, max_dirs: int = 250) -> bool:
+    root = Path(runtime.input_dir)
+    if not root.exists() or not root.is_dir():
+        return False
+    image_suffixes = {".jpg", ".jpeg", ".png", ".webp"}
+    checked = 0
+    try:
+        for child in root.iterdir():
+            checked += 1
+            if checked > max(10, int(max_dirs)):
+                break
+            if child.is_file() and child.suffix.lower() in image_suffixes:
+                return True
+            if not child.is_dir():
+                continue
+            for image_path in child.glob("*"):
+                if image_path.is_file() and image_path.suffix.lower() in image_suffixes:
+                    return True
+    except OSError:
+        return False
+    return False
+
+
+def _default_cover_source_for_runtime(runtime: config.Config) -> str:
+    override = str(os.getenv("COVER_SOURCE_DEFAULT", "")).strip().lower()
+    if override in {"catalog", "drive"}:
+        return override
+    return "catalog" if _has_local_input_covers(runtime=runtime) else "drive"
+
+
+def _cover_preview_path_for_runtime(*, runtime: config.Config, book_number: int, source: str) -> Path:
+    token = str(source or "catalog").strip().lower() or "catalog"
+    if token not in {"catalog", "drive"}:
+        token = "catalog"
+    return runtime.tmp_dir / "cover_previews" / f"{runtime.catalog_id}_{int(book_number)}_{token}.jpg"
+
+
+def _write_cover_preview(*, source_image: Path, preview_path: Path, max_size: int = 360) -> Path:
+    preview_path.parent.mkdir(parents=True, exist_ok=True)
+    with Image.open(source_image) as img:
+        rendered = img.convert("RGB")
+        rendered.thumbnail((max(64, int(max_size)), max(64, int(max_size))))
+        rendered.save(preview_path, format="JPEG", quality=85, optimize=True)
+    return preview_path
+
+
 def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Path | None = None) -> Path:
     runtime = runtime or config.get_config()
     prompts_path = prompts_path or runtime.prompts_path
@@ -3154,6 +3278,8 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
         "prompt_library": [asdict(item) for item in library.get_prompts()],
         "model_costs": {model: runtime.get_model_cost(model) for model in runtime.all_models},
         "gdrive_output_folder_id": str(runtime.gdrive_output_folder_id or ""),
+        "default_cover_source": _default_cover_source_for_runtime(runtime),
+        "local_input_covers_available": _has_local_input_covers(runtime=runtime),
     }
 
     iterate_path = _iterate_data_path_for_runtime(runtime)
@@ -3672,20 +3798,38 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
     configured_providers = [name for name, key in runtime.provider_keys.items() if key.strip()]
     drive_credentials_path = _resolve_credentials_path(runtime)
     drive_mode, drive_mode_error = _drive_credentials_mode(runtime, credentials_path=drive_credentials_path)
-    drive_enabled = bool(runtime.gdrive_output_folder_id)
-    drive_check = (
-        {
-            "status": "ok",
-            "mode": drive_mode,
-            "credentials_path": str(drive_credentials_path),
-        }
-        if drive_enabled and drive_mode
-        else {
+    drive_source_folder = (
+        str(getattr(runtime, "gdrive_source_folder_id", "") or "").strip()
+        or str(getattr(runtime, "gdrive_input_folder_id", "") or "").strip()
+        or str(getattr(runtime, "gdrive_output_folder_id", "") or "").strip()
+    )
+    drive_enabled = bool(drive_source_folder)
+    drive_connected = False
+    drive_check: dict[str, Any]
+    if drive_enabled and drive_mode:
+        try:
+            auth_path = None if drive_mode == "service_account_env" else drive_credentials_path
+            gdrive_sync.authenticate(auth_path)
+            drive_connected = True
+            drive_check = {
+                "status": "ok",
+                "mode": drive_mode,
+                "credentials_path": str(drive_credentials_path),
+            }
+        except Exception as exc:
+            drive_connected = False
+            drive_check = {
+                "status": "error",
+                "mode": drive_mode,
+                "credentials_path": str(drive_credentials_path),
+                "reason": str(exc),
+            }
+    else:
+        drive_check = {
             "status": "disabled",
             "mode": drive_mode,
             "reason": drive_mode_error if drive_enabled else "folder_not_configured",
         }
-    )
     active_jobs = (
         int(status_counts.get("queued", 0) or 0)
         + int(status_counts.get("running", 0) or 0)
@@ -3697,7 +3841,14 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
         "version": "2.0.0",
         "uptime_seconds": int(max(0.0, time.time() - APP_STARTED_AT)),
         "database": "connected" if str(database_check.get("status", "")).strip().lower() == "ok" else "disconnected",
-        "drive": "connected" if str(drive_check.get("status", "")).strip().lower() == "ok" else "disconnected",
+        "drive": {
+            "connected": bool(drive_connected),
+            "source_folder_id": str(drive_source_folder or ""),
+            "credential_type": str(drive_mode or ""),
+            "status": str(drive_check.get("status", "")),
+            "error": str(drive_check.get("reason", "") or ""),
+        },
+        "drive_connection": "connected" if bool(drive_connected) else "disconnected",
         "disk_space_gb": free_gb,
         "active_jobs": active_jobs,
         "books_cataloged": book_count,
@@ -3863,6 +4014,59 @@ def _run_startup_checks(runtime: config.Config) -> dict[str, Any]:
 
     any_key = any(bool(v.strip()) for v in runtime.provider_keys.values())
     _record("provider_api_keys", any_key, "No provider API keys configured", level="warning")
+
+    drive_source_folder = (
+        str(getattr(runtime, "gdrive_source_folder_id", "") or "").strip()
+        or str(getattr(runtime, "gdrive_input_folder_id", "") or "").strip()
+        or str(getattr(runtime, "gdrive_output_folder_id", "") or "").strip()
+    )
+    if drive_source_folder:
+        drive_credentials_path = _resolve_credentials_path(runtime)
+        drive_mode, drive_mode_error = _drive_credentials_mode(runtime, credentials_path=drive_credentials_path)
+        if drive_mode:
+            try:
+                auth_path = None if drive_mode == "service_account_env" else drive_credentials_path
+                gdrive_sync.authenticate(auth_path)
+                _record(
+                    "google_drive_auth",
+                    True,
+                    f"Google Drive connected. Covers will be downloaded on demand from folder {drive_source_folder}.",
+                    level="warning",
+                )
+                logger.info(
+                    "Google Drive connected. Covers will be downloaded on demand from folder %s.",
+                    drive_source_folder,
+                )
+            except Exception as exc:
+                _record(
+                    "google_drive_auth",
+                    False,
+                    f"Google Drive credential validation failed: {exc}",
+                    level="warning",
+                )
+                logger.warning(
+                    "Google Drive credentials not configured. Set GOOGLE_CREDENTIALS_JSON env var. "
+                    "Cover generation will only work with local files. (%s)",
+                    exc,
+                )
+        else:
+            _record(
+                "google_drive_auth",
+                False,
+                str(drive_mode_error or "Google Drive credentials are not configured."),
+                level="warning",
+            )
+            logger.warning(
+                "Google Drive credentials not configured. Set GOOGLE_CREDENTIALS_JSON env var. "
+                "Cover generation will only work with local files."
+            )
+    else:
+        _record(
+            "google_drive_source_folder",
+            False,
+            "Google Drive source folder is not configured (set GDRIVE_SOURCE_FOLDER_ID).",
+            level="warning",
+        )
 
     try:
         catalog_payload = json.loads(runtime.book_catalog_path.read_text(encoding="utf-8"))
@@ -4090,6 +4294,7 @@ def serve_review_webapp(
             cacheable_paths = {
                 "/api/review-data",
                 "/api/iterate-data",
+                "/api/config/cover-source-default",
                 "/api/prompt-performance",
                 "/api/health",
                 "/api/history",
@@ -4718,6 +4923,12 @@ def serve_review_webapp(
                 if not credentials_path.is_absolute():
                     credentials_path = PROJECT_ROOT / credentials_path
                 limit = _safe_int(query.get("limit", ["500"])[0], 500)
+                force = str(query.get("force", ["0"])[0] or "0").strip().lower() in {"1", "true", "yes", "on"}
+                if force:
+                    try:
+                        drive_manager.clear_drive_cover_cache()
+                    except Exception:
+                        pass
                 payload = drive_manager.list_input_covers(
                     drive_folder_id=drive_folder_id,
                     input_folder_id=input_folder_id,
@@ -5202,6 +5413,16 @@ def serve_review_webapp(
                 payload["catalog"] = runtime_req.catalog_id
                 payload["catalogs"] = [item.to_dict() for item in config.list_catalogs()]
                 return _cache_and_send(payload)
+            if path == "/api/config/cover-source-default":
+                default_source = _default_cover_source_for_runtime(runtime_req)
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "default": default_source,
+                        "local_input_covers_available": _has_local_input_covers(runtime=runtime_req),
+                    }
+                )
             if path == "/api/prompt-performance":
                 payload = _load_json(_prompt_performance_path_for_runtime(runtime_req), {"patterns": {}})
                 if not isinstance(payload, dict):
@@ -5370,6 +5591,80 @@ def serve_review_webapp(
                 payload = _build_review_queue(runtime=runtime_req, threshold=threshold)
                 payload["default_reviewer"] = configured_reviewer
                 return _cache_and_send(payload)
+            if path.startswith("/api/books/") and path.endswith("/cover-preview"):
+                token = path.split("/api/books/", 1)[1].rsplit("/cover-preview", 1)[0].strip("/")
+                book_number = _safe_int(token, 0)
+                if book_number <= 0:
+                    return self._send_error(
+                        code="INVALID_BOOK_NUMBER",
+                        message="book number must be a positive integer",
+                        details={"received": token},
+                        status=HTTPStatus.BAD_REQUEST,
+                        endpoint=path,
+                    )
+                source = str(query.get("source", [_default_cover_source_for_runtime(runtime_req)])[0] or "").strip().lower()
+                if source not in {"catalog", "drive"}:
+                    source = _default_cover_source_for_runtime(runtime_req)
+                selected_cover_id = str(query.get("selected_cover_id", [""])[0] or "").strip()
+                source_path: Path | None = None
+                if source == "drive":
+                    effective_drive_folder_id = (
+                        str(query.get("drive_folder_id", [""])[0] or "").strip()
+                        or runtime_req.gdrive_source_folder_id
+                        or runtime_req.gdrive_input_folder_id
+                        or runtime_req.gdrive_output_folder_id
+                    )
+                    effective_input_folder_id = (
+                        str(query.get("input_folder_id", [""])[0] or "").strip()
+                        or runtime_req.gdrive_source_folder_id
+                        or runtime_req.gdrive_input_folder_id
+                    )
+                    credentials_override = str(query.get("credentials_path", [""])[0] or "").strip()
+                    credentials_path = Path(credentials_override) if credentials_override else _resolve_credentials_path(runtime_req)
+                    if not credentials_path.is_absolute():
+                        credentials_path = PROJECT_ROOT / credentials_path
+                    ensure_result = drive_manager.ensure_local_input_cover(
+                        drive_folder_id=effective_drive_folder_id,
+                        input_folder_id=effective_input_folder_id,
+                        credentials_path=credentials_path,
+                        catalog_path=runtime_req.book_catalog_path,
+                        input_root=runtime_req.input_dir,
+                        book_number=book_number,
+                        selected_cover_id=selected_cover_id,
+                    )
+                    if not bool(ensure_result.get("ok")):
+                        return self._send_error(
+                            code="COVER_PREVIEW_NOT_AVAILABLE",
+                            message=str(ensure_result.get("error") or "Unable to load cover preview from Google Drive."),
+                            details={"book": int(book_number), "source": source},
+                            status=HTTPStatus.NOT_FOUND,
+                            endpoint=path,
+                        )
+                    source_token = str(ensure_result.get("path", "")).strip()
+                    source_path = Path(source_token) if source_token else _first_local_cover_path(runtime=runtime_req, book_number=book_number)
+                else:
+                    source_path = _first_local_cover_path(runtime=runtime_req, book_number=book_number)
+                if source_path is None or not source_path.exists():
+                    return self._send_error(
+                        code="COVER_PREVIEW_NOT_AVAILABLE",
+                        message=f"No local source cover available for book {book_number}.",
+                        details={"book": int(book_number), "source": source},
+                        status=HTTPStatus.NOT_FOUND,
+                        endpoint=path,
+                    )
+                preview_path = _cover_preview_path_for_runtime(runtime=runtime_req, book_number=book_number, source=source)
+                try:
+                    if (not preview_path.exists()) or (preview_path.stat().st_mtime < source_path.stat().st_mtime):
+                        _write_cover_preview(source_image=source_path, preview_path=preview_path)
+                except Exception as exc:
+                    return self._send_error(
+                        code="COVER_PREVIEW_FAILED",
+                        message=f"Failed to build cover preview: {exc}",
+                        details={"book": int(book_number), "source": source},
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                        endpoint=path,
+                    )
+                return self._send_file(preview_path, content_type="image/jpeg", cache_control="no-store")
             if path == "/api/compare":
                 books_raw = str(query.get("books", [""])[0]).strip()
                 books = _parse_books(books_raw) or []
@@ -8535,6 +8830,26 @@ def serve_review_webapp(
             return self._send_json(payload, status=status, headers=headers, catalog_id=runtime_for_error.catalog_id)
 
     server = ThreadingHTTPServer((bind_host, port), Handler)
+    shutdown_requested = threading.Event()
+    previous_sigint_handler = None
+    previous_sigterm_handler = None
+
+    def _request_shutdown(signum: int, _frame: Any) -> None:
+        if shutdown_requested.is_set():
+            return
+        shutdown_requested.set()
+        logger.info("Shutdown signal received", extra={"signal": int(signum)})
+        threading.Thread(target=server.shutdown, name="server-shutdown", daemon=True).start()
+
+    try:
+        previous_sigint_handler = signal.getsignal(signal.SIGINT)
+        previous_sigterm_handler = signal.getsignal(signal.SIGTERM)
+        signal.signal(signal.SIGINT, _request_shutdown)
+        signal.signal(signal.SIGTERM, _request_shutdown)
+    except Exception:
+        previous_sigint_handler = None
+        previous_sigterm_handler = None
+
     shown_host = bind_host if bind_host not in {"0.0.0.0", "::"} else "127.0.0.1"
     logger.info("Review webapp running at http://%s:%d/review", shown_host, port)
     logger.info("Iteration page running at http://%s:%d/iterate", shown_host, port)
@@ -8544,14 +8859,21 @@ def serve_review_webapp(
         logger.info("Shutdown requested, stopping review webapp")
     finally:
         try:
+            if previous_sigint_handler is not None:
+                signal.signal(signal.SIGINT, previous_sigint_handler)
+            if previous_sigterm_handler is not None:
+                signal.signal(signal.SIGTERM, previous_sigterm_handler)
+        except Exception:
+            pass
+        try:
             _flush_all_slo_trackers()
         except Exception:  # pragma: no cover - best effort
             pass
         if slo_monitor is not None:
-            slo_monitor.stop()
+            slo_monitor.stop(timeout_seconds=1.5)
             _set_slo_background_monitor(None)
         if workers_started:
-            job_worker_pool.stop()
+            job_worker_pool.stop(timeout_seconds=2.5)
         server.server_close()
 
 
@@ -8977,7 +9299,7 @@ def _validate_catalog_cover_request(
     return (
         False,
         f"No local cover is available for book {int(book)}. "
-        "Switch Cover Source to Google Drive and pick a Drive cover first.",
+        "Switch Cover Source to Google Drive for automatic cover download.",
     )
 
 
@@ -11567,6 +11889,7 @@ def _build_api_docs_html() -> str:
         ("GET", "/api/events/batch/{batchId}", "Batch SSE stream", "batchId,catalog", "event-stream", "Real-time stream for one batch run."),
         ("GET", "/api/review-data?catalog=classics&limit=25&offset=0", "Review data", "catalog,limit,offset,sort,order,search,status,tags", "{\"books\":[...],\"pagination\":{...}}", "Paginated review books, winners, and filters."),
         ("GET", "/api/iterate-data?catalog=classics&limit=25&offset=0", "Iterate data", "catalog,limit,offset,sort,order,search,status", "{\"books\":[...],\"pagination\":{...}}", "Paginated iterate books + model configuration."),
+        ("GET", "/api/config/cover-source-default", "Default cover source", "catalog", "{\"default\":\"drive\"}", "Return server-selected default cover source based on environment."),
         ("GET", "/api/prompts", "Prompt library list", "catalog,q,category,tags", "{\"prompts\":[...]}", "Search/list prompt library with usage, win rate, and version counts."),
         ("POST", "/api/prompts", "Create prompt", "{\"name\":\"...\",\"prompt_template\":\"...\"}", "{\"ok\":true,\"prompt\":{...}}", "Create a prompt-library entry."),
         ("POST", "/api/prompts/{id}", "Update/delete/usage", "{\"action\":\"update|delete|record_usage\"}", "{\"ok\":true}", "Update prompt fields, delete prompt, or record usage/win counters."),
@@ -11591,7 +11914,8 @@ def _build_api_docs_html() -> str:
         ("GET", "/api/providers/connectivity?force=0", "Provider connectivity", "force,catalog", "{\"providers\":{...}}", "Cached provider connectivity checks used by iterate auto-status."),
         ("GET", "/api/drive/status", "Drive status", "catalog,drive_folder_id,input_folder_id", "{\"connected\":true,...}", "Drive credentials/source/output status and sync summary."),
         ("GET", "/api/drive/sync-status", "Drive sync status", "catalog,drive_folder_id,input_folder_id", "{\"status\":{...}}", "Alias for drive status focused on sync/pending/error summary."),
-        ("GET", "/api/drive/input-covers", "Drive input covers", "catalog,drive_folder_id,input_folder_id,limit", "{\"covers\":[...]}", "List top-level source covers/folders from Google Drive for iterate selection."),
+        ("GET", "/api/drive/input-covers", "Drive input covers", "catalog,drive_folder_id,input_folder_id,limit,force", "{\"covers\":[...]}", "List top-level source covers/folders from Google Drive for iterate selection."),
+        ("GET", "/api/books/{book}/cover-preview?source=drive", "Book cover preview", "book,source,selected_cover_id,catalog", "binary image", "Build/return a thumbnail preview from local or Drive-backed source cover."),
         ("GET", "/api/variant-download?book=15&variant=2", "Variant ZIP download", "book,variant,model,catalog", "binary zip", "Download one generated variant package (JPG/PDF/medallion/metadata)."),
         ("GET", "/api/winner-download?book=15", "Winner ZIP download", "book,catalog", "binary zip", "Download selected winner package for one book."),
         ("GET", "/api/source-download?book=15&variant=2&model=openrouter/google/gemini-2.5-flash-image", "Source image download", "book,variant,model,catalog", "binary image", "Download raw source image for one generated variant."),

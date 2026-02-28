@@ -52,6 +52,10 @@
       <div id="quickControls" class="quick-controls">
         <label>Book</label>
         <select id="quickBookSelect"></select>
+        <div id="coverPreviewBox" class="cover-preview-box">
+          <img id="coverPreviewImg" class="picker-hidden" alt="Cover preview" />
+          <div id="coverPreviewStatus" class="status">Cover preview will appear here.</div>
+        </div>
         <label class="u-mt-12">Models (Recommended First)</label>
         <div id="quickModelsBox" class="quick-models"></div>
         <div class="row u-mt-10">
@@ -280,10 +284,12 @@
       fitOverlayEnabled: false,
       selectedProvider: 'all',
       coverSource: 'catalog',
+      defaultCoverSource: 'catalog',
       driveCovers: [],
       selectedDriveCoverId: '',
       driveFolderId: '',
       driveInputFolderId: '',
+      coverPreviewUrl: '',
       compareSelections: new Map(),
       weakBooks: [],
       regenResults: {},
@@ -439,6 +445,89 @@
         },
       });
       return { res, data: mergedData };
+    }
+
+    function revokeCoverPreviewUrl() {
+      if (app.coverPreviewUrl && String(app.coverPreviewUrl).startsWith('blob:')) {
+        try { URL.revokeObjectURL(app.coverPreviewUrl); } catch (_) {}
+      }
+      app.coverPreviewUrl = '';
+    }
+
+    async function fetchCoverSourceDefault({ silent = true } = {}) {
+      try {
+        const { res, data } = await fetchJson(`/api/config/cover-source-default?${catalogQuery()}`, { timeoutMs: 8000 });
+        if (!res.ok || !data.ok) return false;
+        const token = (data.default === 'drive') ? 'drive' : 'catalog';
+        app.defaultCoverSource = token;
+        if (!app.coverSource || !['catalog', 'drive'].includes(app.coverSource)) {
+          app.coverSource = token;
+        } else {
+          app.coverSource = token;
+        }
+        if (!silent) showToast(`Default cover source: ${token}.`, 'info', 1800);
+        return true;
+      } catch (_) {
+        return false;
+      }
+    }
+
+    async function refreshCoverPreview({ silent = true } = {}) {
+      const status = qs('coverPreviewStatus');
+      const image = qs('coverPreviewImg');
+      const book = currentBook();
+      if (!status || !image) return false;
+      if (!book || Number(book.number || 0) <= 0) {
+        revokeCoverPreviewUrl();
+        image.classList.add('picker-hidden');
+        status.textContent = 'No book selected.';
+        return false;
+      }
+      status.textContent = app.coverSource === 'drive'
+        ? 'Loading cover preview from Google Drive...'
+        : 'Loading local cover preview...';
+      const params = new URLSearchParams({
+        source: app.coverSource === 'drive' ? 'drive' : 'catalog',
+      });
+      if (app.coverSource === 'drive') {
+        const selected = selectedDriveCover();
+        const selectedId = String((selected && selected.id) || app.selectedDriveCoverId || '').trim();
+        if (selectedId) params.set('selected_cover_id', selectedId);
+      }
+      const url = `/api/books/${encodeURIComponent(Number(book.number))}/cover-preview?${params.toString()}&${catalogQuery()}`;
+      try {
+        const response = await fetch(url);
+        if (!response.ok) {
+          let errorMessage = 'Cover preview unavailable.';
+          try {
+            const payload = await response.json();
+            errorMessage = String(payload.error || payload.message || errorMessage);
+          } catch (_) {
+          }
+          revokeCoverPreviewUrl();
+          image.classList.add('picker-hidden');
+          status.textContent = errorMessage;
+          if (!silent) showToast(errorMessage, 'error');
+          return false;
+        }
+        const blob = await response.blob();
+        const objectUrl = URL.createObjectURL(blob);
+        revokeCoverPreviewUrl();
+        app.coverPreviewUrl = objectUrl;
+        image.src = objectUrl;
+        image.classList.remove('picker-hidden');
+        status.textContent = app.coverSource === 'drive'
+          ? 'Preview from Google Drive source cover.'
+          : 'Preview from local source cover.';
+        return true;
+      } catch (error) {
+        const message = (error && error.message) ? error.message : String(error || 'Preview load failed.');
+        revokeCoverPreviewUrl();
+        image.classList.add('picker-hidden');
+        status.textContent = message;
+        if (!silent) showToast(`Cover preview failed: ${message}`, 'error');
+        return false;
+      }
     }
 
     function nowIso() {
@@ -652,8 +741,12 @@
         app.maxGenerationVariants = Math.max(app.defaultVariantsPerModel, Number(data.max_generation_variants || 20));
         app.modelCosts = data.model_costs || {};
         app.driveOutputFolderId = String(data.gdrive_output_folder_id || '');
+        app.defaultCoverSource = (data.default_cover_source === 'drive') ? 'drive' : 'catalog';
+        app.coverSource = app.defaultCoverSource;
         app.modelSelectionTouched = false;
         app.modelSelection = new Set();
+
+        await fetchCoverSourceDefault({ silent: true });
 
         renderBooks();
         renderCoverPickers();
@@ -676,6 +769,7 @@
         startHeartbeatAutoRefresh();
         applyMode();
         applyCoverSource();
+        await refreshCoverPreview({ silent: true });
         setStatus(`Ready. Catalog: ${app.catalog}. Choose a book and generate.`);
         resetHeartbeat('No generation started.');
 
@@ -857,6 +951,7 @@
       } else {
         onBookChange();
       }
+      refreshCoverPreview({ silent: true }).catch(() => {});
     }
 
     function renderDriveCovers() {
@@ -910,16 +1005,18 @@
       qs('bookSelect').value = String(book);
       statusNode.textContent = `Mapped to book ${book}. ${selected.title || ''}`.trim();
       if (!silent) onBookChange();
+      refreshCoverPreview({ silent: true }).catch(() => {});
     }
 
-    async function loadDriveCovers({ silent = false } = {}) {
+    async function loadDriveCovers({ silent = false, force = false } = {}) {
       const statusNode = qs('driveCoverStatus');
       const refreshBtn = qs('refreshDriveCoversBtn');
       const previous = app.selectedDriveCoverId;
       refreshBtn.disabled = true;
       statusNode.textContent = 'Loading Drive covers...';
       try {
-        const { res, data } = await fetchJson(`/api/drive/input-covers?limit=5000&${catalogQuery()}`, { timeoutMs: 20000 });
+        const forceToken = force ? '&force=1' : '';
+        const { res, data } = await fetchJson(`/api/drive/input-covers?limit=5000${forceToken}&${catalogQuery()}`, { timeoutMs: 20000 });
         if (!res.ok) {
           const message = data.error || data.message || 'Drive cover load failed.';
           throw new Error(message);
@@ -1322,6 +1419,7 @@
       renderWinnerDownloadButton(book);
       loadHistory(book.number);
       loadCostProjection();
+      refreshCoverPreview({ silent: true }).catch(() => {});
       if (app.coverSource !== 'drive' && book.local_cover_available === false) {
         qs('resultStatus').textContent = 'No local cover found for this title. Switch Cover Source to Google Drive to download on demand.';
       }
@@ -1346,6 +1444,10 @@
       app.promptPerformance = data.prompt_performance || app.promptPerformance || {};
       app.modelCosts = data.model_costs || app.modelCosts || {};
       app.driveOutputFolderId = String(data.gdrive_output_folder_id || app.driveOutputFolderId || '');
+      app.defaultCoverSource = (data.default_cover_source === 'drive') ? 'drive' : (app.defaultCoverSource || 'catalog');
+      if (!['catalog', 'drive'].includes(String(app.coverSource || '').toLowerCase())) {
+        app.coverSource = app.defaultCoverSource;
+      }
       app.selectedDriveCoverId = selectedDriveId;
       syncModelSelection();
 
@@ -1517,29 +1619,24 @@
       let targetBookNumber = Number(book.number || 0);
       if (app.coverSource === 'drive') {
         const mappedBook = Number(selectedCover && selectedCover.book_number ? selectedCover.book_number : 0);
-        if (!selectedCover) {
-          qs('resultStatus').textContent = 'Select a Google Drive cover first.';
-          updateHeartbeat({ status: 'blocked', message: 'Select a Google Drive cover first.', error: '' });
-          btnStopLoading(genBtn, false);
-          showToast('Select a Google Drive cover first.', 'error');
-          return;
+        if (selectedCover) {
+          if (mappedBook <= 0) {
+            qs('resultStatus').textContent = 'Selected Drive cover is not mapped to a catalog book number.';
+            updateHeartbeat({ status: 'blocked', message: 'Selected Drive cover is not mapped to a catalog book number.', error: '' });
+            btnStopLoading(genBtn, false);
+            showToast('Selected Drive cover is not mapped to a catalog book number.', 'error');
+            return;
+          }
+          const inScope = app.books.some(row => Number(row.number) === mappedBook);
+          if (!inScope) {
+            qs('resultStatus').textContent = `Selected Drive cover maps to book ${mappedBook}, which is outside the current catalog scope.`;
+            updateHeartbeat({ status: 'blocked', message: `Drive cover maps to out-of-scope book ${mappedBook}.`, error: '' });
+            btnStopLoading(genBtn, false);
+            showToast(`Drive cover maps to out-of-scope book ${mappedBook}.`, 'error');
+            return;
+          }
+          targetBookNumber = mappedBook;
         }
-        if (mappedBook <= 0) {
-          qs('resultStatus').textContent = 'Selected Drive cover is not mapped to a catalog book number.';
-          updateHeartbeat({ status: 'blocked', message: 'Selected Drive cover is not mapped to a catalog book number.', error: '' });
-          btnStopLoading(genBtn, false);
-          showToast('Selected Drive cover is not mapped to a catalog book number.', 'error');
-          return;
-        }
-        const inScope = app.books.some(row => Number(row.number) === mappedBook);
-        if (!inScope) {
-          qs('resultStatus').textContent = `Selected Drive cover maps to book ${mappedBook}, which is outside the current catalog scope.`;
-          updateHeartbeat({ status: 'blocked', message: `Drive cover maps to out-of-scope book ${mappedBook}.`, error: '' });
-          btnStopLoading(genBtn, false);
-          showToast(`Drive cover maps to out-of-scope book ${mappedBook}.`, 'error');
-          return;
-        }
-        targetBookNumber = mappedBook;
       }
       if (!models.length) {
         qs('resultStatus').textContent = 'Select at least one model.';
@@ -1549,7 +1646,7 @@
         return;
       }
       if (app.coverSource === 'catalog' && !localCoverAvailable(targetBookNumber)) {
-        const message = `No local cover is available for book ${targetBookNumber}. Switch Cover Source to Google Drive and pick a Drive cover first.`;
+        const message = `No local cover is available for book ${targetBookNumber}. Switch Cover Source to Google Drive for automatic cover download.`;
         qs('resultStatus').textContent = message;
         updateHeartbeat({
           status: 'blocked',
@@ -1760,12 +1857,14 @@
           const payload = _eventPayload(evt);
           const progress = Math.round(Number(payload.progress || 0) * 100);
           const status = String(payload.status || 'running');
-          const message = `Job ${jobId}: ${status}${Number.isFinite(progress) ? ` (${progress}%)` : ''}`;
+          const stage = String(payload.stage || '').trim();
+          const detailMessage = String(payload.message || '').trim();
+          const message = detailMessage || `Job ${jobId}: ${status}${Number.isFinite(progress) ? ` (${progress}%)` : ''}`;
           qs('resultStatus').textContent = message;
           updateHeartbeat({
             jobId: String(payload.job_id || jobId),
             status,
-            stage: inferJobStage({ status }),
+            stage: stage || inferJobStage({ status }),
             message,
             attempts: Number(payload.attempt_number || 0),
             lastUpdateAt: String(payload.timestamp || new Date().toISOString()),
@@ -2943,7 +3042,7 @@
         const btn = qs('refreshDriveCoversBtn');
         if (!btnStartLoading(btn, 'Loading...')) return;
         try {
-          const ok = await loadDriveCovers({ silent: false });
+          const ok = await loadDriveCovers({ silent: false, force: true });
           if (app.coverSource === 'drive') {
             applyCoverSource();
           }
@@ -3107,6 +3206,7 @@
       window.addEventListener('beforeunload', () => {
         closeJobEventStream();
         stopHeartbeatAutoRefresh();
+        revokeCoverPreviewUrl();
       });
     }
 

@@ -11,6 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+from PIL import Image
 import pytest
 
 from scripts import quality_review as qr
@@ -189,6 +190,19 @@ def test_validate_catalog_cover_request_allows_drive_or_available_catalog(monkey
     assert error_catalog == ""
     assert ok_drive is True
     assert error_drive == ""
+
+
+def test_default_cover_source_for_runtime_defaults_to_drive_when_input_dir_is_empty(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    assert qr._default_cover_source_for_runtime(cfg) == "drive"
+
+
+def test_default_cover_source_for_runtime_defaults_to_catalog_with_local_images(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    source_folder = cfg.input_dir / "1. Book"
+    source_folder.mkdir(parents=True, exist_ok=True)
+    (source_folder / "cover.jpg").write_bytes(b"image")
+    assert qr._default_cover_source_for_runtime(cfg) == "catalog"
 
 
 def test_validate_drive_cover_request_lookup_success_and_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
@@ -906,6 +920,22 @@ def test_health_payload_includes_startup_checks(tmp_path: Path):
         qr.STARTUP_HEALTH = original_startup
 
 
+def test_health_payload_includes_structured_drive_connectivity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg = replace(cfg, gdrive_source_folder_id="source-folder-id")
+    monkeypatch.setattr(qr, "_resolve_credentials_path", lambda _runtime: tmp_path / "creds.json")
+    monkeypatch.setattr(qr, "_drive_credentials_mode", lambda *_args, **_kwargs: ("service_account_env", ""))
+    monkeypatch.setattr(qr.gdrive_sync, "authenticate", lambda *_args, **_kwargs: object())
+
+    payload = qr._health_payload(runtime=cfg)
+    drive = payload.get("drive", {})
+    assert isinstance(drive, dict)
+    assert drive.get("connected") is True
+    assert drive.get("source_folder_id") == "source-folder-id"
+    assert drive.get("credential_type") == "service_account_env"
+    assert payload.get("drive_connection") == "connected"
+
+
 def test_health_payload_degrades_when_external_worker_offline_with_pending_jobs(tmp_path: Path, monkeypatch):
     cfg = _build_runtime_for_startup_checks(tmp_path)
     original_startup = dict(qr.STARTUP_HEALTH)
@@ -1102,6 +1132,8 @@ def test_write_iterate_data_includes_variant_limits_and_catalog_scoped_files(tmp
     assert payload["default_variants_per_model"] == 7
     assert payload["max_generation_variants"] == 33
     assert payload["catalog"] == "demo"
+    assert payload["default_cover_source"] == "drive"
+    assert payload["local_input_covers_available"] is False
     assert payload["books"][0]["enrichment"]["genre"] == ["Novel"]
     assert payload["books"][0]["smart_prompts"][0]["prompt"] == "Smart prompt"
 
@@ -1129,6 +1161,21 @@ def test_quality_review_runtime_path_helpers_are_catalog_scoped(tmp_path: Path):
 
     classics = SimpleNamespace(catalog_id="classics", data_dir=tmp_path)
     assert qr._review_sessions_dir_for_runtime(classics) == qr.REVIEW_SESSIONS_DIR
+
+
+def test_cover_preview_helpers_build_thumbnail_file(tmp_path: Path):
+    runtime = SimpleNamespace(catalog_id="demo", tmp_dir=tmp_path)
+    source = tmp_path / "source.png"
+    Image.new("RGB", (1200, 900), color=(12, 34, 56)).save(source)
+
+    preview_path = qr._cover_preview_path_for_runtime(runtime=runtime, book_number=7, source="drive")
+    assert preview_path == (tmp_path / "cover_previews" / "demo_7_drive.jpg")
+
+    written = qr._write_cover_preview(source_image=source, preview_path=preview_path, max_size=320)
+    assert written.exists()
+    with Image.open(written) as rendered:
+        assert rendered.width <= 320
+        assert rendered.height <= 320
 
 
 def test_ensure_winner_payload_writes_catalog_scoped_plain_selection_map(tmp_path: Path):
@@ -1298,6 +1345,70 @@ def test_execute_generation_payload_drive_source_downloads_cover_before_composit
     assert captured["book_number"] == 1
     assert captured["drive_folder_id"] == "source-folder-id"
     assert captured["selected_cover_id"] == "drive-file-123"
+
+
+def test_execute_generation_payload_stage_callback_emits_drive_download_and_persist(tmp_path: Path, monkeypatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg = replace(cfg, openai_api_key="test-key", gdrive_source_folder_id="source-folder-id")
+    monkeypatch.setattr(qr.config, "get_config", lambda *_args, **_kwargs: cfg)
+    monkeypatch.setattr(qr.image_generator, "generate_single_book", lambda **_kwargs: [])
+    monkeypatch.setattr(
+        qr,
+        "_serialize_generation_results",
+        lambda **_kwargs: [
+            {
+                "book_number": 1,
+                "variant": 1,
+                "model": "openai/gpt-image-1-mini",
+                "prompt": "test",
+                "image_path": "tmp/generated/1/variant_1.png",
+                "composited_path": None,
+                "success": True,
+                "error": "",
+                "generation_time": 0.1,
+                "cost": 0.01,
+                "dry_run": False,
+                "similarity_warning": False,
+                "similar_to_book": None,
+                "distinctiveness_score": 0.9,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "fit_overlay_path": None,
+            }
+        ],
+    )
+    monkeypatch.setattr(qr.cover_compositor, "composite_all_variants", lambda **_kwargs: None)
+    monkeypatch.setattr(qr, "_record_generation_costs", lambda **_kwargs: None)
+    monkeypatch.setattr(qr.state_db_store, "append_generation_records", lambda **_kwargs: 1)
+    monkeypatch.setattr(qr.state_db_store, "export_history_payload", lambda **_kwargs: {"items": []})
+    monkeypatch.setattr(qr, "_build_review_data_payload", lambda *_args, **_kwargs: {"books": []})
+    monkeypatch.setattr(qr, "_invalidate_cache", lambda *_args, **_kwargs: 1)
+    monkeypatch.setattr(
+        qr.drive_manager,
+        "ensure_local_input_cover",
+        lambda **_kwargs: {"ok": True, "downloaded": True, "source": "google_drive"},
+    )
+
+    stages: list[dict[str, Any]] = []
+    qr._execute_generation_payload(
+        {
+            "catalog": "classics",
+            "book": 1,
+            "models": ["openai/gpt-image-1-mini"],
+            "variants": 1,
+            "prompt": "test prompt",
+            "provider": "all",
+            "cover_source": "drive",
+            "dry_run": False,
+            "job_id": "stage-callback-demo",
+        },
+        stage_callback=lambda payload: stages.append(dict(payload)),
+    )
+
+    stage_names = [str(item.get("stage", "")) for item in stages]
+    assert "download" in stage_names
+    assert "composite" in stage_names
+    assert "persist" in stage_names
+    assert any("Downloading cover from Google Drive" in str(item.get("message", "")) for item in stages)
 
 
 def test_execute_generation_payload_calls_global_cache_invalidator(tmp_path: Path, monkeypatch):

@@ -75,6 +75,8 @@ def _start_server(*, extra_args: list[str] | None = None) -> tuple[subprocess.Po
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
     env = os.environ.copy()
+    env.setdefault("JOB_WORKER_MODE", "disabled")
+    env.setdefault("SLO_MONITOR_INTERVAL_SECONDS", "0")
     args = [sys.executable, "scripts/quality_review.py", "--serve", "--port", str(port)]
     if extra_args:
         args.extend(extra_args)
@@ -302,12 +304,15 @@ def test_quality_review_server_serves_favicon():
 def test_quality_review_server_sigint_shutdown_is_clean():
     port = _free_port()
     base_url = f"http://127.0.0.1:{port}"
+    env = os.environ.copy()
+    env.setdefault("JOB_WORKER_MODE", "disabled")
+    env.setdefault("SLO_MONITOR_INTERVAL_SECONDS", "0")
     process = subprocess.Popen(
         [sys.executable, "scripts/quality_review.py", "--serve", "--port", str(port)],
         cwd=PROJECT_ROOT,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=os.environ.copy(),
+        env=env,
     )
     try:
         _wait_for_health(base_url)

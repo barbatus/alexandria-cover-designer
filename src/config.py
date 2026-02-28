@@ -53,7 +53,7 @@ LLM_MODEL = os.getenv("LLM_MODEL", "claude-sonnet-4-5-20250929").strip()
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "2000"))
 LLM_COST_PER_1K_TOKENS = float(os.getenv("LLM_COST_PER_1K_TOKENS", "0.003"))
 GDRIVE_OUTPUT_FOLDER_ID = os.getenv("GDRIVE_OUTPUT_FOLDER_ID", "1CWxCE3dP2AmQRy-w9MowP0J7AWNuAYdW")
-GDRIVE_SOURCE_FOLDER_ID = os.getenv("GDRIVE_SOURCE_FOLDER_ID", "").strip()
+GDRIVE_SOURCE_FOLDER_ID = os.getenv("GDRIVE_SOURCE_FOLDER_ID", "1ybFYDJk7Y3VlbsEjRAh1LOfdyVsHM_cS").strip()
 GDRIVE_INPUT_FOLDER_ID = os.getenv("GDRIVE_INPUT_FOLDER_ID", GDRIVE_SOURCE_FOLDER_ID).strip()
 GDRIVE_MOCKUPS_FOLDER_ID = os.getenv("GDRIVE_MOCKUPS_FOLDER_ID", "")
 GDRIVE_AMAZON_FOLDER_ID = os.getenv("GDRIVE_AMAZON_FOLDER_ID", "")
@@ -176,7 +176,7 @@ SLO_ALERT_LEVELS = [
 ]
 SLO_MONITOR_INTERVAL_SECONDS = int(os.getenv("SLO_MONITOR_INTERVAL_SECONDS", "300"))
 JOB_WORKERS = int(os.getenv("JOB_WORKERS", "2"))
-JOB_WORKER_MODE = os.getenv("JOB_WORKER_MODE", "external").strip().lower() or "external"
+JOB_WORKER_MODE = os.getenv("JOB_WORKER_MODE", "inline").strip().lower() or "inline"
 JOB_WORKER_HEARTBEAT_PATH = PROJECT_ROOT / os.getenv("JOB_WORKER_HEARTBEAT_PATH", "data/worker_heartbeat.json")
 JOB_WORKER_HEARTBEAT_STALE_SECONDS = int(os.getenv("JOB_WORKER_HEARTBEAT_STALE_SECONDS", "120"))
 ALLOW_SYNC_GENERATION = os.getenv("ALLOW_SYNC_GENERATION", "0").strip().lower() in {"1", "true", "yes", "on"}
