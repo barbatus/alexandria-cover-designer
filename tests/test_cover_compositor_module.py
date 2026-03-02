@@ -396,7 +396,7 @@ def test_resolve_medallion_geometry_keeps_opening_inside_outer_ring(tmp_path: Pa
         resolved = cc._resolve_medallion_geometry(cover=cover, cover_path=cover_path, region=region)
 
     assert resolved["outer_radius"] == 500
-    assert 340 <= int(resolved["opening_radius"]) <= 430
+    assert 360 <= int(resolved["opening_radius"]) <= 530
     assert int(resolved["opening_radius"]) <= int(resolved["outer_radius"]) - cc.MIN_OPENING_MARGIN_PX
 
 

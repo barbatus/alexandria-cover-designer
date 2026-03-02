@@ -334,9 +334,42 @@ window.JobQueue = {
       job.results_json = JSON.stringify({ scores: detailed, result: best.row });
 
       setStatus('compositing');
-      job.generated_image_blob = best.imagePath;
+      job.generated_image_blob = best.imagePath || best.compositedPath;
       job.composited_image_blob = best.compositedPath || best.imagePath;
       job._compositeFailed = false;
+      job._compositeError = null;
+      job._compositeSource = best.compositedPath ? 'backend' : 'raw';
+      job.compositor_geometry = null;
+
+      try {
+        const generatedSource = best.imagePath || best.compositedPath;
+        if (window.Compositor && generatedSource) {
+          setStatus('compositing', 'browser smart composite');
+          const [coverEntry, generatedImg] = await Promise.all([
+            CoverCache.load(job.book_id),
+            loadImage(generatedSource),
+          ]);
+          if (coverEntry?.img && generatedImg) {
+            const compositeCanvas = await window.Compositor.smartComposite({
+              coverImg: coverEntry.img,
+              generatedImg,
+              cx: Number(coverEntry.cx),
+              cy: Number(coverEntry.cy),
+              radius: Number(coverEntry.radius),
+            });
+            const compositedBlob = await canvasToBlob(compositeCanvas);
+            if (compositedBlob) {
+              job.composited_image_blob = compositedBlob;
+              job._compositeSource = 'browser';
+              job.compositor_geometry = compositeCanvas.__compositorMeta || null;
+            }
+          }
+        }
+      } catch (compositeErr) {
+        job._compositeFailed = true;
+        job._compositeError = compositeErr.message;
+        console.warn('Browser compositor failed, using backend composited image if available:', compositeErr.message);
+      }
 
       setStatus('completed');
       job.completed_at = new Date().toISOString();
@@ -405,6 +438,16 @@ async function loadImage(src) {
     img.onload = () => resolve(img);
     img.onerror = () => reject(new Error(`Failed to load image: ${src}`));
     img.src = src;
+  });
+}
+
+async function canvasToBlob(canvas, type = 'image/jpeg', quality = 0.96) {
+  return new Promise((resolve) => {
+    try {
+      canvas.toBlob((blob) => resolve(blob || null), type, quality);
+    } catch {
+      resolve(null);
+    }
   });
 }
 

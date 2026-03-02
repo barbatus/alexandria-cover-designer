@@ -26,14 +26,20 @@ logger = get_logger(__name__)
 DETECTION_ANALYSIS_W = 420
 DETECTION_COARSE_STEP = 4
 DETECTION_FINE_STEP = 1
-DETECTION_OPENING_RATIO = 0.758
-DETECTION_OPENING_MIN = 300
-DETECTION_OPENING_MAX = 430
+DETECTION_OPENING_RATIO = 0.965
+DETECTION_OPENING_MIN = 360
+DETECTION_OPENING_MAX = 530
+DETECTION_CONFIDENCE_MIN = 4.0
 OPENING_SAFETY_INSET_PX = 6
 INNER_FEATHER_PX = 8
 RING_WIDTH_PX = 14
 RING_BEADS = 72
-MIN_OPENING_MARGIN_PX = 72
+MIN_OPENING_MARGIN_PX = 6
+FALLBACK_COVER_WIDTH = 3784
+FALLBACK_COVER_HEIGHT = 2777
+FALLBACK_CENTER_X = 2850
+FALLBACK_CENTER_Y = 1350
+FALLBACK_RADIUS = 520
 
 _GEOMETRY_CACHE: dict[str, dict[str, int]] = {}
 
@@ -43,9 +49,9 @@ def _clip(value: float) -> float:
 
 
 def _dynamic_opening_bounds(width: int, height: int) -> tuple[int, int]:
-    base = min(int(width), int(height))
-    if base >= 1800:
+    if int(width) == FALLBACK_COVER_WIDTH and int(height) == FALLBACK_COVER_HEIGHT:
         return DETECTION_OPENING_MIN, DETECTION_OPENING_MAX
+    base = min(int(width), int(height))
     return max(16, int(round(base * 0.12))), max(24, int(round(base * 0.46)))
 
 
@@ -55,6 +61,27 @@ def _geometry_cache_key(cover_path: Path) -> str:
         return f"{cover_path.resolve()}::{int(stat.st_mtime)}::{int(stat.st_size)}"
     except Exception:
         return str(cover_path.resolve())
+
+
+def _fallback_geometry_for_cover(*, cover: Image.Image, region: "Region") -> dict[str, int]:
+    width, height = cover.size
+    if width == FALLBACK_COVER_WIDTH and height == FALLBACK_COVER_HEIGHT:
+        center_x = FALLBACK_CENTER_X
+        center_y = FALLBACK_CENTER_Y
+        outer = FALLBACK_RADIUS
+    else:
+        center_x = int(region.center_x or round(width * 0.76))
+        center_y = int(region.center_y or round(height * 0.58))
+        outer = int(max(20, region.radius or round(min(width, height) * 0.19)))
+    min_open, max_open = _dynamic_opening_bounds(width, height)
+    opening = int(np.clip(round(outer * DETECTION_OPENING_RATIO), min_open, max_open))
+    opening = min(opening, max(20, outer - MIN_OPENING_MARGIN_PX))
+    return {
+        "center_x": int(np.clip(center_x, 0, max(0, width - 1))),
+        "center_y": int(np.clip(center_y, 0, max(0, height - 1))),
+        "outer_radius": int(max(20, outer)),
+        "opening_radius": int(max(20, opening)),
+    }
 
 
 def _ring_samples(count: int) -> list[tuple[float, float]]:
@@ -108,6 +135,54 @@ def _score_ring(
     return ring_warm + (0.26 * ring_sat)
 
 
+def _ring_peak_confidence(
+    *,
+    warm_map: np.ndarray,
+    sat_map: np.ndarray,
+    contrast_map: np.ndarray,
+    center_x: float,
+    center_y: float,
+    radius: float,
+) -> float:
+    probe_offsets = [
+        (-10.0, 0.0, 0.0),
+        (10.0, 0.0, 0.0),
+        (0.0, -10.0, 0.0),
+        (0.0, 10.0, 0.0),
+        (-8.0, -8.0, 0.0),
+        (8.0, 8.0, 0.0),
+        (0.0, 0.0, -10.0),
+        (0.0, 0.0, 10.0),
+    ]
+    best_score = _score_ring(
+        warm_map=warm_map,
+        sat_map=sat_map,
+        contrast_map=contrast_map,
+        center_x=center_x,
+        center_y=center_y,
+        radius=radius,
+        samples=_FINE_RING_SAMPLES,
+        include_contrast=False,
+    )
+    local_scores: list[float] = []
+    for dx, dy, dr in probe_offsets:
+        score = _score_ring(
+            warm_map=warm_map,
+            sat_map=sat_map,
+            contrast_map=contrast_map,
+            center_x=center_x + dx,
+            center_y=center_y + dy,
+            radius=max(12.0, radius + dr),
+            samples=_FINE_RING_SAMPLES,
+            include_contrast=False,
+        )
+        if np.isfinite(score):
+            local_scores.append(float(score))
+    if not local_scores or not np.isfinite(best_score):
+        return 0.0
+    return max(0.0, float(best_score) - float(np.median(local_scores)))
+
+
 def _detect_medallion_geometry(*, cover: Image.Image, region: Region) -> dict[str, int]:
     rgb = np.array(cover.convert("RGB"), dtype=np.float32)
     h, w = rgb.shape[:2]
@@ -117,6 +192,7 @@ def _detect_medallion_geometry(*, cover: Image.Image, region: Region) -> dict[st
             "center_y": int(region.center_y),
             "outer_radius": int(region.radius),
             "score": int(-1e9),
+            "confidence": 0,
         }
 
     scale = min(1.0, float(DETECTION_ANALYSIS_W) / float(max(h, w)))
@@ -189,24 +265,25 @@ def _detect_medallion_geometry(*, cover: Image.Image, region: Region) -> dict[st
     center_x = int(round(float(fine_best["cx"]) * inv))
     center_y = int(round(float(fine_best["cy"]) * inv))
     outer_radius = int(round(float(fine_best["r"]) * inv))
+    confidence = _ring_peak_confidence(
+        warm_map=warm_map,
+        sat_map=sat_map,
+        contrast_map=contrast_map,
+        center_x=float(fine_best["cx"]),
+        center_y=float(fine_best["cy"]),
+        radius=float(fine_best["r"]),
+    )
     return {
         "center_x": center_x,
         "center_y": center_y,
         "outer_radius": outer_radius,
         "score": int(round(float(fine_best["score"]) * 1000.0)),
+        "confidence": int(round(confidence * 1000.0)),
     }
 
 
 def _resolve_medallion_geometry(*, cover: Image.Image, cover_path: Path, region: Region) -> dict[str, int]:
-    fallback_outer = int(max(20, region.radius))
-    fallback_opening = int(max(20, round(fallback_outer * DETECTION_OPENING_RATIO)))
-    fallback_opening = min(fallback_opening, max(20, fallback_outer - MIN_OPENING_MARGIN_PX))
-    fallback = {
-        "center_x": int(region.center_x),
-        "center_y": int(region.center_y),
-        "outer_radius": fallback_outer,
-        "opening_radius": fallback_opening,
-    }
+    fallback = _fallback_geometry_for_cover(cover=cover, region=region)
     try:
         key = _geometry_cache_key(cover_path)
         if key in _GEOMETRY_CACHE:
@@ -214,16 +291,22 @@ def _resolve_medallion_geometry(*, cover: Image.Image, cover_path: Path, region:
         detected = _detect_medallion_geometry(cover=cover, region=region)
         detected_cx = int(detected.get("center_x", fallback["center_x"]))
         detected_cy = int(detected.get("center_y", fallback["center_y"]))
-        detected_outer = int(max(20, detected.get("outer_radius", fallback_outer)))
+        detected_outer = int(max(20, detected.get("outer_radius", fallback["outer_radius"])))
+        confidence_raw = detected.get("confidence", None)
+        if confidence_raw is None:
+            confidence = DETECTION_CONFIDENCE_MIN + 1.0
+        else:
+            confidence = float(confidence_raw) / 1000.0
+        score = float(detected.get("score", 0)) / 1000.0
 
-        use_detected = True
+        use_detected = bool(np.isfinite(confidence) and confidence >= DETECTION_CONFIDENCE_MIN and np.isfinite(score))
         if region.center_x > 0 and region.center_y > 0 and region.radius > 0:
             offset = float(np.sqrt(((detected_cx - region.center_x) ** 2) + ((detected_cy - region.center_y) ** 2)))
             max_offset = max(32.0, float(region.radius) * 0.34)
             if offset > max_offset:
                 use_detected = False
 
-        outer = detected_outer if use_detected else fallback_outer
+        outer = detected_outer if use_detected else fallback["outer_radius"]
         center_x = detected_cx if use_detected else fallback["center_x"]
         center_y = detected_cy if use_detected else fallback["center_y"]
         min_open, max_open = _dynamic_opening_bounds(*cover.size)
@@ -244,6 +327,9 @@ def _resolve_medallion_geometry(*, cover: Image.Image, cover_path: Path, region:
                 "center_y": payload["center_y"],
                 "outer_radius": payload["outer_radius"],
                 "opening_radius": payload["opening_radius"],
+                "confidence": round(confidence, 4),
+                "score": round(score, 4),
+                "fallback_used": bool(not use_detected),
             },
         )
         return payload
@@ -373,7 +459,16 @@ def _smart_square_crop(image: Image.Image) -> Image.Image:
         box_w = max(1.0, float(box["w"]) * img_w)
         box_h = max(1.0, float(box["h"]) * img_h)
         area = float(box.get("box_area", 1.0))
-        margin = 0.48 if area < 0.18 else (0.36 if area < 0.35 else 0.28)
+        if area < 0.08:
+            margin = 0.08
+        elif area < 0.18:
+            margin = 0.12
+        elif area < 0.40:
+            margin = 0.18
+        elif area < 0.65:
+            margin = 0.24
+        else:
+            margin = 0.30
         src_w = box_w * (1.0 + margin * 2.0)
         src_h = box_h * (1.0 + margin * 2.0)
         side = max(src_w, src_h)
@@ -599,15 +694,6 @@ def composite_single(
         art_layer.putalpha(clip_mask)
         composited = Image.alpha_composite(canvas, art_layer)
 
-        ring_layer = _draw_gold_ring_pil(
-            size=(cover_w, cover_h),
-            center_x=int(geometry["center_x"]),
-            center_y=int(geometry["center_y"]),
-            radius=clip_radius,
-            ring_width=RING_WIDTH_PX,
-        )
-        composited = Image.alpha_composite(composited, ring_layer)
-
         overlay = _build_cover_overlay_with_punch(
             cover=cover,
             center_x=int(geometry["center_x"]),
@@ -737,6 +823,63 @@ def composite_all_variants(
     return outputs
 
 
+def _frame_sample_points(*, width: int, height: int) -> list[tuple[int, int]]:
+    points = [
+        (max(0, int(round(width * 0.05))), max(0, int(round(height * 0.05)))),
+        (max(0, int(round(width * 0.50))), max(0, int(round(height * 0.05)))),
+        (max(0, int(round(width * 0.95))), max(0, int(round(height * 0.05)))),
+        (max(0, int(round(width * 0.05))), max(0, int(round(height * 0.50)))),
+        (max(0, int(round(width * 0.95))), max(0, int(round(height * 0.50)))),
+        (max(0, int(round(width * 0.05))), max(0, int(round(height * 0.95)))),
+        (max(0, int(round(width * 0.50))), max(0, int(round(height * 0.95)))),
+        (max(0, int(round(width * 0.95))), max(0, int(round(height * 0.95)))),
+        (max(0, int(round(width * 0.30))), max(0, int(round(height * 0.15)))),
+        (max(0, int(round(width * 0.70))), max(0, int(round(height * 0.84)))),
+    ]
+    dedup: list[tuple[int, int]] = []
+    seen: set[tuple[int, int]] = set()
+    for x, y in points:
+        clamped = (int(np.clip(x, 0, max(0, width - 1))), int(np.clip(y, 0, max(0, height - 1))))
+        if clamped in seen:
+            continue
+        seen.add(clamped)
+        dedup.append(clamped)
+    return dedup
+
+
+def _frame_integrity_metrics(
+    *,
+    cover_arr: np.ndarray,
+    comp_arr: np.ndarray,
+    region: Region,
+) -> tuple[float, float]:
+    h, w = cover_arr.shape[:2]
+    points = _frame_sample_points(width=w, height=h)
+    if region.region_type == "rectangle" and region.rect_bbox is not None:
+        x1, y1, x2, y2 = region.rect_bbox
+        points = [
+            (x, y)
+            for (x, y) in points
+            if not (x1 - 12 <= x <= x2 + 12 and y1 - 12 <= y <= y2 + 12)
+        ]
+    else:
+        cx = float(region.center_x)
+        cy = float(region.center_y)
+        guard = max(24.0, float(region.radius) + 20.0)
+        points = [
+            (x, y)
+            for (x, y) in points
+            if ((float(x) - cx) ** 2 + (float(y) - cy) ** 2) >= (guard * guard)
+        ]
+    if not points:
+        return 0.0, 0.0
+    deltas = [
+        float(np.abs(comp_arr[y, x].astype(np.int16) - cover_arr[y, x].astype(np.int16)).mean())
+        for (x, y) in points
+    ]
+    return float(np.max(deltas)), float(np.mean(deltas))
+
+
 def validate_composite_output(
     *,
     cover: Image.Image,
@@ -816,9 +959,26 @@ def validate_composite_output(
     if not edge_artifacts_ok:
         issues.append("edge_artifact_risk")
 
+    frame_max_delta, frame_mean_delta = _frame_integrity_metrics(
+        cover_arr=cover_arr,
+        comp_arr=comp_arr,
+        region=region,
+    )
+    frame_pixels_ok = frame_max_delta <= 3.0
+    if not frame_pixels_ok:
+        issues.append("frame_pixels_changed")
+
     return CompositeValidation(
         output_path=str(output_path),
-        valid=bool(dimensions_ok and dpi_ok and file_size_ok and alignment_ok and border_bleed_ok and edge_artifacts_ok),
+        valid=bool(
+            dimensions_ok
+            and dpi_ok
+            and file_size_ok
+            and alignment_ok
+            and border_bleed_ok
+            and edge_artifacts_ok
+            and frame_pixels_ok
+        ),
         issues=issues,
         dimensions_ok=bool(dimensions_ok),
         dpi_ok=bool(dpi_ok),
@@ -834,6 +994,8 @@ def validate_composite_output(
             "alignment_tolerance_px": round(float(tolerance), 3),
             "border_bleed_ratio": round(bleed_ratio, 6),
             "edge_ring_strength": round(ring_strength, 3),
+            "frame_pixel_max_delta": round(frame_max_delta, 6),
+            "frame_pixel_mean_delta": round(frame_mean_delta, 6),
         },
     )
 
