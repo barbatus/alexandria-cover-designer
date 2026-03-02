@@ -2,7 +2,7 @@
 
 Last updated: `2026-03-02`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `e6893537-535e-4a3f-a497-0f33cb938c55`
+Deployment ID: `addf1b1c-2d44-495c-b1d2-19b16cb0a393`
 
 ## 1. Test Proof
 - Full suite run: `pytest -q`.
@@ -20,14 +20,19 @@ Deployment ID: `e6893537-535e-4a3f-a497-0f33cb938c55`
   - `status: ok`
   - `healthy: true`
   - `version: 2.1.1`
-  - `uptime_seconds: 0` immediately after deploy (confirming new rollout active)
+  - `uptime_seconds: 0` immediately after deploy (confirming rollout `addf1b1c-2d44-495c-b1d2-19b16cb0a393` active)
 
 ### 2.2 New Design Token + Cache Control
-- `GET /review` includes:
+- `GET /iterate` includes:
   - `/src/static/shared.css?v=20260302-designlock`
-  - `/src/static/review.css?v=20260302-designlock`
+  - `/static/css/style.css?v=20260302-designlock-uiux06`
 - `GET /review` headers include:
   - `cache-control: no-store`
+- `Content-Security-Policy` now allows:
+  - `https://fonts.googleapis.com`
+  - `https://fonts.gstatic.com`
+  - `https://cdn.jsdelivr.net`
+  - `https://cdnjs.cloudflare.com`
 
 ### 2.3 Model Payload (OpenRouter + Gemini)
 - `GET /api/iterate-data?catalog=classics`:
@@ -52,11 +57,10 @@ Deployment ID: `e6893537-535e-4a3f-a497-0f33cb938c55`
 ## 3. Visual Proof Artifacts
 
 ### 3.1 Live UI Screenshots
-- `tmp/proof-live-iterate-20260302-refresh.png`
-- `tmp/proof-live-dashboard-20260302-refresh.png`
-- `tmp/proof-live-review-20260302-refresh.png`
-- `tmp/proof-live-composite-book3-v1-20260302-refresh.jpg`
-- `tmp/proof-live-variant-book3-v1-20260302.zip`
+- `tmp/proof-live-iterate-20260302-prompt06.png`
+- `tmp/proof-live-dashboard-20260302-prompt06.png`
+- `tmp/proof-live-review-20260302-prompt06.png`
+- `tmp/proof-live-prompts-20260302-prompt06.png`
 
 ### 3.2 Local Validation Screenshots
 - `tmp/proof-local-iterate-20260302-fix.png`
@@ -68,7 +72,9 @@ Deployment ID: `e6893537-535e-4a3f-a497-0f33cb938c55`
 - `tmp/proof-local-dashboard-20260302-uiux.png`
 - `tmp/proof-local-review-20260302-uiux.png`
 - `tmp/proof-local-prompts-20260302-uiux.png`
-- Playwright console check on the latest local run: `0 errors, 0 warnings` (CSP updated to allow Google Fonts + Chart.js + JSZip).
+- Playwright console check:
+  - local: `0 errors, 0 warnings`
+  - live: `0 errors, 0 warnings`
 
 ## 4. Design-Lock Enforcement
 - Global sidebar-first UX lock remains in `src/static/shared.css` (`DESIGN LOCK` block).

@@ -33,7 +33,7 @@ Verification snapshot (local + live, `2026-03-02`):
   - `tmp/proof-local-review-20260302-uiux.png`
   - `tmp/proof-local-prompts-20260302-uiux.png`
 - API docs route-matrix test hardened for heavy ZIP endpoints by increasing per-request timeout from `20s` to `45s`.
-- Deployment `e6893537-535e-4a3f-a497-0f33cb938c55` on Railway is healthy.
+- Deployment `addf1b1c-2d44-495c-b1d2-19b16cb0a393` on Railway is healthy.
 - `GET /api/iterate-data?catalog=classics` returns 22 models, including:
   - all 15 required OpenRouter models in configured order
   - 3 direct Gemini IDs
@@ -42,10 +42,10 @@ Verification snapshot (local + live, `2026-03-02`):
 - `GET /api/dashboard-data?catalog=classics` now returns `recent_results = 1` on live after generation.
 - Direct Google provider is currently degraded in prod (`HTTP 403 leaked key`), while OpenRouter/Fal/OpenAI are healthy.
 - Visual proof:
-  - `tmp/proof-live-iterate-20260302-refresh.png`
-  - `tmp/proof-live-dashboard-20260302-refresh.png`
-  - `tmp/proof-live-review-20260302-refresh.png`
-  - `tmp/proof-live-composite-book3-v1-20260302-refresh.jpg`
+  - `tmp/proof-live-iterate-20260302-prompt06.png`
+  - `tmp/proof-live-dashboard-20260302-prompt06.png`
+  - `tmp/proof-live-review-20260302-prompt06.png`
+  - `tmp/proof-live-prompts-20260302-prompt06.png`
 
 Mandatory handoff policy (non-negotiable):
 - Every user-facing delivery must include:

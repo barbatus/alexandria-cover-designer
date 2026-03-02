@@ -96,6 +96,16 @@ Live note (`2026-03-02`, deployment `e6893537-535e-4a3f-a497-0f33cb938c55`):
 - `/api/dashboard-data?catalog=classics` now reports `recent_results = 1` after the successful live run.
 - Direct Google provider is degraded due leaked API key (`403 PERMISSION_DENIED`), while OpenRouter/Fal/OpenAI remain usable.
 
+Latest live UI rollout (`2026-03-02`, deployment `addf1b1c-2d44-495c-b1d2-19b16cb0a393`):
+- `/iterate` now serves the PROMPT-06 SPA shell (`src/static/index.html`) with sidebar navigation + hash router.
+- response headers include `cache-control: no-store`.
+- CSP now allows Inter/Chart.js/JSZip dependencies required by the new UI.
+- fresh live screenshots:
+  - `tmp/proof-live-iterate-20260302-prompt06.png`
+  - `tmp/proof-live-dashboard-20260302-prompt06.png`
+  - `tmp/proof-live-review-20260302-prompt06.png`
+  - `tmp/proof-live-prompts-20260302-prompt06.png`
+
 ## 4. Prompt Strategy (Current)
 Current diversification supports:
 - fixed style anchors (including Sevastopol + Cossack),
@@ -148,6 +158,11 @@ Completed in this workspace session:
    - `tmp/proof-local-dashboard-20260302-uiux.png`
    - `tmp/proof-local-review-20260302-uiux.png`
    - `tmp/proof-local-prompts-20260302-uiux.png`
+12. Latest live PROMPT-06 visual proofs:
+   - `tmp/proof-live-iterate-20260302-prompt06.png`
+   - `tmp/proof-live-dashboard-20260302-prompt06.png`
+   - `tmp/proof-live-review-20260302-prompt06.png`
+   - `tmp/proof-live-prompts-20260302-prompt06.png`
 
 ## 7. Known Constraints / Honest Caveats
 - In production, direct Google provider is currently failing key validation (`Your API key was reported as leaked`); these models are disabled in UI connectivity state until key replacement.
