@@ -247,6 +247,14 @@ window.JobQueue = {
     for (const [jobId, entry] of this.running.entries()) {
       const elapsedMs = now - entry.startTime;
       entry.job._elapsed = Math.floor(elapsedMs / 1000);
+      const backendStamp = Date.parse(String(entry.job._backendLastUpdateAt || ''));
+      const backendAge = Number.isFinite(backendStamp) && backendStamp > 0
+        ? Math.floor(Math.max(0, now - backendStamp) / 1000)
+        : Math.floor(elapsedMs / 1000);
+      entry.job._backendHeartbeatAge = backendAge;
+      if ((entry.job.status === 'generating' || entry.job.status === 'retrying') && backendAge >= 20) {
+        entry.job._subStatus = `Waiting on backend queue (${backendAge}s since update)`;
+      }
       if (elapsedMs > this.DEAD_JOB_TIMEOUT) {
         entry.abortController.abort();
         entry.job.status = 'failed';
@@ -312,6 +320,42 @@ window.JobQueue = {
               variant: Number(job.variant || 1),
               variants: 1,
               idempotency_key: `${job.id}-attempt-${attempts}`,
+              onProgress: (backendJob) => {
+                const backendStatus = String(backendJob?.status || '').trim().toLowerCase();
+                const backendUpdatedAt = String(backendJob?.updated_at || backendJob?.started_at || '').trim();
+                const stages = backendJob?.result?.stages || backendJob?.stages || {};
+                let stageToken = '';
+                if (stages && typeof stages === 'object') {
+                  const activeStage = Object.entries(stages).find(([, value]) => {
+                    const token = String(value?.status || '').trim().toLowerCase();
+                    return token === 'running' || token === 'active';
+                  });
+                  if (activeStage) {
+                    stageToken = String(activeStage[0] || '').trim().toLowerCase();
+                  }
+                }
+                const labelMap = {
+                  queued: 'queued',
+                  running: 'running',
+                  retrying: 'retrying',
+                  generate: 'generating',
+                  composite: 'compositing',
+                  persist: 'persisting',
+                  sync: 'syncing',
+                  deliver: 'delivering',
+                };
+                const shown = labelMap[stageToken] || labelMap[backendStatus] || backendStatus || 'running';
+                job._backendStatus = backendStatus || 'running';
+                job._backendStage = stageToken || backendStatus || '';
+                job._backendLastUpdateAt = backendUpdatedAt || new Date().toISOString();
+                if (job.status === 'generating' || job.status === 'retrying') {
+                  setStatus(job.status, `backend ${shown}`);
+                } else {
+                  job._subStatus = `backend ${shown}`;
+                  DB.dbPut('jobs', job);
+                  this.notify();
+                }
+              },
             }
           );
         } catch (err) {
@@ -360,39 +404,19 @@ window.JobQueue = {
       setStatus('compositing');
       const rawBlob = await fetchImageBlob(rawSource, abortController.signal);
       const backendCompositedBlob = best.compositedPath
-        ? await fetchImageBlob(best.compositedPath, abortController.signal, { retries: 4, delayMs: 400 })
+        ? await fetchImageBlob(best.compositedPath, abortController.signal, { retries: 25, delayMs: 1000 })
         : null;
       job.generated_image_blob = rawBlob || rawSource;
-      job.composited_image_blob = backendCompositedBlob || rawBlob || best.compositedPath || rawSource;
+      job.composited_image_blob = backendCompositedBlob || best.compositedPath || rawBlob || rawSource;
       job._compositeFailed = false;
       job._compositeError = null;
-      job._compositeSource = backendCompositedBlob ? 'backend' : 'raw';
+      if (backendCompositedBlob) job._compositeSource = 'backend-blob';
+      else if (best.compositedPath) job._compositeSource = 'backend-path';
+      else job._compositeSource = 'raw-fallback';
       job.compositor_geometry = null;
-
-      try {
-        if (window.Compositor && img && !backendCompositedBlob) {
-          setStatus('compositing', 'browser smart composite');
-          const coverEntry = await CoverCache.load(job.book_id);
-          if (coverEntry?.img) {
-            const compositeCanvas = await window.Compositor.smartComposite({
-              coverImg: coverEntry.img,
-              generatedImg: img,
-              cx: Number(coverEntry.cx),
-              cy: Number(coverEntry.cy),
-              radius: Number(coverEntry.radius),
-            });
-            const compositedBlob = await canvasToBlob(compositeCanvas);
-            if (compositedBlob) {
-              job.composited_image_blob = compositedBlob;
-              job._compositeSource = 'browser';
-              job.compositor_geometry = compositeCanvas.__compositorMeta || null;
-            }
-          }
-        }
-      } catch (compositeErr) {
+      if (!backendCompositedBlob && !best.compositedPath) {
         job._compositeFailed = true;
-        job._compositeError = compositeErr.message;
-        console.warn('Browser compositor failed, using backend composited image if available:', compositeErr.message);
+        job._compositeError = 'Backend composite unavailable, raw output fallback used.';
       }
 
       setStatus('completed');

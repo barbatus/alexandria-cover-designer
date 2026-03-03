@@ -3626,6 +3626,36 @@ def _compose_prompt_for_book(
     return composed
 
 
+_MODEL_LABEL_OVERRIDES: dict[str, str] = {
+    "nano-banana-pro": "Nano Banana Pro",
+    "openrouter/google/gemini-2.5-flash-image": "Nano Banana Pro",
+    "google/gemini-2.5-flash-image": "Nano Banana Pro (Google Direct)",
+}
+
+
+def _friendly_model_label(model: str) -> str:
+    token = str(model or "").strip()
+    if not token:
+        return "Model"
+    override = _MODEL_LABEL_OVERRIDES.get(token)
+    if override:
+        return override
+    leaf = token.split("/")[-1].strip() or token
+    normalized = " ".join(part for part in leaf.replace("-", " ").replace("_", " ").replace(".", " ").split() if part)
+    if not normalized:
+        return token
+    words: list[str] = []
+    for part in normalized.split():
+        lower = part.lower()
+        if lower in {"ai", "gpt"}:
+            words.append(lower.upper())
+        elif lower.isdigit():
+            words.append(lower)
+        else:
+            words.append(lower.capitalize())
+    return " ".join(words) or token
+
+
 def _api_models_payload(*, runtime: config.Config) -> dict[str, Any]:
     quality_payload = _quality_by_model_payload(runtime=runtime)
     rows = quality_payload.get("models", []) if isinstance(quality_payload, dict) else []
@@ -3638,7 +3668,8 @@ def _api_models_payload(*, runtime: config.Config) -> dict[str, Any]:
             if token:
                 stats_by_model[token] = row
 
-    known_models = list(runtime.all_models)
+    active_models = [str(item).strip() for item in runtime.all_models if str(item).strip()]
+    known_models = list(active_models)
     for key in runtime.model_provider_map.keys():
         token = str(key).strip()
         if not token or token in known_models:
@@ -3646,28 +3677,33 @@ def _api_models_payload(*, runtime: config.Config) -> dict[str, Any]:
         if "/" not in token:
             continue
         known_models.append(token)
-    known_models = sorted({token for token in known_models if str(token).strip()})
+    extras = sorted({token for token in known_models if token not in active_models})
+    known_models = [*active_models, *extras]
+    active_set = set(active_models)
 
     out: list[dict[str, Any]] = []
-    for model in known_models:
+    for sort_order, model in enumerate(known_models):
         stats = stats_by_model.get(model, {})
         provider = str(stats.get("provider", runtime.resolve_model_provider(model))).strip() or runtime.resolve_model_provider(model)
         count = _safe_int(stats.get("count"), 0)
         failure_rate_percent = _safe_float(stats.get("failure_rate_percent"), 0.0)
         success_rate = max(0.0, min(1.0, 1.0 - (failure_rate_percent / 100.0 if count > 0 else 0.0)))
+        model_cost = round(_safe_float(stats.get("avg_cost_per_variant"), runtime.get_model_cost(model)), 6)
         out.append(
             {
                 "id": model,
+                "label": _friendly_model_label(model),
                 "provider": provider,
-                "status": "active" if model in runtime.all_models else "disabled",
-                "avg_cost_usd": round(_safe_float(stats.get("avg_cost_per_variant"), runtime.get_model_cost(model)), 6),
+                "status": "active" if model in active_set else "disabled",
+                "sort_order": int(sort_order),
+                "cost_per_image": model_cost,
+                "avg_cost_usd": model_cost,
                 "modality": runtime.get_model_modality(model),
                 "avg_generation_time_s": round(_safe_float(stats.get("avg_generation_time_seconds"), 0.0), 4),
                 "success_rate": round(success_rate, 6),
                 "total_generations": int(count),
             }
         )
-    out.sort(key=lambda row: str(row.get("id", "")))
     return {"models": out, "total": len(out)}
 
 

@@ -2,6 +2,11 @@ window.Pages = window.Pages || {};
 
 let _selectedBookId = null;
 let _unsubscribe = null;
+const PREFERRED_DEFAULT_MODELS = [
+  'openrouter/google/gemini-2.5-flash-image',
+  'google/gemini-2.5-flash-image',
+  'nano-banana-pro',
+];
 
 function modelIdToLabel(modelId) {
   const model = OpenRouter.MODELS.find((m) => m.id === modelId);
@@ -98,10 +103,11 @@ function resolvePrompt(templateObj, book, customPrompt) {
   return `${applyPromptPlaceholders(base, book)} No text, no letters, no logos, no border, no frame, colorful and richly detailed, no empty space.`.trim();
 }
 
-function renderModelCheckboxes(defaultChecked = 3) {
+function renderModelCheckboxes() {
+  const preferred = PREFERRED_DEFAULT_MODELS.find((id) => OpenRouter.MODELS.some((model) => String(model.id) === id));
   return OpenRouter.MODELS.map((model, idx) => `
     <label class="checkbox-item">
-      <input type="checkbox" class="iter-model-check" value="${model.id}" ${idx < defaultChecked ? 'checked' : ''} />
+      <input type="checkbox" class="iter-model-check" value="${model.id}" ${(preferred ? String(model.id) === preferred : idx === 0) ? 'checked' : ''} />
       <span>${model.label}</span>
       <span class="tag tag-gold">$${Number(model.cost || 0).toFixed(3)}</span>
     </label>
@@ -113,6 +119,13 @@ window.Pages.iterate = {
     const content = document.getElementById('content');
     let books = DB.dbGetAll('books');
     if (!books.length) books = await DB.loadBooks('classics');
+    if (!books.length) {
+      try {
+        books = await Drive.syncCatalog();
+      } catch {
+        // no-op
+      }
+    }
     await DB.loadPrompts('classics');
 
     const prompts = DB.dbGetAll('prompts');
@@ -134,17 +147,21 @@ window.Pages.iterate = {
         </div>
 
         <div class="form-group">
-          <label class="form-label">Book</label>
+          <div class="flex justify-between items-center">
+            <label class="form-label">Book</label>
+            <button class="btn btn-secondary btn-sm" id="iterSyncBooksBtn">🔄 Sync books</button>
+          </div>
           <select class="form-select" id="iterBookSelect">
             <option value="">— Select a book —</option>
             ${options}
           </select>
+          <p class="text-xs text-muted mt-8" id="iterBookSyncStatus">${books.length ? `${books.length} book(s) loaded` : 'No books loaded yet'}</p>
         </div>
 
         <div id="iterAdvanced">
           <div class="form-group">
             <label class="form-label">Models (best → budget, top → bottom)</label>
-            <div class="checkbox-group">${renderModelCheckboxes(3)}</div>
+            <div class="checkbox-group">${renderModelCheckboxes()}</div>
           </div>
           <div class="form-row">
             <div class="form-group">
@@ -186,6 +203,8 @@ window.Pages.iterate = {
     `;
 
     const selectEl = document.getElementById('iterBookSelect');
+    const syncBtn = document.getElementById('iterSyncBooksBtn');
+    const syncStatus = document.getElementById('iterBookSyncStatus');
     const modeToggle = document.getElementById('iterModeToggle');
     const advanced = document.getElementById('iterAdvanced');
     const variantsEl = document.getElementById('iterVariants');
@@ -199,6 +218,35 @@ window.Pages.iterate = {
     selectEl?.addEventListener('change', () => {
       _selectedBookId = Number(selectEl.value || 0) || null;
       this.loadExistingResults();
+    });
+
+    syncBtn?.addEventListener('click', async () => {
+      const previous = syncBtn.textContent;
+      syncBtn.disabled = true;
+      syncBtn.textContent = 'Syncing...';
+      try {
+        const synced = await Drive.syncCatalog();
+        const sorted = [...(Array.isArray(synced) ? synced : [])]
+          .sort((a, b) => Number(a.number || 0) - Number(b.number || 0));
+        const current = Number(selectEl?.value || 0);
+        if (selectEl) {
+          selectEl.innerHTML = ['<option value="">— Select a book —</option>']
+            .concat(sorted.map((book) => `<option value="${book.id}">${book.number}. ${book.title}</option>`))
+            .join('');
+          if (current > 0 && sorted.some((book) => Number(book.id) === current)) {
+            selectEl.value = String(current);
+          }
+        }
+        if (syncStatus) syncStatus.textContent = `${sorted.length} book(s) loaded`;
+        updateHeader();
+        Toast.success(`Catalog synced: ${sorted.length} books`);
+      } catch (err) {
+        if (syncStatus) syncStatus.textContent = 'Sync failed';
+        Toast.error(`Sync failed: ${err.message || err}`);
+      } finally {
+        syncBtn.disabled = false;
+        syncBtn.textContent = previous || '🔄 Sync books';
+      }
     });
 
     const updateCost = () => {
@@ -226,7 +274,7 @@ window.Pages.iterate = {
     updateCost();
 
     document.getElementById('iterCancelBtn')?.addEventListener('click', () => JobQueue.cancelAll());
-    document.getElementById('iterGenBtn')?.addEventListener('click', () => this.handleGenerate(books));
+    document.getElementById('iterGenBtn')?.addEventListener('click', () => this.handleGenerate());
 
     if (_unsubscribe) _unsubscribe();
     _unsubscribe = JobQueue.onChange((snapshot) => {
@@ -242,7 +290,7 @@ window.Pages.iterate = {
     this.loadExistingResults();
   },
 
-  async handleGenerate(books) {
+  async handleGenerate() {
     const bookId = Number(document.getElementById('iterBookSelect')?.value || 0);
     if (!bookId) {
       Toast.warning('Select a book first.');
@@ -257,6 +305,7 @@ window.Pages.iterate = {
     const variantCount = Number(document.getElementById('iterVariants')?.value || 1);
     const promptId = String(document.getElementById('iterPromptSel')?.value || '').trim();
     const customPrompt = document.getElementById('iterPrompt')?.value || '';
+    const books = DB.dbGetAll('books');
     const book = books.find((b) => Number(b.id) === bookId);
     if (!book) return;
 
@@ -328,9 +377,13 @@ window.Pages.iterate = {
     const cancelled = scoped.filter((job) => job.status === 'cancelled').length;
     const queuedOrRunning = Math.max(0, scoped.length - completed - failed - cancelled);
     const totalCost = scoped.reduce((sum, job) => sum + Number(job.cost_usd || 0), 0);
+    const maxBackendStale = active.reduce((maxAge, job) => Math.max(maxAge, Number(job._backendHeartbeatAge || 0)), 0);
+    const queueHint = queuedOrRunning > 0
+      ? ` · backend heartbeat ${maxBackendStale}s ago${maxBackendStale >= 20 ? ' (waiting on queue/provider)' : ''}`
+      : '';
     const summary = `
       <div class="pipeline-summary">
-        <strong>Run status:</strong> ${completed}/${scoped.length} completed · ${queuedOrRunning} active/queued · ${failed} failed · ${cancelled} cancelled · $${totalCost.toFixed(3)}
+        <strong>Run status:</strong> ${completed}/${scoped.length} completed · ${queuedOrRunning} active/queued · ${failed} failed · ${cancelled} cancelled · $${totalCost.toFixed(3)}${queueHint}
       </div>
     `;
 
