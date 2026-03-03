@@ -1,56 +1,46 @@
-# Codex Message for PROMPT-07G (Compositor Centering + Prompt Variation)
+# Codex Message for PROMPT-07G
 
 ## What to paste in the Codex chat:
 
 ---
 
-**CRITICAL: Preserve the current design/UI/UX exactly as it is.** Only modify the specific files listed in PROMPT-07G.
+**CRITICAL: Only modify `src/cover_compositor.py`. Do NOT touch any other file. Preserve the current design/UI/UX exactly as it is.**
 
-Read `Codex Prompts/PROMPT-07G-COMPOSITOR-AND-PROMPT-FIXES.md` in the repo.
+Read `Codex Prompts/PROMPT-07G-INMEMORY-TEMPLATE-FIX.md` in the repo.
 
-**THREE FIXES:**
+**PROBLEM:** The 07F PNG template pipeline tries to load template files from disk. Those files were never deployed to Railway. The compositor silently falls back to the legacy pipeline, which has all three original bugs (art too small, off-center, original art visible).
 
-### Fix 1 (PRIORITY 1): Compositor Art Centering
+**THE FIX:** Replace the `else` branch in `composite_single()` (~line 741) with a pure in-memory pipeline. Build the template in RAM from the already-loaded cover image. No disk I/O. No fallback to legacy. Zero failure modes.
 
-In `src/cover_compositor.py`, in the `else` branch of `composite_single()` (the PNG template path, ~line 741):
+**EXACT CHANGES TO `src/cover_compositor.py`:**
 
-**Stop using `_resolve_medallion_geometry()` for art placement in the template path.** The templates were punched at fixed coordinates (2864, 1620), but `_resolve_medallion_geometry()` uses dynamic detection that returns slightly different centers. This mismatch causes the art to not align with the template's hole.
+Find the `else:` branch in `composite_single()` (the medallion path, ~line 741 to ~line 803). Replace the ENTIRE `else` block with this pipeline:
 
-Change the template path to use:
-```python
-center_x = FALLBACK_CENTER_X  # 2864
-center_y = FALLBACK_CENTER_Y  # 1620
-outer_radius = FALLBACK_RADIUS  # 500
-```
+1. Use FIXED center: `center_x = FALLBACK_CENTER_X` (2864), `center_y = FALLBACK_CENTER_Y` (1620). Do NOT call `_resolve_medallion_geometry()` — dynamic detection returns different centers, causing misalignment.
 
-Instead of:
-```python
-center_x = int(geometry["center_x"])
-center_y = int(geometry["center_y"])
-outer_radius = int(geometry["outer_radius"])
-```
+2. Build template in memory:
+   - `cover_rgba = cover.convert("RGBA")`
+   - Create 4x supersampled circle mask at (2864, 1620) with r=TEMPLATE_PUNCH_RADIUS (465)
+   - `template = cover_rgba.copy()` then `template.putalpha(mask)`
 
-Remove the `_resolve_medallion_geometry()` call from the template path entirely. Only keep it for the legacy fallback path. Also update `_create_template_for_cover()` to use `FALLBACK_CENTER_X/Y` instead of detected geometry.
+3. Sample background: `fill_rgb = _sample_cover_background(cover, center_x, center_y, FALLBACK_RADIUS)`
 
-### Fix 2: Book-Specific Prompt Variation
+4. Canvas: `Image.new("RGBA", (cover_w, cover_h), (*fill_rgb, 255))`
 
-In `src/prompt_generator.py`, the generic fallback at the end of `_motif_for_book()` (~line 659) returns a vague "period costume" motif for any book not in the hardcoded list (~70+ books).
+5. Art: `_simple_center_crop(illustration)` then resize to `punch_radius * 2 + 20` (950px). Flatten transparency against fill_rgb.
 
-**Replace the generic fallback** with a new `_build_dynamic_motif(title, author, book)` function that incorporates the book's actual title, author, and metadata into the prompt. Add `_guess_period(author)` to determine era-appropriate styling. See the prompt file for complete function code.
+6. Paste art at `(center_x - art_diameter//2, center_y - art_diameter//2)` using `.paste()`.
 
-Change the final return of `_motif_for_book()` from the hardcoded generic BookMotif to:
-```python
-return _build_dynamic_motif(title, author, book)
-```
+7. Composite: `canvas + art_layer + template` using `Image.alpha_composite()` twice. Convert to RGB.
 
-### Fix 3: Book Titles in Dropdown
+**DO NOT REMOVE** any existing functions. Just replace the else-branch code.
 
-The iterate page dropdown shows most books as "Untitled". Ensure the `/api/iterate-data` endpoint returns titles from `config/book_catalog_enriched.json` which has all 99 titles with full title/author data.
+**DO NOT ADD** prompt changes, dropdown fixes, or any other changes. This prompt is compositor-only.
 
-**DO NOT TOUCH:** Frontend HTML/CSS/JS, sidebar, navigation, color scheme, any file not explicitly listed.
+**VERIFY:** Generate a cover. Art fills medallion edge-to-edge. Zero original cover art visible. Frame intact.
 
 ```bash
-git add -A && git commit -m "fix: compositor centering + book-specific prompts + dropdown titles (PROMPT-07G)" && git push
+git add -A && git commit -m "fix: in-memory PNG template pipeline, no disk/legacy fallback (PROMPT-07G)" && git push
 ```
 
 ---
