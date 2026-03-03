@@ -48,13 +48,14 @@ Four rounds of fixes have failed:
 - 07C: Known geometry from cover_regions.json — clip radius too large for irregular frame
 - 07D: Pixel-perfect mask — mask was TOO RESTRICTIVE (15px erosion + 0.74 ratio = art at ~380px, way too small). Original cover artwork visible everywhere.
 
-**PROMPT-07E approach:** Simplest possible fix:
+**PROMPT-07E approach (updated 2026-03-03):** Aggressive fix with centering:
 1. Disable compositing_mask.png (rename to .disabled) — it restricts art to ~380px
-2. DETECTION_OPENING_RATIO = 0.92 → opening_radius = 460
-3. OPENING_SAFETY_INSET_PX = 2 → clip_radius = 458 (art fills generously)
-4. OVERLAY_PUNCH_INSET_PX = -2 → punch_radius = 462 (cover transparent BEYOND art edge)
-5. Result: art at 458px, punch at 462px, no gap, no original cover visible
-6. Outer 38px frame ring preserved (462-500px), inner scrollwork replaced by art
+2. Replace content-aware `_smart_square_crop()` with simple center crop — fixes visual off-centering and inconsistent edge ratios per image
+3. DETECTION_OPENING_RATIO = 0.96 → opening_radius = 480
+4. OPENING_SAFETY_INSET_PX = 0 → clip_radius = 480 (art fills to 480px — covers ALL ornamental scrollwork)
+5. OVERLAY_PUNCH_INSET_PX = -4 → punch_radius = 484 (cover transparent well BEYOND art edge)
+6. Result: art at 480px, punch at 484px, no gap, no original cover visible, uniform centering
+7. Outer 16px frame ring preserved (484-500px = thick gold border with beading), inner scrollwork replaced by art
 
 Known consensus defaults:
 - `cx = 2864`
