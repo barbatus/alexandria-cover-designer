@@ -2,7 +2,7 @@
 
 Last updated: `2026-03-03`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `98526dd5-584f-4498-a7dd-80020c1208e2`
+Deployment ID: `650e309f-8ed0-42b0-963a-0f35051fa5e4`
 
 ## 0. PROMPT-07B Hotfix Snapshot (2026-03-03)
 - Deployed with compositor detection window widened (15%), safety inset `14px`, expanded radius scan bounds, and relaxed offset guard.
@@ -24,6 +24,22 @@ Deployment ID: `98526dd5-584f-4498-a7dd-80020c1208e2`
   - explicit logs: `[Compositor v9] Detected...` and clip radius.
 - `src/cover_compositor.py` is aligned to the same values and now logs:
   - `Compositor detected: cx=... cy=... outer=... opening=...`
+
+## 0.2 PROMPT-07C Compositor Rewrite (2026-03-03)
+- Detection tuning was retired as the primary path; compositor now resolves medallion geometry from `cover_regions.json`.
+- New endpoint serves registry data: `GET /api/cover-regions?catalog=classics`.
+- Frontend behavior:
+  - `Compositor.loadRegions()` loads known coordinates once on startup.
+  - `smartComposite({ coverImg, generatedImg, bookId })` uses `getKnownGeometry(bookId)` and does not call detection.
+  - defaults/fallbacks corrected to `cx=2864`, `cy=1620`, `radius=500`.
+- Backend behavior:
+  - `_resolve_medallion_geometry()` now immediately uses region hints when present and only falls back to detection if hints are absent.
+  - fallback constants set to `2864/1620/500`.
+- Live verification:
+  - `/api/cover-regions` returned `99` covers.
+  - known geometry for books `1`, `9`, `25` matches registry.
+  - deployed `compositor.js` contains `[Compositor v10] Using known geometry...`.
+  - deployed `compositor.js` does not contain `[Compositor v9] Detection:`.
 
 ## 1. Test Proof
 - Full suite run: `pytest -q`.
@@ -95,6 +111,16 @@ Deployment ID: `98526dd5-584f-4498-a7dd-80020c1208e2`
 - `/Users/timzengerink/proofs/proof-07b2-book25-composite-full.png`
 - `/Users/timzengerink/proofs/proof-07b2-book25-medallion.png`
 - `/Users/timzengerink/proofs/proof-07b2-summary.json`
+
+### 3.0.2 PROMPT-07C Inline-Proof Assets (known geometry)
+- `/Users/timzengerink/proofs/proof-07c-live-iterate.png`
+- `/Users/timzengerink/proofs/proof-07c-book1-composite-full.png`
+- `/Users/timzengerink/proofs/proof-07c-book1-medallion.png`
+- `/Users/timzengerink/proofs/proof-07c-book9-composite-full.png`
+- `/Users/timzengerink/proofs/proof-07c-book9-medallion.png`
+- `/Users/timzengerink/proofs/proof-07c-book25-composite-full.png`
+- `/Users/timzengerink/proofs/proof-07c-book25-medallion.png`
+- `/Users/timzengerink/proofs/proof-07c-summary.json`
 
 ### 3.1 Live UI Screenshots
 - `tmp/proof-live-iterate-20260302-prompt06.png`

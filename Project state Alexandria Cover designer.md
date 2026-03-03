@@ -40,22 +40,24 @@ Serving layer:
 - `src/static/shared.css` contains a design-lock block with `!important` sidebar/layout rules so legacy page CSS cannot revert to the old top-nav layout.
 
 ### 3.2 Medallion Safety (Art Behind Ornaments)
-Compositing in `src/cover_compositor.py` enforces:
-- per-cover medallion center/outer-ring detection,
-- conservative opening radius derivation,
-- hard margin between opening and ornament ring,
-- generated art clipped and placed before top-cover overlay,
-- top-cover punched overlay composited last.
+Compositing now uses known geometry from `config/cover_regions.json` as the primary source of truth (PROMPT-07C). Detection tuning is no longer the production path.
 
-Current safety constants:
-- `DETECTION_OPENING_RATIO = 0.758`
-- `DETECTION_OPENING_MIN = 300`
-- `DETECTION_OPENING_MAX = 430`
-- `MIN_OPENING_MARGIN_PX = 72`
+Current behavior:
+- frontend compositor loads `/api/cover-regions` on startup via `Compositor.loadRegions()`,
+- frontend `smartComposite` resolves `bookId -> {cx, cy, radius}` from registry/consensus and does not call detection,
+- backend `_resolve_medallion_geometry()` uses `region.center_x/center_y/radius` directly whenever available and returns cached known geometry,
+- opening radius remains conservative relative to known outer radius,
+- generated art is clipped first, then template overlay is composited on top so ornaments stay in front.
 
-Intent:
-- keep ornaments visually on top,
-- prevent generated image bleed into scrollwork.
+Known consensus defaults:
+- `cx = 2864`
+- `cy = 1620`
+- `radius = 500`
+
+Live verification checkpoints:
+- `/api/cover-regions?catalog=classics` returns `99` covers + consensus region,
+- `window.Compositor.getKnownGeometry(1|9|25)` returns known coordinates from registry,
+- deployed `compositor.js` contains `[Compositor v10]` known-geometry logs and no `[Compositor v9] Detection:` log strings.
 
 ### 3.3 Prompt/Generation Hardening
 `src/image_generator.py` + `src/prompt_generator.py` enforce:
@@ -127,7 +129,7 @@ Environment alias compatibility is active:
 - `DRIVE_OUTPUT_FOLDER_ID` + fallback `GDRIVE_OUTPUT_FOLDER_ID`
 - `BUDGET_LIMIT_USD` + fallback `MAX_COST_USD`
 
-## 6. Verification Snapshot (2026-03-02)
+## 6. Verification Snapshot (2026-03-03)
 Completed in this workspace session:
 1. Full `pytest` passed.
 2. API docs route matrix test hardened against heavy ZIP endpoint timeout variance by raising per-request timeout to `45s`.
@@ -163,6 +165,11 @@ Completed in this workspace session:
    - `tmp/proof-live-dashboard-20260302-prompt06.png`
    - `tmp/proof-live-review-20260302-prompt06.png`
    - `tmp/proof-live-prompts-20260302-prompt06.png`
+13. PROMPT-07C compositor rewrite verified:
+   - frontend registry loaded from `/api/cover-regions` and returns `99` covers,
+   - known geometry values confirmed for books `1`, `9`, `25`,
+   - deployed bundle contains `KNOWN_DEFAULT_CY = 1620` and `[Compositor v10]` log strings,
+   - stale `[Compositor v9] Detection:` log string absent from deployed bundle.
 
 ## 7. Known Constraints / Honest Caveats
 - In production, direct Google provider is currently failing key validation (`Your API key was reported as leaked`); these models are disabled in UI connectivity state until key replacement.

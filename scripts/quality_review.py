@@ -6465,6 +6465,30 @@ def serve_review_webapp(
                 payload["catalog"] = runtime_req.catalog_id
                 payload["catalogs"] = [item.to_dict() for item in config.list_catalogs()]
                 return _cache_and_send(payload)
+            if path == "/api/cover-regions":
+                regions_path = config.cover_regions_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir)
+                payload = _load_json(
+                    regions_path,
+                    {
+                        "covers": [],
+                        "consensus_region": {
+                            "center_x": 2864,
+                            "center_y": 1620,
+                            "radius": 500,
+                        },
+                    },
+                )
+                if not isinstance(payload, dict):
+                    payload = {
+                        "covers": [],
+                        "consensus_region": {
+                            "center_x": 2864,
+                            "center_y": 1620,
+                            "radius": 500,
+                        },
+                    }
+                payload["catalog"] = runtime_req.catalog_id
+                return _cache_and_send(payload)
             if path == "/api/config/cover-source-default":
                 default_source = _default_cover_source_for_runtime(runtime_req)
                 return _cache_and_send(

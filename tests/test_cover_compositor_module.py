@@ -414,15 +414,16 @@ def test_resolve_medallion_geometry_keeps_opening_inside_outer_ring(tmp_path: Pa
         region_type="circle",
     )
 
-    monkeypatch.setattr(
-        cc,
-        "_detect_medallion_geometry",
-        lambda **_kwargs: {"center_x": 2864, "center_y": 1620, "outer_radius": 500, "score": 1},
-    )
+    def _detect_should_not_run(**_kwargs):
+        raise AssertionError("detection should be bypassed when region geometry is known")
+
+    monkeypatch.setattr(cc, "_detect_medallion_geometry", _detect_should_not_run)
     cc._GEOMETRY_CACHE.clear()
     with Image.open(cover_path).convert("RGB") as cover:
         resolved = cc._resolve_medallion_geometry(cover=cover, cover_path=cover_path, region=region)
 
+    assert int(resolved["center_x"]) == 2864
+    assert int(resolved["center_y"]) == 1620
     assert resolved["outer_radius"] == 500
     assert 360 <= int(resolved["opening_radius"]) <= 530
     assert int(resolved["opening_radius"]) <= int(resolved["outer_radius"]) - cc.MIN_OPENING_MARGIN_PX

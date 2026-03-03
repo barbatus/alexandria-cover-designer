@@ -39,9 +39,9 @@ RING_BEADS = 72
 MIN_OPENING_MARGIN_PX = 24
 FALLBACK_COVER_WIDTH = 3784
 FALLBACK_COVER_HEIGHT = 2777
-FALLBACK_CENTER_X = 2850
-FALLBACK_CENTER_Y = 1350
-FALLBACK_RADIUS = 520
+FALLBACK_CENTER_X = 2864
+FALLBACK_CENTER_Y = 1620
+FALLBACK_RADIUS = 500
 
 _GEOMETRY_CACHE: dict[str, dict[str, int]] = {}
 
@@ -285,6 +285,28 @@ def _detect_medallion_geometry(*, cover: Image.Image, region: Region) -> dict[st
 
 
 def _resolve_medallion_geometry(*, cover: Image.Image, cover_path: Path, region: Region) -> dict[str, int]:
+    if region.center_x > 0 and region.center_y > 0 and region.radius > 0:
+        outer = int(max(20, region.radius))
+        min_open, max_open = _dynamic_opening_bounds(*cover.size)
+        opening = int(np.clip(round(outer * DETECTION_OPENING_RATIO), min_open, max_open))
+        opening = min(opening, max(20, int(outer) - MIN_OPENING_MARGIN_PX))
+        payload = {
+            "center_x": int(region.center_x),
+            "center_y": int(region.center_y),
+            "outer_radius": int(outer),
+            "opening_radius": int(opening),
+        }
+        key = _geometry_cache_key(cover_path)
+        _GEOMETRY_CACHE[key] = dict(payload)
+        logger.info(
+            "Compositor using known geometry: cx=%d cy=%d outer=%d opening=%d",
+            payload["center_x"],
+            payload["center_y"],
+            payload["outer_radius"],
+            payload["opening_radius"],
+        )
+        return payload
+
     fallback = _fallback_geometry_for_cover(cover=cover, region=region)
     try:
         key = _geometry_cache_key(cover_path)
@@ -321,26 +343,7 @@ def _resolve_medallion_geometry(*, cover: Image.Image, cover_path: Path, region:
             "opening_radius": int(opening),
         }
         _GEOMETRY_CACHE[key] = dict(payload)
-        logger.info(
-            "Medallion geometry detected",
-            extra={
-                "cover": str(cover_path),
-                "center_x": payload["center_x"],
-                "center_y": payload["center_y"],
-                "outer_radius": payload["outer_radius"],
-                "opening_radius": payload["opening_radius"],
-                "confidence": round(confidence, 4),
-                "score": round(score, 4),
-                "fallback_used": bool(not use_detected),
-            },
-        )
-        logger.info(
-            "Compositor detected: cx=%d cy=%d outer=%d opening=%d",
-            payload["center_x"],
-            payload["center_y"],
-            payload["outer_radius"],
-            payload["opening_radius"],
-        )
+        logger.info("Compositor fallback-detection used for %s", cover_path)
         return payload
     except Exception as exc:
         logger.warning("Falling back to configured medallion geometry for %s: %s", cover_path, exc)
@@ -710,8 +713,7 @@ def composite_single(
         full_overlay.putalpha(mask)
         composited_rgb = Image.alpha_composite(cover.convert("RGBA"), full_overlay).convert("RGB")
     else:
-        mask_geometry = _geometry_from_strict_mask(strict_window_mask)
-        geometry = mask_geometry or _resolve_medallion_geometry(cover=cover, cover_path=cover_path, region=region_obj)
+        geometry = _resolve_medallion_geometry(cover=cover, cover_path=cover_path, region=region_obj)
         opening_radius = max(20, int(geometry["opening_radius"]))
         clip_radius = max(14, opening_radius - OPENING_SAFETY_INSET_PX)
         fill_rgb = _sample_cover_background(
@@ -752,7 +754,7 @@ def composite_single(
             center_x=int(geometry["center_x"]),
             center_y=int(geometry["center_y"]),
             punch_radius=max(12, opening_radius - OVERLAY_PUNCH_INSET_PX),
-            punch_mask=strict_window_mask if mask_geometry is not None else None,
+            punch_mask=strict_window_mask,
         )
         composited_rgb = Image.alpha_composite(composited, overlay).convert("RGB")
         validation_region = Region(

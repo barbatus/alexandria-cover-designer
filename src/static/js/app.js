@@ -634,6 +634,9 @@ async function init() {
   await DB.initDefaults();
   await DB.loadPrompts('classics');
   await OpenRouter.init();
+  if (window.Compositor?.loadRegions) {
+    await window.Compositor.loadRegions();
+  }
   JobQueue.resumeStuckJobs();
   initSidebar();
   updateHeader();

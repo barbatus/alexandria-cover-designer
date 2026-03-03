@@ -7,6 +7,13 @@ const OPENING_MAX = 530;
 const CONFIDENCE_MIN = 4.0;
 const OPENING_MARGIN = 6;
 const OPENING_SAFETY_INSET = 18;
+const KNOWN_DEFAULT_CX = 2864;
+const KNOWN_DEFAULT_CY = 1620;
+const KNOWN_DEFAULT_RADIUS = 500;
+
+// Geometry registry sourced from /api/cover-regions.
+let _regionRegistry = null;
+let _consensusRegion = { cx: KNOWN_DEFAULT_CX, cy: KNOWN_DEFAULT_CY, radius: KNOWN_DEFAULT_RADIUS };
 
 function clamp(value, min, max) {
   return Math.max(min, Math.min(max, Number(value)));
@@ -129,9 +136,9 @@ function fallbackGeometry({ width, height, hintCx, hintCy, hintRadius }) {
   let cy;
   let outer;
   if (width === 3784 && height === 2777) {
-    cx = 2850;
-    cy = 1350;
-    outer = 520;
+    cx = KNOWN_DEFAULT_CX;
+    cy = KNOWN_DEFAULT_CY;
+    outer = KNOWN_DEFAULT_RADIUS;
   } else {
     cx = Number.isFinite(hintCx) ? hintCx : Math.round(width * 0.76);
     cy = Number.isFinite(hintCy) ? hintCy : Math.round(height * 0.58);
@@ -223,9 +230,9 @@ function detectMedallionGeometry(coverImg, hints = {}) {
   const hintCy = Number(hints.cy);
   const hintRadius = Number(hints.radius);
 
-  const cx0 = (Number.isFinite(hintCx) ? hintCx : 2850) * scale;
-  const cy0 = (Number.isFinite(hintCy) ? hintCy : 1350) * scale;
-  const r0 = Math.max(20, (Number.isFinite(hintRadius) ? hintRadius : 520) * scale);
+  const cx0 = (Number.isFinite(hintCx) ? hintCx : KNOWN_DEFAULT_CX) * scale;
+  const cy0 = (Number.isFinite(hintCy) ? hintCy : KNOWN_DEFAULT_CY) * scale;
+  const r0 = Math.max(20, (Number.isFinite(hintRadius) ? hintRadius : KNOWN_DEFAULT_RADIUS) * scale);
 
   const searchX = Math.max(30, Math.round(scanW * 0.15));
   const searchY = Math.max(30, Math.round(scanH * 0.15));
@@ -343,9 +350,6 @@ function detectMedallionGeometry(coverImg, hints = {}) {
     score: Number(fineBest.score || 0),
     fallbackUsed: !useDetected,
   };
-  console.log(
-    `[Compositor v9] Detection: cx=${result.cx}, cy=${result.cy}, outer=${result.outerRadius}, opening=${result.openingRadius}, confidence=${result.confidence.toFixed(2)}, fallback=${result.fallbackUsed}`,
-  );
   return result;
 }
 
@@ -533,9 +537,55 @@ async function buildCoverTemplate(coverImg, geo) {
 window.Compositor = {
   COVER_WIDTH: 3784,
   COVER_HEIGHT: 2777,
-  DEFAULT_CX: 2850,
-  DEFAULT_CY: 1350,
-  DEFAULT_RADIUS: 520,
+  DEFAULT_CX: KNOWN_DEFAULT_CX,
+  DEFAULT_CY: KNOWN_DEFAULT_CY,
+  DEFAULT_RADIUS: KNOWN_DEFAULT_RADIUS,
+
+  async loadRegions() {
+    try {
+      const resp = await fetch('/api/cover-regions?catalog=classics', { cache: 'no-store' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      _regionRegistry = {};
+      const consensus = data?.consensus_region || {};
+      const consensusCx = Number(consensus.center_x);
+      const consensusCy = Number(consensus.center_y);
+      const consensusRadius = Number(consensus.radius);
+      _consensusRegion = {
+        cx: Number.isFinite(consensusCx) && consensusCx > 0 ? consensusCx : KNOWN_DEFAULT_CX,
+        cy: Number.isFinite(consensusCy) && consensusCy > 0 ? consensusCy : KNOWN_DEFAULT_CY,
+        radius: Number.isFinite(consensusRadius) && consensusRadius > 0 ? consensusRadius : KNOWN_DEFAULT_RADIUS,
+      };
+      (Array.isArray(data?.covers) ? data.covers : []).forEach((row) => {
+        const coverId = String(row?.cover_id || '').trim();
+        const cx = Number(row?.center_x);
+        const cy = Number(row?.center_y);
+        const radius = Number(row?.radius);
+        if (!coverId) return;
+        _regionRegistry[coverId] = {
+          cx: Number.isFinite(cx) && cx > 0 ? cx : _consensusRegion.cx,
+          cy: Number.isFinite(cy) && cy > 0 ? cy : _consensusRegion.cy,
+          radius: Number.isFinite(radius) && radius > 0 ? radius : _consensusRegion.radius,
+        };
+      });
+      const count = Object.keys(_regionRegistry).length;
+      console.log(`[Compositor] Loaded geometry for ${count} covers`);
+    } catch (err) {
+      _regionRegistry = {};
+      _consensusRegion = { cx: KNOWN_DEFAULT_CX, cy: KNOWN_DEFAULT_CY, radius: KNOWN_DEFAULT_RADIUS };
+      console.warn('[Compositor] Failed to load regions, using consensus fallback:', err?.message || err);
+    }
+  },
+
+  getKnownGeometry(bookId) {
+    const key = String(bookId || '').trim();
+    const known = (_regionRegistry && key && _regionRegistry[key]) ? _regionRegistry[key] : _consensusRegion;
+    return {
+      cx: Number(known?.cx || this.DEFAULT_CX),
+      cy: Number(known?.cy || this.DEFAULT_CY),
+      radius: Number(known?.radius || this.DEFAULT_RADIUS),
+    };
+  },
 
   detectMedallionGeometry(coverImg, hints = {}) {
     return detectMedallionGeometry(coverImg, {
@@ -553,7 +603,7 @@ window.Compositor = {
     return buildCoverTemplate(coverImg, geo);
   },
 
-  async smartComposite({ coverImg, generatedImg, cx, cy, radius }) {
+  async smartComposite({ coverImg, generatedImg, bookId }) {
     if (!coverImg || !generatedImg) {
       throw new Error('coverImg and generatedImg are required for smartComposite');
     }
@@ -562,11 +612,23 @@ window.Compositor = {
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
 
-    const geo = this.detectMedallionGeometry(coverImg, {
-      cx: Number(cx),
-      cy: Number(cy),
-      radius: Number(radius),
-    });
+    // Use known geometry from cover_regions.json; detection path is intentionally bypassed.
+    const known = this.getKnownGeometry(bookId);
+    const outerRadius = Math.max(20, known.radius);
+    const [minOpen, maxOpen] = openingBounds(width, height);
+    const openingRadius = Math.min(
+      clamp(Math.round(outerRadius * OPENING_RATIO), minOpen, maxOpen),
+      Math.max(20, outerRadius - OPENING_MARGIN),
+    );
+    const geo = {
+      cx: known.cx,
+      cy: known.cy,
+      outerRadius,
+      openingRadius,
+      confidence: 99,
+      score: 99,
+      fallbackUsed: false,
+    };
 
     const fill = sampleCoverBackground({ coverImg, geo });
     ctx.fillStyle = `rgb(${fill[0]}, ${fill[1]}, ${fill[2]})`;
@@ -576,9 +638,9 @@ window.Compositor = {
     const crop = sourceCropForGenerated(generatedImg, sparseInfo);
     const clipRadius = Math.max(14, geo.openingRadius - OPENING_SAFETY_INSET);
     console.log(
-      `[Compositor v9] Detected: cx=${geo.cx}, cy=${geo.cy}, outer=${geo.outerRadius}, opening=${geo.openingRadius}, confidence=${geo.confidence?.toFixed(2)}, fallback=${geo.fallbackUsed}`,
+      `[Compositor v10] Using known geometry for book ${String(bookId || '?')}: cx=${geo.cx}, cy=${geo.cy}, outer=${geo.outerRadius}, opening=${geo.openingRadius}`,
     );
-    console.log(`[Compositor v9] Clip radius used: ${clipRadius}`);
+    console.log(`[Compositor v10] Clip radius: ${clipRadius}`);
 
     ctx.save();
     ctx.beginPath();
