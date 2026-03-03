@@ -45,6 +45,7 @@ FALLBACK_CENTER_Y = 1620
 FALLBACK_RADIUS = 500
 TEMPLATE_PUNCH_RADIUS = 465
 TEMPLATE_SUPERSAMPLE_FACTOR = 4
+ART_BLEED_PX = 60  # Extra px on each side beyond punch radius to cover AA transition
 
 _GEOMETRY_CACHE: dict[str, dict[str, int]] = {}
 
@@ -782,7 +783,7 @@ def composite_single(
         canvas = Image.new("RGBA", (cover_w, cover_h), (*fill_rgb, 255))
 
         # ── 4. Prepare AI art: simple center crop, scale to fill ──
-        art_diameter = punch_radius * 2 + 20  # 10px bleed on each side = 950px
+        art_diameter = punch_radius * 2 + (ART_BLEED_PX * 2)  # 465*2 + 120 = 1050px
         art = _simple_center_crop(illustration)
         art = art.resize((art_diameter, art_diameter), Image.LANCZOS)
 

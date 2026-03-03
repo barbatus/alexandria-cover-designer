@@ -413,18 +413,26 @@ window.JobQueue = {
 
       setStatus('compositing');
       const rawBlob = await fetchImageBlob(rawSource, abortController.signal);
-      const backendCompositedBlob = best.compositedPath
-        ? await fetchImageBlob(best.compositedPath, abortController.signal, { retries: 60, delayMs: 1000 })
+      const fullResCompositeSource = resolveFullResolutionCompositeSource(best.compositedPath);
+      if (best.compositedPath && fullResCompositeSource !== best.compositedPath) {
+        console.warn('Resolved thumbnail composite path to full-resolution source.', {
+          original: best.compositedPath,
+          resolved: fullResCompositeSource,
+        });
+      }
+      const backendCompositedBlob = fullResCompositeSource
+        ? await fetchImageBlob(fullResCompositeSource, abortController.signal, { retries: 60, delayMs: 1000 })
         : null;
-      if (!backendCompositedBlob && !best.compositedPath) {
+      if (!backendCompositedBlob && !fullResCompositeSource) {
         throw new Error('Backend composite unavailable; refusing raw fallback to preserve medallion layering.');
       }
+      if (backendCompositedBlob) warnIfSuspiciousCompositeBlob(backendCompositedBlob, fullResCompositeSource);
       job.generated_image_blob = rawBlob || rawSource;
-      job.composited_image_blob = backendCompositedBlob || best.compositedPath || null;
+      job.composited_image_blob = backendCompositedBlob || fullResCompositeSource || null;
       job._compositeFailed = false;
       job._compositeError = null;
       if (backendCompositedBlob) job._compositeSource = 'backend-blob';
-      else if (best.compositedPath) job._compositeSource = 'backend-path';
+      else if (fullResCompositeSource) job._compositeSource = 'backend-path';
       else job._compositeSource = 'missing';
       job.compositor_geometry = null;
 
@@ -510,6 +518,31 @@ window.getBlobUrl = (data, key) => {
   if (key) window.blobUrls.set(key, { data, url });
   return url;
 };
+
+function resolveFullResolutionCompositeSource(source) {
+  const normalized = window.normalizeAssetUrl(source);
+  if (!normalized) return '';
+  if (!normalized.toLowerCase().startsWith('/api/thumbnail')) return normalized;
+  try {
+    const url = new URL(normalized, window.location.origin);
+    const rawPath = String(url.searchParams.get('path') || '').trim();
+    if (!rawPath) return normalized;
+    return `/${rawPath.replace(/^\/+/, '')}`;
+  } catch {
+    return normalized;
+  }
+}
+
+function warnIfSuspiciousCompositeBlob(blob, source) {
+  if (!(blob instanceof Blob)) return;
+  const size = Number(blob.size || 0);
+  if (size > 0 && size < 700 * 1024) {
+    console.warn('Composite blob appears suspiciously small; verify full-resolution output path.', {
+      source,
+      bytes: size,
+    });
+  }
+}
 
 async function loadImage(src) {
   if (!src) throw new Error('Missing image source');

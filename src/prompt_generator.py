@@ -86,8 +86,8 @@ STYLE_POOL: list[dict[str, str]] = [
 ]
 
 FIXED_VARIANT_STYLE_IDS: list[str] = [
-    "sevastopol-conflict",
-    "cossack-epic",
+    "pre-raphaelite-v2",
+    "baroque-v2",
 ]
 
 CURATED_VARIANT_STYLE_IDS: list[str] = [
@@ -95,7 +95,7 @@ CURATED_VARIANT_STYLE_IDS: list[str] = [
     "venetian-renaissance",
     "dutch-golden-age",
     "dark-romantic-v2",
-    "pre-raphaelite-v2",
+    "sevastopol-conflict",
     "art-nouveau-v2",
     "ukiyo-e-v2",
     "noir-v2",

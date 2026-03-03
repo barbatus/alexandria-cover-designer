@@ -1,5 +1,5 @@
 {
-  "default_catalog": "test-catalog",
+  "default_catalog": "classics",
   "catalogs": [
     {
       "id": "classics",

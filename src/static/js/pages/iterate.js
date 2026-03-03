@@ -136,6 +136,58 @@ function resolveCompositePreviewSources(job, keyPrefix = 'display-composite') {
   return sources;
 }
 
+async function ensureJSZip() {
+  if (window.JSZip) return window.JSZip;
+  return new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+    script.onload = () => resolve(window.JSZip);
+    script.onerror = () => reject(new Error('Failed to load JSZip'));
+    document.head.appendChild(script);
+  });
+}
+
+function sanitizeDownloadName(value) {
+  return String(value || '')
+    .replace(/[\\/:*?"<>|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function resolveBookMetadataForJob(job) {
+  const bookId = Number(job?.book_id || 0);
+  let book = DB.dbGet('books', bookId);
+  if (!book) {
+    book = DB.dbGetAll('books').find((row) => Number(row.id) === bookId) || null;
+  }
+  const title = sanitizeDownloadName(book?.title || `Book ${bookId || 'Unknown'}`);
+  const author = sanitizeDownloadName(book?.author || 'Unknown');
+  const number = sanitizeDownloadName(book?.number || job?.book_id || 'Unknown');
+  const baseName = sanitizeDownloadName(`${title} — ${author}`);
+  return { title, author, number, baseName };
+}
+
+function pickFullResolutionSource(job, keyPrefix, preferRaw = false) {
+  const ordered = resolvePreviewSources(job, keyPrefix, preferRaw);
+  if (!ordered.length) return '';
+  const preferred = ordered.find((src) => {
+    const token = String(src || '').trim().toLowerCase();
+    return token && !token.startsWith('/api/thumbnail');
+  });
+  return preferred || ordered[0] || '';
+}
+
+async function fetchDownloadBlob(source) {
+  if (!source) return null;
+  try {
+    const response = await fetch(source, { cache: 'no-store' });
+    if (!response.ok) return null;
+    return await response.blob();
+  } catch {
+    return null;
+  }
+}
+
 function applyPromptPlaceholders(promptText, book) {
   return String(promptText || '')
     .replaceAll('{title}', String(book?.title || ''))
@@ -711,7 +763,7 @@ window.Pages.iterate = {
             <div class="card-meta">$${Number(job.cost_usd || 0).toFixed(3)} · ${job.style_label || 'Default'}</div>
             ${errorText ? `<div class="card-meta text-danger">${errorText}</div>` : ''}
             <div class="flex gap-4 mt-8">
-              <button class="btn btn-secondary btn-sm" data-dl-comp="${job.id}" ${showDownloads ? '' : 'disabled'}>⬇ Composite</button>
+              <button class="btn btn-secondary btn-sm" data-dl-comp="${job.id}" ${showDownloads ? '' : 'disabled'}>⬇ Download</button>
               <button class="btn btn-secondary btn-sm" data-dl-raw="${job.id}" ${showDownloads ? '' : 'disabled'}>⬇ Raw</button>
               <button class="btn btn-secondary btn-sm" data-save-prompt="${job.id}">💾 Prompt</button>
             </div>
@@ -793,25 +845,60 @@ window.Pages.iterate = {
     overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.remove(); });
   },
 
-  downloadComposite(jobId) {
+  async downloadComposite(jobId) {
     const job = DB.dbGet('jobs', jobId);
     if (!job) return;
-    const href = resolvePreviewSources(job, 'download-composite', false)[0] || '';
-    if (!href) return;
-    const a = document.createElement('a');
-    a.href = href;
-    a.download = `${job.book_id}-${job.model.replaceAll('/', '_')}-v${job.variant}-composite.jpg`;
-    a.click();
+    const { number, baseName } = resolveBookMetadataForJob(job);
+    const zipName = `${number}. ${baseName}.zip`;
+    const compositeHref = pickFullResolutionSource(job, 'download-composite', false);
+    const rawHref = pickFullResolutionSource(job, 'download-raw', true);
+
+    if (!compositeHref && !rawHref) return;
+
+    try {
+      const JSZip = await ensureJSZip();
+      const zip = new JSZip();
+
+      if (compositeHref) {
+        const compositeBlob = await fetchDownloadBlob(compositeHref);
+        if (compositeBlob) {
+          zip.file(`${baseName}.jpg`, compositeBlob);
+        }
+      }
+
+      if (rawHref) {
+        const rawBlob = await fetchDownloadBlob(rawHref);
+        if (rawBlob) {
+          zip.file(`${baseName} (illustration).jpg`, rawBlob);
+        }
+      }
+
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(zipBlob);
+      a.download = zipName;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    } catch (err) {
+      console.error('ZIP download failed:', err);
+      if (compositeHref) {
+        const a = document.createElement('a');
+        a.href = compositeHref;
+        a.download = `${baseName}.jpg`;
+        a.click();
+      }
+    }
   },
 
   downloadGenerated(jobId) {
     const job = DB.dbGet('jobs', jobId);
     if (!job) return;
-    const href = resolvePreviewSources(job, 'download-raw', true)[0] || '';
+    const href = pickFullResolutionSource(job, 'download-raw-single', true);
     if (!href) return;
+    const { baseName } = resolveBookMetadataForJob(job);
     const a = document.createElement('a');
     a.href = href;
-    a.download = `${job.book_id}-${job.model.replaceAll('/', '_')}-v${job.variant}-raw.jpg`;
+    a.download = `${baseName} (illustration).jpg`;
     a.click();
   },
 
