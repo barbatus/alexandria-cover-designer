@@ -183,6 +183,7 @@ function pickFullResolutionSource(job, keyPrefix, preferRaw = false) {
 
 async function fetchDownloadBlob(source) {
   if (!source) return null;
+  if (typeof source === 'string' && source.startsWith('blob:')) return null;
   try {
     const response = await fetch(source, { cache: 'no-store' });
     if (!response.ok) return null;
@@ -936,8 +937,10 @@ window.Pages.iterate = {
     try {
       const JSZip = await ensureJSZip();
       const zip = new JSZip();
-      let compositeBlob = await fetchDownloadBlob(compositeHref);
-      let rawBlob = await fetchDownloadBlob(rawHref);
+      let compositeBlob = (job.composited_image_blob instanceof Blob) ? job.composited_image_blob : null;
+      let rawBlob = (job.generated_image_blob instanceof Blob) ? job.generated_image_blob : null;
+      if (!compositeBlob) compositeBlob = await fetchDownloadBlob(compositeHref);
+      if (!rawBlob) rawBlob = await fetchDownloadBlob(rawHref);
       let sourceBlob = await fetchDownloadBlob(sourceHref);
       let pdfBlob = await fetchDownloadBlob(pdfHref);
       const aiBlob = await fetchDownloadBlob(aiHref);
