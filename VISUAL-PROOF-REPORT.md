@@ -390,6 +390,20 @@ Deployment ID: `c4c2133e-adaa-4cfc-a430-02c5e7f921c6`
 - Visual proof:
   - `/Users/timzengerink/proofs/2026-03-04-09f-fix/proof-live-review-covers-20260304-09f-fix.png`
 
+### 3.0.11 Iterate Two-Model Card + Cost Verification (2026-03-04)
+- Deployment: `059af182-4b1e-4c61-a4a3-64298630bd61`
+- Live URL: `https://web-production-900a7.up.railway.app`
+- Verification:
+  - Recommended filter now shows both Nano cards.
+  - Card 1 maps to `openrouter/google/gemini-2.5-flash-image` at `$0.003`.
+  - Card 2 maps to `google/gemini-2.5-flash-image` at `$0.003`.
+  - Both are selected by default.
+  - Cost math is correct:
+    - variants `1` -> `$0.003 + $0.003 = $0.006`
+    - variants `2` -> `$0.006 + $0.006 = $0.012` (verified in live DOM)
+- Visual proof:
+  - `/Users/timzengerink/proofs/2026-03-04-09g-model-cards/proof-live-iterate-two-nano-models-20260304-09g.png`
+
 ### 3.1 Live UI Screenshots
 - `tmp/proof-live-iterate-20260302-prompt06.png`
 - `tmp/proof-live-dashboard-20260302-prompt06.png`
