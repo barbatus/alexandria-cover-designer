@@ -8,16 +8,16 @@ Supports two modes:
 
 Usage:
     # PDF mode (preferred - exact SMask-based verification):
-    python scripts/verify_composite.py <composited.jpg> --source-pdf <source.pdf>
+    python scripts/verify_composite.py <composited.jpg> --source-pdf <source.pdf> --output-pdf <output.pdf>
 
     # JPG mode (fallback - radial zone comparison):
     python scripts/verify_composite.py <composited.jpg> <source_cover.jpg>
 
     # Strict mode (tighter thresholds):
-    python scripts/verify_composite.py <composited.jpg> --source-pdf <source.pdf> --strict
+    python scripts/verify_composite.py <composited.jpg> --source-pdf <source.pdf> --output-pdf <output.pdf> --strict
 
     # JSON output:
-    python scripts/verify_composite.py <composited.jpg> --source-pdf <source.pdf> --json
+    python scripts/verify_composite.py <composited.jpg> --source-pdf <source.pdf> --output-pdf <output.pdf> --ai-art <ai_art.png> --json
 
 Exit codes:
     0 = ALL CHECKS PASSED
@@ -61,6 +61,28 @@ TRANSITION_HARSH_THRESHOLD = 0.02
 STRICT_ORNAMENT_MATCH = 0.999
 STRICT_ART_DIFFER = 0.95
 STRICT_CENTERING_PX = 3
+
+# -- Geometry constants (explicit names for upgraded checks) --
+# JPG-space (rendered at 300 DPI, output size 3784x2777)
+JPG_CENTER_X = 2864
+JPG_CENTER_Y = 1620
+JPG_FRAME_RADIUS = 480
+RENDER_DPI = 300
+
+# Embedded AI-art analysis space
+AI_ART_WIDTH = 2480
+AI_ART_HEIGHT = 2470
+AI_ART_CENTER_X = 1240
+AI_ART_CENTER_Y = 1235
+AI_ART_FRAME_INNER_R = 420
+AI_ART_FRAME_OUTER_R = 480
+
+# Check 8 thresholds (AI border detection)
+AI_BORDER_EDGE_DENSITY_THRESHOLD = 0.08
+AI_BORDER_SOBEL_MAGNITUDE_THRESHOLD = 30
+
+# Check 9 thresholds (visual rendered frame comparison)
+VISUAL_FRAME_MEAN_DIFF_THRESHOLD = 5.0
 
 
 def load_image_array(path: Path) -> np.ndarray:
@@ -360,6 +382,139 @@ def check_frame_pixels_preserved(source_pdf_path: Path, output_pdf_path: Path) -
     }
 
 
+def check_ai_art_border(ai_art_path: Path) -> dict:
+    """
+    Check 8 - AI Art Border Detection.
+
+    Detect structural edge density in the annular ring that maps to the
+    ornamental frame zone. High edge density in this ring suggests the
+    generated art has a decorative border that will bleed through the
+    semi-transparent frame pixels.
+    """
+    try:
+        import cv2
+    except Exception as exc:  # pragma: no cover - import guard
+        return {
+            "pass": False,
+            "message": f"FAIL: Check 8 unavailable because cv2 could not be imported ({exc})",
+        }
+
+    image = cv2.imread(str(ai_art_path), cv2.IMREAD_GRAYSCALE)
+    if image is None:
+        return {"pass": False, "message": f"FAIL: Check 8 could not load AI art: {ai_art_path}"}
+
+    h, w = image.shape
+    resized_note = ""
+    if (w, h) != (AI_ART_WIDTH, AI_ART_HEIGHT):
+        image = cv2.resize(image, (AI_ART_WIDTH, AI_ART_HEIGHT), interpolation=cv2.INTER_LINEAR)
+        resized_note = f" (resized from {w}x{h})"
+        h, w = image.shape
+
+    ys, xs = np.mgrid[0:h, 0:w]
+    dist = np.sqrt((xs - AI_ART_CENTER_X) ** 2 + (ys - AI_ART_CENTER_Y) ** 2)
+    ring_mask = (dist >= AI_ART_FRAME_INNER_R) & (dist <= AI_ART_FRAME_OUTER_R)
+    total = int(np.sum(ring_mask))
+    if total == 0:
+        return {"pass": False, "message": "FAIL: Check 8 frame-zone mask is empty"}
+
+    sobel_x = cv2.Sobel(image, cv2.CV_64F, 1, 0, ksize=3)
+    sobel_y = cv2.Sobel(image, cv2.CV_64F, 0, 1, ksize=3)
+    sobel_mag = np.sqrt(sobel_x**2 + sobel_y**2)
+    sobel_mag_8u = np.clip(sobel_mag, 0, 255).astype(np.uint8)
+    ring_pixels = sobel_mag_8u[ring_mask]
+    strong_edges = int(np.sum(ring_pixels >= AI_BORDER_SOBEL_MAGNITUDE_THRESHOLD))
+    edge_density = strong_edges / total
+
+    passed = edge_density <= AI_BORDER_EDGE_DENSITY_THRESHOLD
+    if passed:
+        msg = (
+            f"PASS: AI art frame zone is clean. Edge density {edge_density:.4f} "
+            f"(threshold {AI_BORDER_EDGE_DENSITY_THRESHOLD:.4f}){resized_note}"
+        )
+    else:
+        msg = (
+            f"FAIL: AI art likely contains decorative border. Edge density {edge_density:.4f} "
+            f"(threshold {AI_BORDER_EDGE_DENSITY_THRESHOLD:.4f}){resized_note}"
+        )
+    return {
+        "pass": passed,
+        "edge_density": round(edge_density, 6),
+        "threshold": AI_BORDER_EDGE_DENSITY_THRESHOLD,
+        "message": msg,
+    }
+
+
+def check_visual_frame(source_pdf_path: Path, output_pdf_path: Path) -> dict:
+    """
+    Check 9 - Visual rendered frame comparison.
+
+    Render both PDFs at 300 DPI and compare frame-zone pixels (r > 480 from
+    center in 3784x2777 JPG-space). This catches visual corruption that can
+    be missed by raw CMYK stream checks.
+    """
+    import fitz
+
+    def _render_rgb(path: Path) -> np.ndarray:
+        doc = fitz.open(str(path))
+        try:
+            page = doc.load_page(0)
+            mat = fitz.Matrix(RENDER_DPI / 72.0, RENDER_DPI / 72.0)
+            pix = page.get_pixmap(matrix=mat, colorspace=fitz.csRGB, alpha=False)
+            return np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.height, pix.width, 3)
+        finally:
+            doc.close()
+
+    src_rgb = _render_rgb(source_pdf_path)
+    out_rgb = _render_rgb(output_pdf_path)
+
+    expected_h, expected_w = 2777, 3784
+    src_h, src_w = src_rgb.shape[:2]
+    out_h, out_w = out_rgb.shape[:2]
+    if (src_h, src_w) != (out_h, out_w):
+        return {
+            "pass": False,
+            "message": (
+                "FAIL: Check 9 source/output render size mismatch "
+                f"({src_w}x{src_h} vs {out_w}x{out_h})"
+            ),
+        }
+
+    # Some PDFs render a few pixels smaller/larger at fixed DPI due to source
+    # page boxes. Keep the check robust by scaling frame geometry to actual size.
+    actual_h, actual_w = src_h, src_w
+    scale_x = actual_w / expected_w
+    scale_y = actual_h / expected_h
+    center_x = JPG_CENTER_X * scale_x
+    center_y = JPG_CENTER_Y * scale_y
+
+    ys, xs = np.mgrid[0:actual_h, 0:actual_w]
+    dist = np.sqrt(((xs - center_x) / scale_x) ** 2 + ((ys - center_y) / scale_y) ** 2)
+    frame_mask = dist > JPG_FRAME_RADIUS
+    frame_pixels = int(np.sum(frame_mask))
+    if frame_pixels == 0:
+        return {"pass": False, "message": "FAIL: Check 9 frame mask is empty"}
+
+    diff = np.abs(src_rgb.astype(np.float32) - out_rgb.astype(np.float32))
+    frame_diff = diff[frame_mask]
+    mean_diff = float(frame_diff.mean()) if frame_diff.size else 0.0
+
+    passed = mean_diff <= VISUAL_FRAME_MEAN_DIFF_THRESHOLD
+    return {
+        "pass": passed,
+        "mean_abs_diff": round(mean_diff, 6),
+        "threshold": VISUAL_FRAME_MEAN_DIFF_THRESHOLD,
+        "frame_pixels": frame_pixels,
+        "message": (
+            f"PASS: Rendered frame zone matches source. Mean diff {mean_diff:.3f}"
+            if passed
+            else (
+                f"FAIL: Rendered frame zone changed. Mean diff {mean_diff:.3f} "
+                f"(threshold {VISUAL_FRAME_MEAN_DIFF_THRESHOLD:.3f})"
+            )
+        ),
+    }
+
+
 # =================================================================
 # JPG MODE - Radial zone comparison (fallback)
 # =================================================================
@@ -505,7 +660,14 @@ def check_transition_zone(composite):
 # MAIN ORCHESTRATOR
 # =================================================================
 
-def verify_composite(composite_path, source_jpg_path=None, source_pdf_path=None, output_pdf_path=None, strict=False):
+def verify_composite(
+    composite_path,
+    source_jpg_path=None,
+    source_pdf_path=None,
+    output_pdf_path=None,
+    ai_art_path=None,
+    strict=False,
+):
     """Run all verification checks. Auto-selects PDF or JPG mode."""
 
     if strict:
@@ -563,6 +725,30 @@ def verify_composite(composite_path, source_jpg_path=None, source_pdf_path=None,
         if output_pdf_path and Path(output_pdf_path).exists():
             checks["smask_integrity"] = check_smask_integrity(source_pdf_path, output_pdf_path)
             checks["frame_pixels"] = check_frame_pixels_preserved(source_pdf_path, output_pdf_path)
+        else:
+            checks["smask_integrity"] = {
+                "pass": False,
+                "message": "FAIL: Check 6 requires --output-pdf in PDF mode",
+            }
+            checks["frame_pixels"] = {
+                "pass": False,
+                "message": "FAIL: Check 7 requires --output-pdf in PDF mode",
+            }
+
+        # Check 8 - AI Art Border Detection (optional)
+        if ai_art_path:
+            checks["ai_art_border"] = check_ai_art_border(ai_art_path)
+        else:
+            print("  [!] ai_art_border: SKIPPED - no --ai-art path provided")
+
+        # Check 9 - Visual frame comparison (required in upgraded PDF protocol)
+        if output_pdf_path and Path(output_pdf_path).exists():
+            checks["visual_frame"] = check_visual_frame(source_pdf_path, output_pdf_path)
+        else:
+            checks["visual_frame"] = {
+                "pass": False,
+                "message": "FAIL: Check 9 requires --output-pdf in PDF mode",
+            }
     else:
         # JPG-mode checks
         source = load_image_array(source_jpg_path)
@@ -597,6 +783,15 @@ def main():
     parser.add_argument("source_jpg", type=Path, nargs="?", default=None, help="Path to source cover JPG (JPG mode)")
     parser.add_argument("--source-pdf", type=Path, default=None, help="Path to source cover PDF (enables PDF mode)")
     parser.add_argument("--output-pdf", type=Path, default=None, help="Path to output PDF (for SMask integrity check)")
+    parser.add_argument(
+        "--ai-art",
+        type=Path,
+        default=None,
+        help=(
+            "Path to AI art image before compositing (enables Check 8 in PDF mode). "
+            "If omitted, Check 8 is skipped with a warning."
+        ),
+    )
     parser.add_argument("--strict", action="store_true", help="Stricter thresholds")
     parser.add_argument("--json", action="store_true", help="JSON output")
     args = parser.parse_args()
@@ -609,8 +804,16 @@ def main():
         print(f"ERROR: Source PDF not found: {args.source_pdf}", file=sys.stderr)
         sys.exit(2)
 
+    if args.output_pdf and not args.output_pdf.exists():
+        print(f"ERROR: Output PDF not found: {args.output_pdf}", file=sys.stderr)
+        sys.exit(2)
+
     if not args.source_pdf and args.source_jpg and not args.source_jpg.exists():
         print(f"ERROR: Source JPG not found: {args.source_jpg}", file=sys.stderr)
+        sys.exit(2)
+
+    if args.ai_art and not args.ai_art.exists():
+        print(f"ERROR: AI art image not found: {args.ai_art}", file=sys.stderr)
         sys.exit(2)
 
     if not args.source_pdf and not args.source_jpg:
@@ -622,6 +825,7 @@ def main():
         source_jpg_path=args.source_jpg,
         source_pdf_path=args.source_pdf,
         output_pdf_path=args.output_pdf,
+        ai_art_path=args.ai_art,
         strict=args.strict,
     )
 

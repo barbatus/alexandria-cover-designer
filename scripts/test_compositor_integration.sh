@@ -85,6 +85,7 @@ fi
 echo
 echo "Step 2: Build sample art + composite..."
 ART_PATH="$OUTPUT_DIR/sample_illustration.png"
+AI_ART_PATH="$ART_PATH"
 OUT_JPG="$OUTPUT_DIR/test_output.jpg"
 OUT_PDF="$OUTPUT_DIR/test_output.pdf"
 OUT_AI="$OUTPUT_DIR/test_output.ai"
@@ -92,19 +93,25 @@ OUT_AI="$OUTPUT_DIR/test_output.ai"
 "$PYTHON_BIN" - <<'PY' "$ART_PATH" "$SOURCE_JPG"
 import sys
 from pathlib import Path
-from PIL import Image, ImageDraw
+import numpy as np
+from PIL import Image
 
 art_path = Path(sys.argv[1])
 source_jpg = Path(sys.argv[2])
 with Image.open(source_jpg) as src:
     w, h = src.size
 side = max(1024, min(w, h))
-img = Image.new("RGB", (side, side), (16, 39, 84))
-draw = ImageDraw.Draw(img)
-for i in range(0, side, max(8, side // 40)):
-    color = (20 + (i % 180), 120 + (i % 100), 200 - (i % 120))
-    draw.rectangle((0, i, side, min(side, i + max(4, side // 60))), fill=color)
-draw.ellipse((int(side*0.18), int(side*0.16), int(side*0.82), int(side*0.84)), outline=(240, 190, 90), width=max(4, side // 120))
+# Keep integration art intentionally smooth so Check 8 (border detection)
+# has a clean known-good baseline.
+xs = np.linspace(0.0, 1.0, side, dtype=np.float32)
+ys = np.linspace(0.0, 1.0, side, dtype=np.float32)
+grid_x, grid_y = np.meshgrid(xs, ys)
+r = ((grid_x - 0.5) ** 2 + (grid_y - 0.5) ** 2) ** 0.5
+base = np.zeros((side, side, 3), dtype=np.uint8)
+base[..., 0] = np.clip(28 + (1.0 - r) * 26, 0, 255).astype(np.uint8)
+base[..., 1] = np.clip(84 + grid_y * 36, 0, 255).astype(np.uint8)
+base[..., 2] = np.clip(132 + grid_x * 48, 0, 255).astype(np.uint8)
+img = Image.fromarray(base, mode="RGB")
 img.save(art_path, format="PNG")
 print(str(art_path))
 PY
@@ -162,6 +169,7 @@ if [ -f "$OUT_PDF" ] && [ -n "$SOURCE_PDF" ] && [ -f "$SOURCE_PDF" ]; then
     "$OUT_JPG" \
     --source-pdf "$SOURCE_PDF" \
     --output-pdf "$OUT_PDF" \
+    --ai-art "$AI_ART_PATH" \
     --strict
 else
   "$PYTHON_BIN" "$PROJECT_ROOT/scripts/verify_composite.py" \
