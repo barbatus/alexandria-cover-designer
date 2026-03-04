@@ -783,6 +783,17 @@ def composite_single(
         art_layer = Image.new("RGBA", (cover_w, cover_h), (0, 0, 0, 0))
         art_layer.paste(art, (center_x - art_diameter // 2, center_y - art_diameter // 2))
 
+        clip_radius = art_diameter // 2
+        clip_mask = _build_circle_feather_mask(
+            width=cover_w,
+            height=cover_h,
+            center_x=center_x,
+            center_y=center_y,
+            radius=clip_radius,
+            feather_px=INNER_FEATHER_PX,
+        )
+        art_layer.putalpha(clip_mask)
+
         result = Image.alpha_composite(canvas, art_layer)
         result = Image.alpha_composite(result, frame_overlay)
         composited_rgb = result.convert("RGB")
