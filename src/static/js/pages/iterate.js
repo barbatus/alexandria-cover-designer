@@ -536,9 +536,9 @@ window.Pages.iterate = {
       syncBtn.textContent = 'Syncing...';
       try {
         const synced = await Drive.syncCatalog({ catalog: catalogId, force: true, limit: 20000 });
-        const refreshed = await DB.loadBooks(catalogId);
         const summary = Drive.getLastCatalogSyncSummary();
-        const rows = Array.isArray(refreshed) && refreshed.length ? refreshed : synced;
+        let rows = Array.isArray(synced) ? synced : [];
+        if (!rows.length) rows = await DB.loadBooks(catalogId);
         const sorted = [...(Array.isArray(rows) ? rows : [])]
           .sort((a, b) => Number(a.number || 0) - Number(b.number || 0));
         const current = Number(selectEl?.value || 0);

@@ -3940,6 +3940,7 @@ def _sync_catalog_from_drive(*, runtime: config.Config, force: bool = False, lim
         "matched_drive_entries": int(merge_stats.get("matched", 0)),
         "unmatched_drive_entries": int(merge_stats.get("unmatched", 0)),
         "added_drive_entries": int(merge_stats.get("added", 0)),
+        "books": cgi_books,
     }
 
 

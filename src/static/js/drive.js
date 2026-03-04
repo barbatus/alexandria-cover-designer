@@ -70,7 +70,21 @@ window.Drive = {
     }
     const summary = await resp.json();
     this._lastCatalogSyncSummary = (summary && typeof summary === 'object') ? summary : {};
-    const books = await DB.loadBooks(catalog);
+    let books = [];
+    const syncedBooks = Array.isArray(this._lastCatalogSyncSummary.books) ? this._lastCatalogSyncSummary.books : [];
+    if (syncedBooks.length) {
+      DB.dbClear('books');
+      syncedBooks.forEach((book) => {
+        if (!book || typeof book !== 'object') return;
+        const id = book.id ?? book.number ?? book.book_number;
+        const number = book.number ?? book.book_number ?? id;
+        if (id === undefined || id === null) return;
+        DB.dbPut('books', { id, number, ...book });
+      });
+      books = DB.dbGetAll('books');
+    } else {
+      books = await DB.loadBooks(catalog);
+    }
     if (typeof progressCb === 'function') {
       progressCb({
         step: 'done',
