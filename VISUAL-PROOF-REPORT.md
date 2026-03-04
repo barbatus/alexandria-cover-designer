@@ -2,7 +2,34 @@
 
 Last updated: `2026-03-04`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `a1cbac07-8f7a-40bd-a83e-3a7eff8649b7`
+Deployment ID: `7373b253-be3a-4f1c-8e0c-e52f60b75c00`
+
+## 1.4 PROMPT-10 Frame/Prompt/ZIP Fix (2026-03-04)
+- Git commit (master):
+  - `56df67e` — frame fallback safety, prompt relevance anchoring, ZIP raw/source separation
+- Railway deploy:
+  - `7373b253-be3a-4f1c-8e0c-e52f60b75c00` (`SUCCESS`)
+- Live health:
+  - `status: ok`
+  - `healthy: true`
+  - `uptime_seconds: 1` immediately after rollout
+- Required validation runs:
+  - Validation 1 (frame mask): `PASS` (`Center=(2867,1600), opaque=94.2%`)
+  - Validation 2 (frame preservation/art insertion): `PASS` (`max delta: 0`, `art delta: 204`)
+  - Validation 3 (prompt reference): `PASS` (`moby/whale/melville` references present)
+  - Validation 4 (ZIP distinct files): `PASS`
+    - source-raw: `4,658,268` bytes
+    - generated-raw: `2,012,761` bytes
+    - composited: `2,834,807` bytes
+- Mandatory strict compositor verification:
+  - `.venv/bin/python scripts/verify_composite.py --strict tmp/composited/69/openai__gpt-image-1/variant_1.jpg 'Input Covers/69. The Prince and the Pauper — Mark Twain copy/The Prince and the Pauper — Mark Twain.jpg'`
+  - result: `ALL CHECKS PASSED`
+- Visual proof artifacts:
+  - live iterate page (deployed): `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/tmp/proof-live-iterate-prompt10-20260304.png`
+  - source cover proof: `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/tmp/proof-prompt10-source-book61.jpg`
+  - generated raw proof: `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/tmp/proof-prompt10-generated-book61.png`
+  - composited cover proof: `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/tmp/proof-prompt10-composite-book61.jpg`
+  - side-by-side proof: `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/tmp/proof-prompt10-triptych-book61.jpg`
 
 ## 1.3 Model Label + Default Selection Correction (2026-03-04)
 - Git commit (master):
