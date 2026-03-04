@@ -44,6 +44,10 @@ AI_ART_EDGE_TRIM_RATIO = 0.08
 # read like ornamental side cutouts against semi-transparent frame details.
 ART_EDGE_BLEND_MIN = SMASK_FRAME_MAX + 1  # 251
 ART_EDGE_BLEND_MAX = 254
+# Additional radial feather toward the medallion rim to suppress decorative
+# edge buildup from generated art while preserving core scene content.
+RADIAL_EDGE_BLEND_START = 0.84
+RADIAL_EDGE_BLEND_END = 0.98
 
 
 def rgb_to_cmyk(rgb_array: np.ndarray) -> np.ndarray:
@@ -253,6 +257,29 @@ def composite_cover_pdf(
                 0.0,
                 255.0,
             ).astype(np.uint8)
+        radial_mask_base = smask > SMASK_FRAME_MAX
+        if np.any(radial_mask_base):
+            yy, xx = np.ogrid[:height, :width]
+            cx = (width - 1) / 2.0
+            cy = (height - 1) / 2.0
+            rx = max(cx, 1.0)
+            ry = max(cy, 1.0)
+            radial = np.sqrt(((xx - cx) / rx) ** 2 + ((yy - cy) / ry) ** 2)
+            radial_mask = radial_mask_base & (radial >= RADIAL_EDGE_BLEND_START)
+            if np.any(radial_mask):
+                radial_span = max(1e-6, float(RADIAL_EDGE_BLEND_END - RADIAL_EDGE_BLEND_START))
+                radial_alpha = np.clip(
+                    (radial[radial_mask].astype(np.float32) - float(RADIAL_EDGE_BLEND_START)) / radial_span,
+                    0.0,
+                    1.0,
+                ).reshape(-1, 1)
+                src_radial = source_cmyk[radial_mask].astype(np.float32)
+                ai_radial = composite[radial_mask].astype(np.float32)
+                composite[radial_mask] = np.clip(
+                    (ai_radial * (1.0 - radial_alpha)) + (src_radial * radial_alpha),
+                    0.0,
+                    255.0,
+                ).astype(np.uint8)
 
         encoded = zlib.compress(composite.tobytes())
         smask_ref = im0.get("/SMask")
