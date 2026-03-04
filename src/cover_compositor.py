@@ -803,7 +803,9 @@ def composite_single(
         _h, _w = _orig_arr.shape[:2]
         _yy, _xx = np.ogrid[:_h, :_w]
         _dist = np.sqrt((_xx - center_x) ** 2 + (_yy - center_y) ** 2)
-        _ring = (_dist >= 500) & (_dist <= 680)
+        _overlay_alpha = np.array(frame_overlay.getchannel("A"), dtype=np.uint8)
+        # Guard check only on fully-opaque frame pixels; transparent scrollwork gaps are intentional.
+        _ring = (_dist >= 660) & (_dist <= 800) & (_overlay_alpha >= 250)
         _diff = np.abs(_orig_arr - _comp_arr).max(axis=2)
         _ring_diff = _diff[_ring]
         _changed_pct = 100.0 * float(np.sum(_ring_diff > 15)) / max(1, int(_ring_diff.size))

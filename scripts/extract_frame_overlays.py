@@ -35,7 +35,6 @@ DEFAULT_TX = 524.410
 DEFAULT_TY = 110.511
 CENTER_X = 2864
 CENTER_Y = 1620
-FRAME_GUARD_INNER_R = 420
 CM_DO_PATTERN = re.compile(
     rb"([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s+"
     rb"([+-]?\d*\.?\d+(?:[eE][+-]?\d+)?)\s+"
@@ -193,9 +192,9 @@ def _compose_overlay_with_smask(
     if np.any(feather_zone):
         feather_values = (240.0 - smask_canvas[feather_zone].astype(np.float32)) / 15.0 * 255.0
         alpha[feather_zone] = np.clip(feather_values, 0, 255).astype(np.uint8)
-    yy, xx = np.ogrid[:target_h, :target_w]
-    dist = np.sqrt((xx - CENTER_X) ** 2 + (yy - CENTER_Y) ** 2)
-    alpha[dist >= FRAME_GUARD_INNER_R] = 255
+    # No guard ring override — the SMask naturally handles the frame boundary.
+    # Outside the Im0 bounding box, smask_canvas is 0 so alpha remains 255.
+    # Inside the Im0 box, SMask values control the opening/ornamental detail.
 
     rgba = np.dstack([cover_rgb, alpha])
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -246,12 +245,7 @@ def extract_overlay_fallback(cover_jpg_path: Path, output_path: Path, frame_mask
     mask = Image.open(frame_mask_path).convert("L")
     if mask.size != cover_rgba.size:
         mask = mask.resize(cover_rgba.size, Image.LANCZOS)
-    mask_arr = np.array(mask, dtype=np.uint8)
-    h, w = mask_arr.shape[:2]
-    yy, xx = np.ogrid[:h, :w]
-    dist = np.sqrt((xx - CENTER_X) ** 2 + (yy - CENTER_Y) ** 2)
-    mask_arr[dist >= FRAME_GUARD_INNER_R] = 255
-    mask = Image.fromarray(mask_arr, mode="L")
+    # Use frame_mask.png as-is — no guard ring override needed.
     cover_rgba.putalpha(mask)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     cover_rgba.save(output_path, format="PNG", optimize=True)
