@@ -192,6 +192,57 @@ async function fetchDownloadBlob(source) {
   }
 }
 
+function _extensionFromPath(value) {
+  try {
+    const absolute = new URL(String(value || ''), window.location.origin);
+    const path = String(absolute.pathname || '').trim().toLowerCase();
+    const match = path.match(/\.([a-z0-9]{2,5})$/);
+    return match ? match[1] : '';
+  } catch {
+    const token = String(value || '').trim().toLowerCase();
+    const clean = token.split('?')[0].split('#')[0];
+    const match = clean.match(/\.([a-z0-9]{2,5})$/);
+    return match ? match[1] : '';
+  }
+}
+
+function _extensionFromBlob(blob, fallback = 'jpg') {
+  const mime = String(blob?.type || '').toLowerCase();
+  if (mime.includes('png')) return 'png';
+  if (mime.includes('webp')) return 'webp';
+  if (mime.includes('jpeg') || mime.includes('jpg')) return 'jpg';
+  if (mime.includes('pdf')) return 'pdf';
+  if (mime.includes('postscript') || mime.includes('illustrator')) return 'ai';
+  return String(fallback || 'jpg');
+}
+
+async function _extractVariantArchiveAssets({ bookId, variant, model }) {
+  const book = Number(bookId || 0);
+  const variantNumber = Number(variant || 0);
+  const modelId = String(model || '').trim();
+  if (book <= 0 || variantNumber <= 0 || !modelId) return {};
+  try {
+    const zipHref = `/api/variant-download?catalog=classics&book=${encodeURIComponent(book)}&variant=${encodeURIComponent(variantNumber)}&model=${encodeURIComponent(modelId)}`;
+    const zipBlob = await fetchDownloadBlob(zipHref);
+    if (!zipBlob) return {};
+    const JSZip = await ensureJSZip();
+    const archive = await JSZip.loadAsync(zipBlob);
+    const files = Object.values(archive.files || {}).filter((file) => !file.dir);
+    const pick = (predicate) => files.find(predicate) || null;
+    const imagePattern = /\.(png|jpe?g|webp)$/i;
+    const compositeFile = pick((file) => /composites\//i.test(file.name) && /\.jpe?g$/i.test(file.name));
+    const sourceFile = pick((file) => /source_images\//i.test(file.name) && imagePattern.test(file.name));
+    const pdfFile = pick((file) => /composites\//i.test(file.name) && /\.pdf$/i.test(file.name));
+    const out = {};
+    if (compositeFile) out.compositeBlob = await compositeFile.async('blob');
+    if (sourceFile) out.sourceBlob = await sourceFile.async('blob');
+    if (pdfFile) out.pdfBlob = await pdfFile.async('blob');
+    return out;
+  } catch {
+    return {};
+  }
+}
+
 function resolveJobArtifactHref(job, keys = []) {
   const candidates = [];
   const append = (value) => {
@@ -880,39 +931,53 @@ window.Pages.iterate = {
     const rawHref = pickFullResolutionSource(job, 'download-raw', true);
     const pdfHref = resolveJobArtifactHref(job, ['composite_pdf_url', 'pdf_url', 'composited_pdf_path', 'pdf_path']);
     const aiHref = resolveJobArtifactHref(job, ['composite_ai_url', 'ai_url', 'composited_ai_path', 'ai_path']);
-
-    if (!compositeHref && !rawHref && !pdfHref && !aiHref) return;
+    const sourceHref = `/api/source-download?catalog=classics&book=${encodeURIComponent(Number(job.book_id || 0))}&variant=${encodeURIComponent(Number(job.variant || 0))}&model=${encodeURIComponent(String(job.model || ''))}`;
 
     try {
       const JSZip = await ensureJSZip();
       const zip = new JSZip();
+      let compositeBlob = await fetchDownloadBlob(compositeHref);
+      let rawBlob = await fetchDownloadBlob(rawHref);
+      let sourceBlob = await fetchDownloadBlob(sourceHref);
+      let pdfBlob = await fetchDownloadBlob(pdfHref);
+      const aiBlob = await fetchDownloadBlob(aiHref);
 
-      if (compositeHref) {
-        const compositeBlob = await fetchDownloadBlob(compositeHref);
-        if (compositeBlob) {
-          zip.file(`${folderName}/${baseName}.jpg`, compositeBlob);
-        }
+      if (!compositeBlob || !sourceBlob || !pdfBlob) {
+        const fallback = await _extractVariantArchiveAssets({
+          bookId: Number(job.book_id || 0),
+          variant: Number(job.variant || 0),
+          model: String(job.model || ''),
+        });
+        if (!compositeBlob && fallback.compositeBlob) compositeBlob = fallback.compositeBlob;
+        if (!sourceBlob && fallback.sourceBlob) sourceBlob = fallback.sourceBlob;
+        if (!pdfBlob && fallback.pdfBlob) pdfBlob = fallback.pdfBlob;
       }
 
-      if (rawHref) {
-        const rawBlob = await fetchDownloadBlob(rawHref);
-        if (rawBlob) {
-          zip.file(`${folderName}/${baseName} (illustration).jpg`, rawBlob);
-        }
+      if (!rawBlob && sourceBlob) rawBlob = sourceBlob;
+      if (!sourceBlob && rawBlob) sourceBlob = rawBlob;
+
+      if (!compositeBlob && !rawBlob && !sourceBlob && !pdfBlob && !aiBlob) return;
+
+      if (compositeBlob) {
+        zip.file(`${folderName}/${baseName}.jpg`, compositeBlob);
       }
 
-      if (pdfHref) {
-        const pdfBlob = await fetchDownloadBlob(pdfHref);
-        if (pdfBlob) {
-          zip.file(`${folderName}/${baseName}.pdf`, pdfBlob);
-        }
+      if (rawBlob) {
+        const rawExt = _extensionFromPath(rawHref) || _extensionFromBlob(rawBlob, 'png');
+        zip.file(`${folderName}/${baseName} (generated raw).${rawExt}`, rawBlob);
       }
 
-      if (aiHref) {
-        const aiBlob = await fetchDownloadBlob(aiHref);
-        if (aiBlob) {
-          zip.file(`${folderName}/${baseName}.ai`, aiBlob);
-        }
+      if (sourceBlob) {
+        const sourceExt = _extensionFromPath(sourceHref) || _extensionFromBlob(sourceBlob, 'png');
+        zip.file(`${folderName}/${baseName} (source raw).${sourceExt}`, sourceBlob);
+      }
+
+      if (pdfBlob) {
+        zip.file(`${folderName}/${baseName}.pdf`, pdfBlob);
+      }
+
+      if (aiBlob) {
+        zip.file(`${folderName}/${baseName}.ai`, aiBlob);
       }
 
       const zipBlob = await zip.generateAsync({ type: 'blob' });

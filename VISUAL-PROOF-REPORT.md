@@ -314,6 +314,17 @@ Deployment ID: `73d32fc1-50a5-4fab-ab9c-ef771ccb1efb`
 - `/Users/timzengerink/proofs/prompt09-book1-proof-20260304.jpg`
 - `/Users/timzengerink/proofs/prompt09-book9-proof-20260304.jpg`
 
+### 3.0.8 Live Dropdown Population Fix Proof (2026-03-04)
+- Deployment: `d04bd195-1135-41fa-93e7-f51ce2adb79f`
+- Live URL: `https://web-production-900a7.up.railway.app`
+- API verification after live `POST /api/drive/catalog-sync`:
+  - `total_books = 999`
+  - `books.length = 999`
+  - `untitled_titles = 0`
+- Visual proof:
+  - `/Users/timzengerink/proofs/proof-live-iterate-dropdown-expanded-fixed-20260304.png`
+  - `/Users/timzengerink/proofs/proof-live-iterate-dropdown-fixed-20260304.png`
+
 ### 3.1 Live UI Screenshots
 - `tmp/proof-live-iterate-20260302-prompt06.png`
 - `tmp/proof-live-dashboard-20260302-prompt06.png`
