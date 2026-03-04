@@ -222,6 +222,57 @@ def test_default_cover_source_for_runtime_defaults_to_catalog_with_local_images(
     assert qr._default_cover_source_for_runtime(cfg) == "catalog"
 
 
+def test_title_author_from_drive_name_handles_numeric_prefix_without_becoming_untitled():
+    title, author = qr._title_author_from_drive_name("2. Moby Dick_ Or, The Whale - Herman Melville")
+    assert title == "Moby Dick Or, The Whale"
+    assert author == "Herman Melville"
+
+
+def test_title_author_from_drive_name_preserves_initials_and_em_dash_author():
+    title, author = qr._title_author_from_drive_name("25. The Eyes Have It — Philip K. Dick")
+    assert title == "The Eyes Have It"
+    assert author == "Philip K. Dick"
+
+
+def test_build_catalog_rows_from_drive_covers_prefers_parsed_title_when_mapping_is_untitled():
+    rows = qr._build_catalog_rows_from_drive_covers(
+        covers=[
+            {
+                "id": "cover-2",
+                "name": "2. Moby Dick_ Or, The Whale - Herman Melville",
+                "kind": "folder",
+                "book_number": 2,
+                "title": "Untitled",
+            }
+        ]
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert int(row.get("number", 0)) == 2
+    assert row.get("title") == "Moby Dick Or, The Whale"
+    assert row.get("author") == "Herman Melville"
+
+
+def test_build_catalog_rows_from_drive_covers_uses_mapped_title_for_generic_book_tokens():
+    rows = qr._build_catalog_rows_from_drive_covers(
+        covers=[
+            {
+                "id": "cover-2",
+                "name": "2. Book 2.jpg",
+                "kind": "file",
+                "book_number": 2,
+                "title": "Moby Dick' Or, The Whale",
+                "author": "Herman Melville",
+            }
+        ]
+    )
+    assert len(rows) == 1
+    row = rows[0]
+    assert int(row.get("number", 0)) == 2
+    assert row.get("title") == "Moby Dick' Or, The Whale"
+    assert row.get("author") == "Herman Melville"
+
+
 def test_validate_drive_cover_request_lookup_success_and_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     runtime = SimpleNamespace(
         gdrive_source_folder_id="source-folder",

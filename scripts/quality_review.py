@@ -3604,15 +3604,29 @@ def _catalog_books_payload(path: Path) -> list[dict[str, Any]]:
     return [row for row in payload if isinstance(row, dict)]
 
 
+_KNOWN_DRIVE_COVER_SUFFIXES = (".jpg", ".jpeg", ".png", ".webp", ".pdf", ".ai")
+
+
+def _strip_known_drive_suffix(name: str) -> str:
+    token = str(name or "").strip()
+    lower = token.lower()
+    for suffix in _KNOWN_DRIVE_COVER_SUFFIXES:
+        if lower.endswith(suffix):
+            return token[: -len(suffix)].strip()
+    return token
+
+
 def _title_author_from_drive_name(name: str) -> tuple[str, str]:
-    token = Path(str(name or "").strip()).stem
+    token = _strip_known_drive_suffix(name)
     token = re.sub(r"^\s*\d+\s*[\.\-:)]*\s*", "", token).strip()
     token = token.replace("_", " ")
     token = re.sub(r"\s+", " ", token).strip()
     if not token:
         return "Untitled", ""
-    if " - " in token:
-        left, right = token.rsplit(" - ", 1)
+    for separator in (" - ", " — "):
+        if separator not in token:
+            continue
+        left, right = token.rsplit(separator, 1)
         title = left.strip() or token
         author = right.strip()
         if 1 <= len(author.split()) <= 8:
@@ -3632,7 +3646,17 @@ def _build_catalog_rows_from_drive_covers(*, covers: list[dict[str, Any]]) -> li
         name = str(entry.get("name", "")).strip()
         if not name:
             continue
-        title, author = _title_author_from_drive_name(name)
+        parsed_title, parsed_author = _title_author_from_drive_name(name)
+        mapped_title = str(entry.get("title", "")).strip()
+        mapped_author = str(entry.get("author", "")).strip()
+        normalized_parsed = parsed_title.strip().lower()
+        normalized_mapped = mapped_title.strip().lower()
+        title = parsed_title
+        if not title or normalized_parsed == "untitled":
+            title = mapped_title or title
+        elif re.fullmatch(r"book\s+\d+", normalized_parsed) and mapped_title and normalized_mapped != "untitled":
+            title = mapped_title
+        author = parsed_author or mapped_author
         mapped_number = _safe_int(entry.get("book_number"), 0)
         number = 0
         if mapped_number > 0 and mapped_number not in used_numbers:
