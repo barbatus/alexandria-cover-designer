@@ -2,7 +2,7 @@
 
 Last updated: `2026-03-04`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `dba78a91-2bbe-4122-b38c-3d566715a04a`
+Deployment ID: `c4c2133e-adaa-4cfc-a430-02c5e7f921c6`
 
 ## 1.1 PROMPT-09C ZIP + Sync/Dropdown + Cache Rollout (2026-03-04)
 - Git commits (master):
@@ -12,6 +12,7 @@ Deployment ID: `dba78a91-2bbe-4122-b38c-3d566715a04a`
   - `f62e258` — SPA JS cache-bust token bump (`20260304-zipfix09c-uiux09`)
 - Railway deploy:
   - deployment `dba78a91-2bbe-4122-b38c-3d566715a04a` (`SUCCESS`)
+  - final parity redeploy from latest `master` head: `c4c2133e-adaa-4cfc-a430-02c5e7f921c6` (`SUCCESS`)
 - Live health post-rollout:
   - `status: ok`
   - `healthy: true`
