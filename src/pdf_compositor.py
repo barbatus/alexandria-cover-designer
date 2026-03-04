@@ -48,6 +48,9 @@ ART_EDGE_BLEND_MAX = 254
 # edge buildup from generated art while preserving core scene content.
 RADIAL_EDGE_BLEND_START = 0.84
 RADIAL_EDGE_BLEND_END = 0.98
+ART_EDGE_BLACK_SUPPRESS_RADIAL_MIN = 0.82
+ART_EDGE_BLACK_RGB_MAX = 72
+ART_EDGE_BLACK_RGB_DELTA_MAX = 40
 
 
 def rgb_to_cmyk(rgb_array: np.ndarray) -> np.ndarray:
@@ -280,6 +283,26 @@ def composite_cover_pdf(
                     0.0,
                     255.0,
                 ).astype(np.uint8)
+            # Suppress near-black edge artifacts in art zone that can read like
+            # side ornaments when seen through fine frame cutouts.
+            rgb_comp = (
+                np.stack(
+                    [
+                        (255 - composite[:, :, 0].astype(np.float32)) * (255 - composite[:, :, 3].astype(np.float32)) / 255.0,
+                        (255 - composite[:, :, 1].astype(np.float32)) * (255 - composite[:, :, 3].astype(np.float32)) / 255.0,
+                        (255 - composite[:, :, 2].astype(np.float32)) * (255 - composite[:, :, 3].astype(np.float32)) / 255.0,
+                    ],
+                    axis=-1,
+                )
+                .clip(0.0, 255.0)
+                .astype(np.uint8)
+            )
+            max_rgb = rgb_comp.max(axis=2)
+            min_rgb = rgb_comp.min(axis=2)
+            near_black = (max_rgb <= ART_EDGE_BLACK_RGB_MAX) & ((max_rgb - min_rgb) <= ART_EDGE_BLACK_RGB_DELTA_MAX)
+            black_edge_mask = radial_mask_base & (radial >= ART_EDGE_BLACK_SUPPRESS_RADIAL_MIN) & near_black
+            if np.any(black_edge_mask):
+                composite[black_edge_mask] = source_cmyk[black_edge_mask]
 
         encoded = zlib.compress(composite.tobytes())
         smask_ref = im0.get("/SMask")
