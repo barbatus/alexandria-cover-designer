@@ -1,15 +1,13 @@
 {
   "book_number": 13,
   "book_title": "Cranford",
-  "passed": false,
-  "failed_checks": [
-    "frame_ring_integrity"
-  ],
+  "passed": true,
+  "failed_checks": [],
   "checks": [
     {
       "name": "frame_ring_integrity",
-      "passed": false,
-      "value": "10.98% changed, delta 15.15",
+      "passed": true,
+      "value": "0.00% changed, delta 0.20",
       "threshold": "<1.0% changed and delta <3.0",
       "detail": "Ornamental frame ring must remain intact."
     },
@@ -23,7 +21,7 @@
     {
       "name": "art_presence",
       "passed": true,
-      "value": "84.26% inner pixels changed",
+      "value": "97.71% inner pixels changed",
       "threshold": ">20.0% inner pixels changed",
       "detail": "Medallion center must contain newly generated art."
     },
@@ -37,7 +35,7 @@
     {
       "name": "aspect_ratio_sanity",
       "passed": true,
-      "value": "bbox=861x786, ratio=1.095",
+      "value": "bbox=911x912, ratio=0.999",
       "threshold": "changed-art bbox ratio in [0.55, 1.80]",
       "detail": "Changed medallion art footprint should not be heavily stretched."
     },
@@ -50,15 +48,15 @@
     }
   ],
   "metrics": {
-    "frame_changed_pct": 10.9848,
-    "frame_mean_delta": 15.1463,
+    "frame_changed_pct": 0.0,
+    "frame_mean_delta": 0.2021,
     "outer_changed_pct": 0.0,
-    "inner_changed_pct": 84.2572,
-    "changed_bbox_width": 861,
-    "changed_bbox_height": 786,
-    "changed_bbox_aspect_ratio": 1.0954
+    "inner_changed_pct": 97.7149,
+    "changed_bbox_width": 911,
+    "changed_bbox_height": 912,
+    "changed_bbox_aspect_ratio": 0.9989
   },
-  "generated_at": "2026-03-05T00:15:47.100824+00:00",
+  "generated_at": "2026-03-05T06:54:36.936363+00:00",
   "original_path": "Input Covers/13. Cranford — Elizabeth Cleghorn Gaskell copy/Cranford - Elizabeth Cleghorn Gaskell.jpg",
   "composite_path": "tmp/composited/13/openrouter__google__gemini-3-pro-image-preview/variant_1.jpg",
   "golden_path": ""

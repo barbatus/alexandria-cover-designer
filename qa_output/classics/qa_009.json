@@ -21,7 +21,7 @@
     {
       "name": "art_presence",
       "passed": true,
-      "value": "98.34% inner pixels changed",
+      "value": "97.86% inner pixels changed",
       "threshold": ">20.0% inner pixels changed",
       "detail": "Medallion center must contain newly generated art."
     },
@@ -35,7 +35,7 @@
     {
       "name": "aspect_ratio_sanity",
       "passed": true,
-      "value": "bbox=931x932, ratio=0.999",
+      "value": "bbox=910x912, ratio=0.998",
       "threshold": "changed-art bbox ratio in [0.55, 1.80]",
       "detail": "Changed medallion art footprint should not be heavily stretched."
     },
@@ -51,12 +51,12 @@
     "frame_changed_pct": 0.0,
     "frame_mean_delta": 0.2182,
     "outer_changed_pct": 0.0,
-    "inner_changed_pct": 98.3414,
-    "changed_bbox_width": 931,
-    "changed_bbox_height": 932,
-    "changed_bbox_aspect_ratio": 0.9989
+    "inner_changed_pct": 97.8631,
+    "changed_bbox_width": 910,
+    "changed_bbox_height": 912,
+    "changed_bbox_aspect_ratio": 0.9978
   },
-  "generated_at": "2026-03-05T00:15:45.904430+00:00",
+  "generated_at": "2026-03-05T06:54:35.473141+00:00",
   "original_path": "Input Covers/9. Right Ho, Jeeves - P. G. Wodehouse copy/Right Ho, Jeeves - P. G. Wodehouse_Монтажная область 1.jpg",
   "composite_path": "tmp/composited/9/openai__gpt-image-1/variant_5.jpg",
   "golden_path": ""

@@ -21,7 +21,7 @@
     {
       "name": "art_presence",
       "passed": true,
-      "value": "96.83% inner pixels changed",
+      "value": "98.26% inner pixels changed",
       "threshold": ">20.0% inner pixels changed",
       "detail": "Medallion center must contain newly generated art."
     },
@@ -35,7 +35,7 @@
     {
       "name": "aspect_ratio_sanity",
       "passed": true,
-      "value": "bbox=861x861, ratio=1.000",
+      "value": "bbox=911x911, ratio=1.000",
       "threshold": "changed-art bbox ratio in [0.55, 1.80]",
       "detail": "Changed medallion art footprint should not be heavily stretched."
     },
@@ -49,14 +49,14 @@
   ],
   "metrics": {
     "frame_changed_pct": 0.0,
-    "frame_mean_delta": 0.2184,
+    "frame_mean_delta": 0.2181,
     "outer_changed_pct": 0.0,
-    "inner_changed_pct": 96.8315,
-    "changed_bbox_width": 861,
-    "changed_bbox_height": 861,
+    "inner_changed_pct": 98.2611,
+    "changed_bbox_width": 911,
+    "changed_bbox_height": 911,
     "changed_bbox_aspect_ratio": 1.0
   },
-  "generated_at": "2026-03-05T00:16:23.966543+00:00",
+  "generated_at": "2026-03-05T06:55:15.645751+00:00",
   "original_path": "Input Covers/100. The Extraordinary Adventures of Arsène Lupin, Gentleman-Burglar — Maurice Leblanc copy/The Extraordinary Adventures of Arsène Lupin, Gentleman-Burglar — Maurice Leblanc.jpg",
   "composite_path": "tmp/composited/100/openrouter__google__gemini-3-pro-image-preview/variant_1.jpg",
   "golden_path": ""

@@ -7,7 +7,7 @@
     {
       "name": "frame_ring_integrity",
       "passed": true,
-      "value": "0.51% changed, delta 0.27",
+      "value": "0.00% changed, delta 0.22",
       "threshold": "<1.0% changed and delta <3.0",
       "detail": "Ornamental frame ring must remain intact."
     },
@@ -21,7 +21,7 @@
     {
       "name": "art_presence",
       "passed": true,
-      "value": "98.88% inner pixels changed",
+      "value": "97.81% inner pixels changed",
       "threshold": ">20.0% inner pixels changed",
       "detail": "Medallion center must contain newly generated art."
     },
@@ -35,7 +35,7 @@
     {
       "name": "aspect_ratio_sanity",
       "passed": true,
-      "value": "bbox=955x959, ratio=0.996",
+      "value": "bbox=911x911, ratio=1.000",
       "threshold": "changed-art bbox ratio in [0.55, 1.80]",
       "detail": "Changed medallion art footprint should not be heavily stretched."
     },
@@ -48,15 +48,15 @@
     }
   ],
   "metrics": {
-    "frame_changed_pct": 0.512,
-    "frame_mean_delta": 0.271,
+    "frame_changed_pct": 0.0,
+    "frame_mean_delta": 0.2165,
     "outer_changed_pct": 0.0,
-    "inner_changed_pct": 98.8812,
-    "changed_bbox_width": 955,
-    "changed_bbox_height": 959,
-    "changed_bbox_aspect_ratio": 0.9958
+    "inner_changed_pct": 97.8136,
+    "changed_bbox_width": 911,
+    "changed_bbox_height": 911,
+    "changed_bbox_aspect_ratio": 1.0
   },
-  "generated_at": "2026-03-05T00:16:04.892780+00:00",
+  "generated_at": "2026-03-05T06:54:55.529130+00:00",
   "original_path": "Input Covers/55. David Copperfield — Charles Dickens copy/David Copperfield — Charles Dickens.jpg",
   "composite_path": "tmp/composited/55/openai__gpt-image-1/variant_5.jpg",
   "golden_path": ""
