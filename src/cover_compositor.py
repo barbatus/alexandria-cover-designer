@@ -759,14 +759,15 @@ def composite_single(
         center_x = FALLBACK_CENTER_X
         center_y = FALLBACK_CENTER_Y
 
-        frame_overlay = _load_frame_overlay(cover_path, cover.size)
-        if frame_overlay is None:
-            frame_overlay = _build_fallback_frame_overlay(
-                cover=cover,
-                center_x=center_x,
-                center_y=center_y,
-                punch_radius=TEMPLATE_PUNCH_RADIUS,
-            )
+        # Always use the deterministic fallback overlay for medallion compositing.
+        # Cached extracted overlays can carry stale alpha artifacts that damage
+        # the frame edge and reveal rectangular seams.
+        frame_overlay = _build_fallback_frame_overlay(
+            cover=cover,
+            center_x=center_x,
+            center_y=center_y,
+            punch_radius=TEMPLATE_PUNCH_RADIUS,
+        )
 
         fill_rgb = _sample_cover_background(
             cover=cover,
