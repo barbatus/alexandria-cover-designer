@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import argparse
+import io
 import logging
 import re
 import subprocess
 import sys
+from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -700,6 +702,7 @@ def composite_single(
     output_path: Path,
     feather_px: int = 15,
     frame_overlap_px: int = 24,
+    source_pdf_path: Path | None = None,
 ) -> Path:
     """Composite one illustration into a cover image."""
     runtime = config.get_config()
@@ -716,6 +719,8 @@ def composite_single(
 
     validation_region = region_obj
     composited_rgb: Image.Image
+    rendered_by_pdf_swap = False
+    pdf_source: Path | None = source_pdf_path
 
     if region_obj.region_type == "rectangle" and region_obj.rect_bbox is not None:
         full_overlay = Image.new("RGBA", (cover_w, cover_h), (0, 0, 0, 0))
@@ -754,105 +759,151 @@ def composite_single(
         full_overlay.putalpha(mask)
         composited_rgb = Image.alpha_composite(cover.convert("RGBA"), full_overlay).convert("RGB")
     else:
-        # ── RGBA Frame-Overlay Compositing ─────────────────────────
-        # Three layers: canvas -> art -> RGBA overlay (frame painted LAST).
-        center_x = FALLBACK_CENTER_X
-        center_y = FALLBACK_CENTER_Y
+        pdf_source = pdf_source or _find_source_pdf_for_cover_path(cover_path)
+        if pdf_source is not None:
+            try:
+                from src.pdf_swap_compositor import composite_via_pdf_swap
+            except ModuleNotFoundError:  # pragma: no cover
+                from pdf_swap_compositor import composite_via_pdf_swap  # type: ignore
 
-        # Always use the deterministic fallback overlay for medallion compositing.
-        # Cached extracted overlays can carry stale alpha artifacts that damage
-        # the frame edge and reveal rectangular seams.
-        frame_overlay = _build_fallback_frame_overlay(
-            cover=cover,
-            center_x=center_x,
-            center_y=center_y,
-            punch_radius=TEMPLATE_PUNCH_RADIUS,
-        )
+            try:
+                composite_via_pdf_swap(
+                    source_pdf_path=pdf_source,
+                    ai_art_path=Path(illustration_path),
+                    output_jpg_path=Path(output_path),
+                    border_trim_ratio=float(getattr(runtime, "border_strip_percent", 0.05)),
+                    expected_output_size=(cover_w, cover_h),
+                )
+                with Image.open(output_path) as rendered:
+                    composited_rgb = rendered.convert("RGB")
+                rendered_by_pdf_swap = True
+                validation_region = Region(
+                    center_x=FALLBACK_CENTER_X,
+                    center_y=FALLBACK_CENTER_Y,
+                    radius=max(20, TEMPLATE_PUNCH_RADIUS),
+                    frame_bbox=region_obj.frame_bbox,
+                    region_type="circle",
+                )
+                logger.info("PDF swap composite succeeded for %s using %s", cover_path.name, pdf_source.name)
+            except Exception as exc:
+                logger.warning(
+                    "PDF swap failed for %s with %s: %s; falling back to legacy compositor",
+                    cover_path.name,
+                    pdf_source.name,
+                    exc,
+                )
 
-        fill_rgb = _sample_cover_background(
-            cover=cover,
-            center_x=center_x,
-            center_y=center_y,
-            outer_radius=FALLBACK_RADIUS,
-        )
+        if not rendered_by_pdf_swap:
+            # ── RGBA Frame-Overlay Compositing ─────────────────────────
+            # Three layers: canvas -> art -> RGBA overlay (frame painted LAST).
+            center_x = FALLBACK_CENTER_X
+            center_y = FALLBACK_CENTER_Y
 
-        canvas = Image.new("RGBA", (cover_w, cover_h), (*fill_rgb, 255))
+            # Always use the deterministic fallback overlay for medallion compositing.
+            # Cached extracted overlays can carry stale alpha artifacts that damage
+            # the frame edge and reveal rectangular seams.
+            frame_overlay = _build_fallback_frame_overlay(
+                cover=cover,
+                center_x=center_x,
+                center_y=center_y,
+                punch_radius=TEMPLATE_PUNCH_RADIUS,
+            )
 
-        art_radius = ART_CLIP_RADIUS  # 600
-        art_diameter = art_radius * 2  # 1200
-        art = _simple_center_crop(illustration)
-        art = art.resize((art_diameter, art_diameter), Image.LANCZOS)
-        art = _color_match_illustration(cover=cover, illustration=art, region=region_obj)
+            fill_rgb = _sample_cover_background(
+                cover=cover,
+                center_x=center_x,
+                center_y=center_y,
+                outer_radius=FALLBACK_RADIUS,
+            )
 
-        art_bg = Image.new("RGBA", (art_diameter, art_diameter), (*fill_rgb, 255))
-        art_bg.alpha_composite(art)
-        art = art_bg
+            canvas = Image.new("RGBA", (cover_w, cover_h), (*fill_rgb, 255))
 
-        art_layer = Image.new("RGBA", (cover_w, cover_h), (0, 0, 0, 0))
-        art_layer.paste(art, (center_x - art_radius, center_y - art_radius))
+            art_radius = ART_CLIP_RADIUS  # 600
+            art_diameter = art_radius * 2  # 1200
+            art = _simple_center_crop(illustration)
+            art = art.resize((art_diameter, art_diameter), Image.LANCZOS)
+            art = _color_match_illustration(cover=cover, illustration=art, region=region_obj)
 
-        clip_radius = art_radius
-        clip_mask = _build_circle_feather_mask(
-            width=cover_w,
-            height=cover_h,
-            center_x=center_x,
-            center_y=center_y,
-            radius=clip_radius,
-            feather_px=INNER_FEATHER_PX,
-        )
-        art_layer.putalpha(clip_mask)
+            art_bg = Image.new("RGBA", (art_diameter, art_diameter), (*fill_rgb, 255))
+            art_bg.alpha_composite(art)
+            art = art_bg
 
-        result = Image.alpha_composite(canvas, art_layer)
-        result = Image.alpha_composite(result, frame_overlay)
-        composited_rgb = result.convert("RGB")
+            art_layer = Image.new("RGBA", (cover_w, cover_h), (0, 0, 0, 0))
+            art_layer.paste(art, (center_x - art_radius, center_y - art_radius))
 
-        _orig_arr = np.array(cover, dtype=np.float32)
-        _comp_arr = np.array(composited_rgb, dtype=np.float32)
-        _h, _w = _orig_arr.shape[:2]
-        _yy, _xx = np.ogrid[:_h, :_w]
-        _dist = np.sqrt((_xx - center_x) ** 2 + (_yy - center_y) ** 2)
-        _overlay_alpha = np.array(frame_overlay.getchannel("A"), dtype=np.uint8)
-        # Guard check only on fully-opaque frame pixels; transparent scrollwork gaps are intentional.
-        _ring = (_dist >= 660) & (_dist <= 800) & (_overlay_alpha >= 250)
-        _diff = np.abs(_orig_arr - _comp_arr).max(axis=2)
-        _ring_diff = _diff[_ring]
-        _changed_pct = 100.0 * float(np.sum(_ring_diff > 15)) / max(1, int(_ring_diff.size))
-        _mean_delta = float(_ring_diff.mean()) if _ring_diff.size else 0.0
+            clip_radius = art_radius
+            clip_mask = _build_circle_feather_mask(
+                width=cover_w,
+                height=cover_h,
+                center_x=center_x,
+                center_y=center_y,
+                radius=clip_radius,
+                feather_px=INNER_FEATHER_PX,
+            )
+            art_layer.putalpha(clip_mask)
 
-        if _changed_pct > 5.0 or _mean_delta > 10.0:
-            logger.error(
-                "FRAME DAMAGE DETECTED for %s: changed=%.1f%%, mean_delta=%.1f. Composite REJECTED.",
+            result = Image.alpha_composite(canvas, art_layer)
+            result = Image.alpha_composite(result, frame_overlay)
+            composited_rgb = result.convert("RGB")
+
+            _orig_arr = np.array(cover, dtype=np.float32)
+            _comp_arr = np.array(composited_rgb, dtype=np.float32)
+            _h, _w = _orig_arr.shape[:2]
+            _yy, _xx = np.ogrid[:_h, :_w]
+            _dist = np.sqrt((_xx - center_x) ** 2 + (_yy - center_y) ** 2)
+            _overlay_alpha = np.array(frame_overlay.getchannel("A"), dtype=np.uint8)
+            # Guard check only on fully-opaque frame pixels; transparent scrollwork gaps are intentional.
+            _ring = (_dist >= 660) & (_dist <= 800) & (_overlay_alpha >= 250)
+            _diff = np.abs(_orig_arr - _comp_arr).max(axis=2)
+            _ring_diff = _diff[_ring]
+            _changed_pct = 100.0 * float(np.sum(_ring_diff > 15)) / max(1, int(_ring_diff.size))
+            _mean_delta = float(_ring_diff.mean()) if _ring_diff.size else 0.0
+
+            if _changed_pct > 5.0 or _mean_delta > 10.0:
+                logger.error(
+                    "FRAME DAMAGE DETECTED for %s: changed=%.1f%%, mean_delta=%.1f. Composite REJECTED.",
+                    cover_path.name,
+                    _changed_pct,
+                    _mean_delta,
+                )
+                raise ValueError(
+                    f"Frame integrity check failed for {cover_path.name}: "
+                    f"ring_changed={_changed_pct:.1f}%, mean_delta={_mean_delta:.1f}"
+                )
+            logger.info(
+                "Frame integrity OK for %s: changed=%.1f%%, mean_delta=%.1f",
                 cover_path.name,
                 _changed_pct,
                 _mean_delta,
             )
-            raise ValueError(
-                f"Frame integrity check failed for {cover_path.name}: "
-                f"ring_changed={_changed_pct:.1f}%, mean_delta={_mean_delta:.1f}"
-            )
-        logger.info(
-            "Frame integrity OK for %s: changed=%.1f%%, mean_delta=%.1f",
-            cover_path.name,
-            _changed_pct,
-            _mean_delta,
-        )
 
-        validation_region = Region(
-            center_x=center_x,
-            center_y=center_y,
-            radius=max(20, TEMPLATE_PUNCH_RADIUS),
-            frame_bbox=region_obj.frame_bbox,
-            region_type="circle",
-        )
+            validation_region = Region(
+                center_x=center_x,
+                center_y=center_y,
+                radius=max(20, TEMPLATE_PUNCH_RADIUS),
+                frame_bbox=region_obj.frame_bbox,
+                region_type="circle",
+            )
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    composited_rgb.save(output_path, format="JPEG", quality=100, subsampling=0, dpi=(300, 300))
-    validation = validate_composite_output(
-        cover=cover,
-        composited=composited_rgb,
-        region=validation_region,
-        output_path=output_path,
+    if not rendered_by_pdf_swap:
+        composited_rgb.save(output_path, format="JPEG", quality=100, subsampling=0, dpi=(300, 300))
+    validation = (
+        _validate_pdf_swap_output(
+            output_path=output_path,
+            source_pdf_path=pdf_source,
+            ai_art_path=Path(illustration_path),
+        )
+        if rendered_by_pdf_swap and pdf_source is not None
+        else None
     )
+    if validation is None:
+        validation = validate_composite_output(
+            cover=cover,
+            composited=composited_rgb,
+            region=validation_region,
+            output_path=output_path,
+        )
     safe_json.atomic_write_json(
         _validation_path(output_path),
         {
@@ -923,6 +974,7 @@ def composite_all_variants(
 
     outputs: list[Path] = []
     validations: list[dict[str, Any]] = []
+    source_pdf = _find_source_pdf_for_book(input_dir, book_number, catalog_path=catalog_path)
     for row in image_rows:
         if row["model"] == "default":
             out_path = output_dir / str(book_number) / f"variant_{row['variant']}.jpg"
@@ -934,6 +986,7 @@ def composite_all_variants(
             illustration_path=row["path"],
             region=region,
             output_path=out_path,
+            source_pdf_path=source_pdf,
         )
         outputs.append(out_path)
         validation_payload = _load_validation_payload(out_path)
@@ -1015,6 +1068,83 @@ def _frame_integrity_metrics(
         for (x, y) in points
     ]
     return float(np.max(deltas)), float(np.mean(deltas))
+
+
+def _validate_pdf_swap_output(
+    *,
+    output_path: Path,
+    source_pdf_path: Path,
+    ai_art_path: Path,
+) -> CompositeValidation | None:
+    output_pdf_path = output_path.with_suffix(".pdf")
+    if not output_pdf_path.exists():
+        return None
+
+    try:
+        from scripts.verify_composite import verify_composite as run_verify
+    except ModuleNotFoundError:  # pragma: no cover
+        return None
+
+    captured = io.StringIO()
+    with redirect_stdout(captured), redirect_stderr(captured):
+        result = run_verify(
+            output_path,
+            source_pdf_path=source_pdf_path,
+            output_pdf_path=output_pdf_path,
+            ai_art_path=ai_art_path,
+            strict=True,
+        )
+
+    checks = result.get("checks", {})
+    issues = [name for name, row in checks.items() if not bool(row.get("pass", False))]
+
+    try:
+        with Image.open(output_path) as output_meta:
+            dpi = output_meta.info.get("dpi", (0, 0))
+    except Exception:  # pragma: no cover
+        dpi = (0, 0)
+
+    dpi_x = float(dpi[0]) if len(dpi) > 0 else 0.0
+    dpi_y = float(dpi[1]) if len(dpi) > 1 else 0.0
+    dpi_ok = dpi_x >= 295.0 and dpi_y >= 295.0
+    if not dpi_ok:
+        issues.append("dpi_metadata_invalid")
+
+    file_size_kb = float(output_path.stat().st_size) / 1024.0 if output_path.exists() else 0.0
+    file_size_ok = 60.0 <= file_size_kb <= 30_000.0
+    if not file_size_ok:
+        issues.append("file_size_out_of_bounds")
+
+    dimensions_ok = bool(checks.get("dimensions", {}).get("pass", False))
+    alignment_ok = bool(checks.get("centering", {}).get("pass", False))
+    border_bleed_ok = bool(checks.get("visual_frame", {}).get("pass", False))
+    edge_artifacts_ok = bool(checks.get("transition_quality", {}).get("pass", False))
+    frame_pixels_ok = bool(checks.get("frame_pixels", {}).get("pass", False))
+    if not frame_pixels_ok and "frame_pixels_changed" not in issues:
+        issues.append("frame_pixels_changed")
+
+    return CompositeValidation(
+        output_path=str(output_path),
+        valid=bool(result.get("overall_pass", False) and dpi_ok and file_size_ok),
+        issues=issues,
+        dimensions_ok=dimensions_ok,
+        dpi_ok=dpi_ok,
+        file_size_ok=file_size_ok,
+        alignment_ok=alignment_ok,
+        border_bleed_ok=border_bleed_ok,
+        edge_artifacts_ok=edge_artifacts_ok,
+        metrics={
+            "dpi_x": round(dpi_x, 3),
+            "dpi_y": round(dpi_y, 3),
+            "file_size_kb": round(file_size_kb, 3),
+            "alignment_distance_px": 0.0 if alignment_ok else 999.0,
+            "alignment_tolerance_px": float(checks.get("centering", {}).get("tolerance", 0.0)),
+            "border_bleed_ratio": 0.0 if border_bleed_ok else 1.0,
+            "edge_ring_strength": float(checks.get("visual_frame", {}).get("mean_abs_diff", 0.0)),
+            "frame_pixel_max_delta": 0.0 if frame_pixels_ok else 999.0,
+            "frame_pixel_mean_delta": float(checks.get("visual_frame", {}).get("mean_abs_diff", 0.0)),
+        },
+    )
 
 
 def validate_composite_output(
@@ -1724,6 +1854,45 @@ def _find_cover_jpg(input_dir: Path, book_number: int, *, catalog_path: Path) ->
     if not jpg_candidates:
         raise FileNotFoundError(f"No JPG found in {folder}")
     return jpg_candidates[0]
+
+
+def _find_source_pdf_for_book(input_dir: Path, book_number: int, *, catalog_path: Path) -> Path | None:
+    catalog = _load_catalog(catalog_path)
+    match = None
+    for entry in catalog:
+        if int(entry.get("number", 0)) == int(book_number):
+            match = entry
+            break
+    if not match:
+        return None
+
+    folder = input_dir / str(match["folder_name"])
+    if not folder.exists():
+        return None
+
+    pdf_candidates = sorted(path for path in folder.glob("*.pdf") if path.is_file())
+    return pdf_candidates[0] if pdf_candidates else None
+
+
+def _find_source_pdf_for_cover_path(cover_path: Path) -> Path | None:
+    cover_path = Path(cover_path)
+    sibling_pdfs = sorted(path for path in cover_path.parent.glob("*.pdf") if path.is_file())
+    if sibling_pdfs:
+        return sibling_pdfs[0]
+
+    match = re.match(r"^(\d+)\.", cover_path.parent.name)
+    if not match:
+        return None
+
+    try:
+        book_number = int(match.group(1))
+    except ValueError:
+        return None
+
+    input_dir = cover_path.parent.parent
+    if not input_dir.exists():
+        return None
+    return _find_source_pdf_for_book(input_dir, book_number, catalog_path=config.BOOK_CATALOG_PATH)
 
 
 def _region_for_book(regions_payload: dict[str, Any], book_number: int) -> dict[str, Any]:

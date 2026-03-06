@@ -18,10 +18,11 @@ ENV PATH="/opt/venv/bin:${PATH}" \
 
 WORKDIR /app
 
-# Runtime system dependencies for Pillow/OpenCV and health checks.
+# Runtime system dependencies for Pillow/OpenCV, PDF rendering, and health checks.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libgl1 \
     libglib2.0-0 \
+    poppler-utils \
     curl \
     tini && \
     rm -rf /var/lib/apt/lists/*

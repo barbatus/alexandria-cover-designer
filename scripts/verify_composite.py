@@ -386,17 +386,32 @@ def extract_pdf_smask_and_image(pdf_path: Path):
     xobjects = page.get("/Resources").get("/XObject")
     im0 = xobjects["/Im0"]
 
-    w = int(im0.get("/Width"))
-    h = int(im0.get("/Height"))
-    raw = zlib.decompress(bytes(im0.read_raw_bytes()))
-    cmyk = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, 4)
-
     smask_obj = im0.get("/SMask")
-    smask_raw = zlib.decompress(bytes(smask_obj.read_raw_bytes()))
-    smask = np.frombuffer(smask_raw, dtype=np.uint8).reshape(h, w)
+    if smask_obj is None:
+        raise ValueError(f"{pdf_path} /Im0 has no /SMask")
+
+    image_pil = pikepdf.PdfImage(im0).as_pil_image()
+    w, h = image_pil.size
+    bands = len(image_pil.getbands())
+
+    image_raw = bytes(im0.read_bytes())
+    expected_len = w * h * bands
+    if len(image_raw) == expected_len:
+        image_arr = np.frombuffer(image_raw, dtype=np.uint8).reshape(h, w, bands)
+    else:
+        image_arr = np.array(image_pil, dtype=np.uint8)
+        if image_arr.ndim == 2:
+            image_arr = image_arr[:, :, np.newaxis]
+
+    smask_pil = pikepdf.PdfImage(smask_obj).as_pil_image().convert("L")
+    smask_raw = bytes(smask_obj.read_bytes())
+    if len(smask_raw) == w * h:
+        smask = np.frombuffer(smask_raw, dtype=np.uint8).reshape(h, w)
+    else:
+        smask = np.array(smask_pil, dtype=np.uint8)
 
     pdf.close()
-    return cmyk, smask, w, h
+    return image_arr, smask, w, h
 
 
 def check_ornament_zone_pdf(
@@ -413,18 +428,7 @@ def check_ornament_zone_pdf(
     """
     if output_pdf_path and Path(output_pdf_path).exists():
         cmyk_src, smask, _, _ = extract_pdf_smask_and_image(source_pdf_path)
-
-        import pikepdf
-
-        pdf = pikepdf.Pdf.open(str(output_pdf_path))
-        page = pdf.pages[0]
-        xobjects = page.get("/Resources").get("/XObject")
-        im0 = xobjects["/Im0"]
-        w = int(im0.get("/Width"))
-        h = int(im0.get("/Height"))
-        raw = zlib.decompress(bytes(im0.read_raw_bytes()))
-        cmyk_out = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, 4)
-        pdf.close()
+        cmyk_out, _, _, _ = extract_pdf_smask_and_image(output_pdf_path)
 
         preserve_mask = smask <= SMASK_FRAME_MAX
         total = int(np.sum(preserve_mask))
@@ -551,19 +555,7 @@ def check_smask_integrity(source_pdf_path: Path, output_pdf_path: Path) -> dict:
     and must NEVER be modified.
     """
     _, smask_src, _, _ = extract_pdf_smask_and_image(source_pdf_path)
-
-    import pikepdf
-
-    pdf = pikepdf.Pdf.open(str(output_pdf_path))
-    page = pdf.pages[0]
-    xobjects = page.get("/Resources").get("/XObject")
-    im0 = xobjects["/Im0"]
-    smask_obj = im0.get("/SMask")
-    w = int(smask_obj.get("/Width"))
-    h = int(smask_obj.get("/Height"))
-    smask_out_raw = zlib.decompress(bytes(smask_obj.read_raw_bytes()))
-    smask_out = np.frombuffer(smask_out_raw, dtype=np.uint8).reshape(h, w)
-    pdf.close()
+    _, smask_out, _, _ = extract_pdf_smask_and_image(output_pdf_path)
 
     identical = np.array_equal(smask_src, smask_out)
     if not identical:
@@ -593,18 +585,7 @@ def check_frame_pixels_preserved(source_pdf_path: Path, output_pdf_path: Path) -
     This confirms the compositor kept original frame pixels.
     """
     cmyk_src, smask, _, _ = extract_pdf_smask_and_image(source_pdf_path)
-
-    import pikepdf
-
-    pdf = pikepdf.Pdf.open(str(output_pdf_path))
-    page = pdf.pages[0]
-    xobjects = page.get("/Resources").get("/XObject")
-    im0 = xobjects["/Im0"]
-    w = int(im0.get("/Width"))
-    h = int(im0.get("/Height"))
-    raw = zlib.decompress(bytes(im0.read_raw_bytes()))
-    cmyk_out = np.frombuffer(raw, dtype=np.uint8).reshape(h, w, 4)
-    pdf.close()
+    cmyk_out, _, _, _ = extract_pdf_smask_and_image(output_pdf_path)
 
     frame_mask = (smask >= 5) & (smask <= 250)
     total = int(np.sum(frame_mask))
@@ -627,6 +608,56 @@ def check_frame_pixels_preserved(source_pdf_path: Path, output_pdf_path: Path) -
             if passed
             else f"FAIL: {ratio:.4%} of frame ring pixels match. "
             f"{total - matching:,} frame pixels were corrupted."
+        ),
+    }
+
+
+def check_pdf_page_placement_integrity(source_pdf_path: Path, output_pdf_path: Path) -> dict:
+    """
+    PDF-mode centering/placement check.
+
+    For the Im0 swap compositor, page placement is invariant if the page content
+    stream is unchanged and the output keeps the same Im0 dimensions. That is a
+    stronger signal than trying to infer placement from rendered pixel deltas.
+    """
+    import pikepdf
+
+    def _read_page_contents(page) -> bytes:
+        contents = page.get("/Contents")
+        if contents is None:
+            return b""
+        if isinstance(contents, pikepdf.Array):
+            return b"".join(bytes(obj.read_bytes()) for obj in contents)
+        return bytes(contents.read_bytes())
+
+    src_pdf = pikepdf.Pdf.open(str(source_pdf_path))
+    out_pdf = pikepdf.Pdf.open(str(output_pdf_path))
+    try:
+        src_page = src_pdf.pages[0]
+        out_page = out_pdf.pages[0]
+        src_contents = _read_page_contents(src_page)
+        out_contents = _read_page_contents(out_page)
+
+        src_im0 = src_page.get("/Resources").get("/XObject")["/Im0"]
+        out_im0 = out_page.get("/Resources").get("/XObject")["/Im0"]
+        same_dimensions = (
+            int(src_im0.get("/Width", 0)) == int(out_im0.get("/Width", 0))
+            and int(src_im0.get("/Height", 0)) == int(out_im0.get("/Height", 0))
+        )
+        same_contents = src_contents == out_contents
+    finally:
+        src_pdf.close()
+        out_pdf.close()
+
+    passed = same_contents and same_dimensions
+    return {
+        "pass": passed,
+        "page_contents_identical": same_contents,
+        "im0_dimensions_identical": same_dimensions,
+        "message": (
+            "PASS: Page placement is unchanged; content stream and Im0 geometry match source"
+            if passed
+            else "FAIL: Page placement changed; content stream or Im0 geometry differs from source"
         ),
     }
 
@@ -953,28 +984,27 @@ def verify_composite(
         )
         checks["art_zone"] = check_art_zone_pdf(composite, source_pdf_path, ART_DIFFER_THRESHOLD)
 
-        # Render source PDF for centering check
-        import fitz
-
-        doc = fitz.open(str(source_pdf_path))
-        page = doc[0]
-        mat = fitz.Matrix(300 / 72, 300 / 72)
-        pix = page.get_pixmap(matrix=mat)
-        src_render = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
-        if pix.n == 4:
-            src_render = src_render[:, :, :3]
-        doc.close()
-        src_render = normalize_render_shape(src_render, composite.shape)
-        src_render = normalize_reference_jpeg(src_render)
-        h = min(composite.shape[0], src_render.shape[0])
-        w = min(composite.shape[1], src_render.shape[1])
-        checks["centering"] = check_centering(composite[:h, :w], src_render[:h, :w])
-
-        # SMask integrity (if output PDF provided)
         if output_pdf_path and Path(output_pdf_path).exists():
+            checks["centering"] = check_pdf_page_placement_integrity(source_pdf_path, output_pdf_path)
             checks["smask_integrity"] = check_smask_integrity(source_pdf_path, output_pdf_path)
             checks["frame_pixels"] = check_frame_pixels_preserved(source_pdf_path, output_pdf_path)
         else:
+            # Fallback heuristic when only a source PDF render is available.
+            import fitz
+
+            doc = fitz.open(str(source_pdf_path))
+            page = doc[0]
+            mat = fitz.Matrix(300 / 72, 300 / 72)
+            pix = page.get_pixmap(matrix=mat)
+            src_render = np.frombuffer(pix.samples, dtype=np.uint8).reshape(pix.h, pix.w, pix.n)
+            if pix.n == 4:
+                src_render = src_render[:, :, :3]
+            doc.close()
+            src_render = normalize_render_shape(src_render, composite.shape)
+            src_render = normalize_reference_jpeg(src_render)
+            h = min(composite.shape[0], src_render.shape[0])
+            w = min(composite.shape[1], src_render.shape[1])
+            checks["centering"] = check_centering(composite[:h, :w], src_render[:h, :w])
             checks["smask_integrity"] = {
                 "pass": False,
                 "message": "FAIL: Check 6 requires --output-pdf in PDF mode",

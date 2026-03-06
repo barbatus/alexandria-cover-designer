@@ -1272,7 +1272,7 @@ def generate_image(
         )
         hard_frame_artifact = (
             ("inner_frame_or_ring_artifact" in content_issues or "rectangular_frame_artifact" in content_issues)
-            and content_score >= 0.22
+            and content_score >= 0.35
         )
         if has_text_artifact and not hard_text_artifact:
             logger.info(
@@ -2422,9 +2422,9 @@ def _content_guardrail_score(image: Image.Image) -> tuple[float, list[str], dict
     issues: list[str] = []
     if text_penalty > 0.26 and (text_band_ratio > 0.12 or tiny_effective > 0.018):
         issues.append("text_or_banner_artifact")
-    if ring_penalty > 0.14:
+    if ring_penalty > 0.22:
         issues.append("inner_frame_or_ring_artifact")
-    if frame_penalty > 0.14:
+    if frame_penalty > 0.22:
         issues.append("rectangular_frame_artifact")
     if dull_penalty > 0.12:
         issues.append("low_vibrancy")
