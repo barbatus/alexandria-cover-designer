@@ -979,6 +979,44 @@ def test_save_raw_helpers_resolve_paths_and_preserve_display_naming(tmp_path: Pa
     assert qr._display_filename_token("Temple – Dawn") == "Temple – Dawn"
 
 
+def test_serialize_generation_results_persists_job_unique_raw_and_composite_artifacts(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    model = "openrouter/google/gemini-3-pro-image-preview"
+    model_dir = cfg.tmp_dir / "generated" / "1" / qr.image_generator._model_to_directory(model)  # type: ignore[attr-defined]
+    model_dir.mkdir(parents=True, exist_ok=True)
+    image_path = model_dir / "variant_1.png"
+    Image.new("RGB", (64, 64), (11, 22, 33)).save(image_path, format="PNG")
+
+    composite_dir = cfg.tmp_dir / "composited" / "1" / qr.image_generator._model_to_directory(model)  # type: ignore[attr-defined]
+    composite_dir.mkdir(parents=True, exist_ok=True)
+    composite_path = composite_dir / "variant_1.jpg"
+    Image.new("RGB", (64, 64), (44, 55, 66)).save(composite_path, format="JPEG")
+
+    result = qr.image_generator.GenerationResult(
+        book_number=1,
+        variant=1,
+        prompt="Book cover illustration only — no text. Prompt.",
+        model=model,
+        image_path=image_path,
+        success=True,
+        error=None,
+        generation_time=1.2,
+        cost=0.02,
+        provider="openrouter",
+        attempts=1,
+    )
+
+    first = qr._serialize_generation_results(runtime=cfg, book=1, results=[result], job_id="job-alpha")
+    second = qr._serialize_generation_results(runtime=cfg, book=1, results=[result], job_id="job-beta")
+
+    assert first[0]["raw_art_path"] != second[0]["raw_art_path"]
+    assert first[0]["saved_composited_path"] != second[0]["saved_composited_path"]
+    assert (qr.PROJECT_ROOT / str(first[0]["raw_art_path"])).exists()
+    assert (qr.PROJECT_ROOT / str(second[0]["raw_art_path"])).exists()
+    assert (qr.PROJECT_ROOT / str(first[0]["saved_composited_path"])).exists()
+    assert (qr.PROJECT_ROOT / str(second[0]["saved_composited_path"])).exists()
+
+
 def test_seed_builtin_prompts_creates_templates_and_is_idempotent(tmp_path: Path):
     cfg = _build_runtime_for_startup_checks(tmp_path)
     seeded = qr._seed_builtin_prompts(runtime=cfg, actor="test", overwrite=False)

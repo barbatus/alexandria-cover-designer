@@ -1741,6 +1741,7 @@ def _serialize_generation_results(
     runtime: config.Config,
     book: int,
     results: list[image_generator.GenerationResult],
+    job_id: str = "",
 ) -> list[dict[str, Any]]:
     serialized: list[dict[str, Any]] = []
     fit_overlay_rel = None
@@ -1748,14 +1749,19 @@ def _serialize_generation_results(
     if fit_overlay.exists():
         fit_overlay_rel = _to_project_relative(fit_overlay)
 
+    raw_job_token = re.sub(r"[^A-Za-z0-9_-]+", "", str(job_id or "").strip())[:24]
+    if not raw_job_token:
+        raw_job_token = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
+
     for row in results:
         image_rel = _to_project_relative(row.image_path) if row.image_path else None
         # Persist raw AI art to a durable location for download ZIPs.
         persisted_raw_path = None
+        model_token = str(row.model or "unknown").replace("/", "_").replace(" ", "_")
         if row.image_path and Path(row.image_path).exists():
             raw_art_dir = runtime.output_dir / "raw_art" / str(row.book_number)
             raw_art_dir.mkdir(parents=True, exist_ok=True)
-            dest = raw_art_dir / f"variant_{row.variant}_{row.model.replace('/', '_')}.png"
+            dest = raw_art_dir / f"{raw_job_token}_variant_{row.variant}_{model_token}.png"
             try:
                 shutil.copy2(str(row.image_path), str(dest))
                 persisted_raw_path = _to_project_relative(dest)
@@ -1763,10 +1769,20 @@ def _serialize_generation_results(
             except Exception as exc:
                 logger.warning("Failed to persist raw AI art: %s", exc)
         composed = None
+        persisted_composite_path = None
         if row.image_path:
             candidate = _resolve_composited_candidate(row.image_path, runtime=runtime)
             if candidate and candidate.exists():
                 composed = _to_project_relative(candidate)
+                composite_dir = runtime.output_dir / "saved_composites" / str(row.book_number)
+                composite_dir.mkdir(parents=True, exist_ok=True)
+                composite_dest = composite_dir / f"{raw_job_token}_variant_{row.variant}_{model_token}.jpg"
+                try:
+                    shutil.copy2(str(candidate), str(composite_dest))
+                    persisted_composite_path = _to_project_relative(composite_dest)
+                    logger.info("Persisted composite image to %s", composite_dest)
+                except Exception as exc:
+                    logger.warning("Failed to persist composite image: %s", exc)
         serialized.append(
             {
                 "book_number": row.book_number,
@@ -1776,6 +1792,7 @@ def _serialize_generation_results(
                 "image_path": image_rel,
                 "raw_art_path": persisted_raw_path,
                 "composited_path": composed,
+                "saved_composited_path": persisted_composite_path,
                 "composited_pdf_path": None,
                 "composited_ai_path": None,
                 "success": row.success,
@@ -2177,7 +2194,7 @@ def _execute_generation_payload(
                 cancel_checker=_cancel_checker if job_id else None,
                 preserve_prompt_text=preserve_prompt_text,
             )
-            serialized = _serialize_generation_results(runtime=runtime, book=book, results=results)
+            serialized = _serialize_generation_results(runtime=runtime, book=book, results=results, job_id=job_id)
             if library_prompt_id:
                 for row in serialized:
                     if isinstance(row, dict):
@@ -12555,7 +12572,7 @@ def _source_image_for_variant(
     # 3) Durable output directory fallback.
     raw_art_dir = runtime.output_dir / "raw_art" / str(int(book_number))
     if raw_art_dir.exists():
-        candidates = sorted(raw_art_dir.glob(f"variant_{int(variant)}_*.png"))
+        candidates = sorted(raw_art_dir.glob(f"*variant_{int(variant)}_*.png"))
         if candidates:
             return candidates[-1]
     # 4) Legacy/generated tmp directory fallback.
@@ -13018,6 +13035,9 @@ def _resolve_composite_image_path_for_job(*, runtime: config.Config, job: job_st
     row = _primary_job_result_row(job)
     if not isinstance(row, dict):
         return None
+    candidate = _project_path_if_exists(row.get("saved_composited_path"))
+    if candidate is not None and candidate.exists():
+        return candidate
     candidate = _project_path_if_exists(row.get("composited_path"))
     if candidate is not None and candidate.exists():
         return candidate
