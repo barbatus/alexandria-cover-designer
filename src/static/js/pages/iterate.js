@@ -541,6 +541,41 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+function saveRawButtonState(job) {
+  const status = String(job?.save_raw_status || '').trim().toLowerCase();
+  const driveUrl = String(job?.save_raw_drive_url || '').trim();
+  const warning = String(job?.save_raw_warning || '').trim();
+  const truncatedWarning = warning.length > 220 ? `${warning.slice(0, 220)}…` : warning;
+
+  if (status === 'saved') {
+    return {
+      label: '✓ Saved',
+      style: 'background:#2d6a4f;color:#fff;font-weight:600;',
+      title: driveUrl ? 'Click to open in Google Drive' : 'Saved raw package.',
+      driveUrl,
+      status,
+    };
+  }
+
+  if (status === 'partial') {
+    return {
+      label: '✓ Saved (Drive unavailable)',
+      style: 'background:#d4af37;color:#0a1628;font-weight:600;',
+      title: truncatedWarning || 'Saved locally; Google Drive unavailable.',
+      driveUrl: '',
+      status,
+    };
+  }
+
+  return {
+    label: '💾 Save Raw',
+    style: 'background:#d4af37;color:#0a1628;font-weight:600;',
+    title: '',
+    driveUrl: '',
+    status: '',
+  };
+}
+
 function normalizedModelId(model) {
   return String(model?.id || '').trim();
 }
@@ -1233,6 +1268,7 @@ window.Pages.iterate = {
       const showDownloads = hasPreview && status === 'completed';
       const showComparison = Number(job.book_id || 0) > 0 && status === 'completed';
       const errorText = status === 'failed' ? String(job.error || '').trim() : '';
+      const saveRawState = saveRawButtonState(job);
       return `
         <div class="result-card ${hasPreview ? '' : 'result-card-empty'}" ${hasPreview ? `data-view="${job.id}"` : ''}>
           ${hasPreview
@@ -1252,7 +1288,7 @@ window.Pages.iterate = {
               <button class="btn btn-secondary btn-sm" data-dl-comp="${job.id}" ${showDownloads ? '' : 'disabled'}>⬇ Download</button>
               <button class="btn btn-secondary btn-sm" data-dl-raw="${job.id}" ${showDownloads ? '' : 'disabled'}>⬇ Raw</button>
               <button class="btn btn-secondary btn-sm" data-view-qa-book="${Number(job.book_id || 0)}" ${showComparison ? '' : 'disabled'}>Compare</button>
-              <button class="btn btn-sm" data-save-raw="${job.id}" ${showDownloads ? '' : 'disabled'} style="background:#d4af37;color:#0a1628;font-weight:600;">💾 Save Raw</button>
+              <button class="btn btn-sm" data-save-raw="${job.id}" data-drive-url="${escapeHtml(saveRawState.driveUrl)}" data-save-status="${escapeHtml(saveRawState.status)}" ${showDownloads ? '' : 'disabled'} style="${saveRawState.style}" title="${escapeHtml(saveRawState.title)}">${escapeHtml(saveRawState.label)}</button>
               <button class="btn btn-secondary btn-sm" data-save-prompt="${job.id}">💾 Prompt</button>
             </div>
           </div>
@@ -1439,7 +1475,7 @@ window.Pages.iterate = {
   async saveRaw(jobId, button) {
     const job = DB.dbGet('jobs', jobId);
     if (!job || !button) return;
-    const existingDriveUrl = String(button.dataset.driveUrl || '').trim();
+    const existingDriveUrl = String(button.dataset.driveUrl || job.save_raw_drive_url || '').trim();
     if (existingDriveUrl) {
       window.open(existingDriveUrl, '_blank', 'noopener,noreferrer');
       return;
@@ -1468,19 +1504,20 @@ window.Pages.iterate = {
       }
 
       const partial = Boolean(data.warning) && !data.drive_url;
-      button.textContent = partial ? '✓ Saved (Drive unavailable)' : '✓ Saved';
-      button.style.background = partial ? '#d4af37' : '#2d6a4f';
-      button.style.color = partial ? '#0a1628' : '#fff';
-      button.disabled = false;
-      button.dataset.driveUrl = String(data.drive_url || '');
+      job.save_raw_status = partial ? 'partial' : 'saved';
+      job.save_raw_warning = String(data.warning || '').trim();
+      job.save_raw_drive_url = String(data.drive_url || '').trim();
+      job.save_raw_local_folder = String(data.local_folder || '').trim();
+      job.save_raw_saved_files = Array.isArray(data.saved_files) ? data.saved_files : [];
+      job.save_raw_saved_at = new Date().toISOString();
+      DB.dbPut('jobs', job);
+      this.loadExistingResults();
 
-      if (data.drive_url) {
-        button.title = 'Click to open in Google Drive';
+      if (partial) {
+        Toast.warning('Saved locally; Google Drive unavailable.');
       } else {
-        button.title = String(data.warning || 'Saved locally.');
+        Toast.success('Saved raw package.');
       }
-
-      Toast.success(partial ? String(data.warning || 'Saved locally; Drive unavailable.') : 'Saved raw package.');
     } catch (err) {
       button.textContent = '✗ Failed';
       button.style.background = '#d32f2f';
