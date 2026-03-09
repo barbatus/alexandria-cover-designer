@@ -2,7 +2,54 @@
 
 Last updated: `2026-03-09`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `43eab0d5-d946-47ff-ad10-a83a821823d5`
+Deployment ID: `bc475aee-b28f-475c-bc3e-c784243b4745`
+
+## 1.11 PROMPT-26 Legacy Prompt Cleanup (2026-03-09)
+- Git commits (master):
+  - `e950690` — Remove legacy prompts from library
+  - `3dfa937` — Retire legacy builtin prompt seeding
+- Railway deploys:
+  - `08030e02-5739-4c1a-9494-544739c54318` (`SUCCESS`, but live proof showed the runtime still auto-seeded 10 legacy builtins on startup, so `/api/prompts` stayed at `30`)
+  - `bc475aee-b28f-475c-bc3e-c784243b4745` (`SUCCESS`; corrected PROMPT-26 runtime used for proof)
+- Local verification before corrected deploy:
+  - `python3` JSON parse of `config/prompt_library.json` -> `PASS`
+  - `PromptLibrary(Path('config/prompt_library.json')).get_prompts()` -> `20 prompts` (`10 Alexandria`, `10 winners`)
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/test_quality_review_utils.py -q -k 'seed_builtin_prompts'` -> `PASS`
+- Live deployment health after corrected rollout:
+  - `status: ok`
+  - `healthy: true`
+  - `uptime_seconds: 1`
+  - `books_cataloged: 99`
+- Live prompt-library proof:
+  - `GET /api/prompts?catalog=classics` returns `count: 20`
+  - live prompt mix is exactly `10 Alexandria + 10 winners`
+  - no legacy prompt names remain in the live payload
+- Live Iterate dropdown proof:
+  - prompt selector shows `Smart rotation (genre-matched + scene variety)` plus only the 10 Alexandria prompts and 10 winner prompts
+  - direct UI selection was verified for:
+    - `Smart rotation (genre-matched + scene variety)`
+    - `BASE 4 — Romantic Realism`
+    - `7A Winner #1 — Variant 4`
+- Live smart-rotation generation proof:
+  - book `1` was selected on the deployed Iterate page
+  - variants auto-set to `10`
+  - smart-rotation helper text rendered: `Each variant uses the best prompt for this book's genre with a different scene — truly unique covers`
+  - run completed `10/10 completed · 0 active/queued · 0 failed · 0 cancelled · $0.200`
+  - completed cards used only Alexandria prompt labels (`BASE 4` plus wildcard prompts); retired legacy prompts did not appear
+- Live direct-prompt proof:
+  - prompt selector was changed to `BASE 4 — Romantic Realism`
+  - variants were changed to `1`
+  - one direct `BASE 4` job completed successfully on the deployed page
+  - result grid reached `11 completed · 11 total`
+- Console proof:
+  - no new PROMPT-26 JavaScript failure surfaced
+  - the pre-existing known issue remains: `404` for `/api/books/1/cover-preview?source=catalog&catalog=classics`
+- Visual proof artifacts:
+  - live smart-rotation selector state: `/tmp/alexandria-proof-live-prompt26-final/live-iterate-smart-rotation-prompt26.png`
+  - live smart-rotation completed results: `/tmp/alexandria-proof-live-prompt26-final/live-iterate-smart-results-prompt26.png`
+  - live direct `BASE 4` selector state: `/tmp/alexandria-proof-live-prompt26-final/live-iterate-base4-selection-prompt26.png`
+  - live direct `BASE 4` completed results: `/tmp/alexandria-proof-live-prompt26-final/live-iterate-base4-results-prompt26.png`
+  - live winner selector state: `/tmp/alexandria-proof-live-prompt26-final/live-iterate-winner-selection-prompt26.png`
 
 ## 1.10 PROMPT-25 Genre-Aware Rotation + Scene Variation (2026-03-09)
 - Git commits (master):
