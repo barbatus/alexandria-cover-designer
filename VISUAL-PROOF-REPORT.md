@@ -908,3 +908,32 @@ Direct visual proofs:
 - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/tmp/visual-qa/compare_050.jpg`
 - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/tmp/visual-qa/compare_075.jpg`
 - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/tmp/visual-qa/compare_100.jpg`
+
+### 3.0.13 PROMPT-28 Wildcard Replacement Proof (2026-03-09)
+- Commit: `b88624f`
+- Deployment: `a4cd3002-505e-4f67-bab0-9f3a816e70a3`
+- Live URL: `https://web-production-900a7.up.railway.app`
+
+Verification summary:
+- Live `GET /api/prompts?catalog=classics` returns the renamed wildcard prompts on the original ids:
+  - `alexandria-wildcard-edo-meets-alexandria` -> `WILDCARD 1 — Dramatic Graphic Novel`
+  - `alexandria-wildcard-pre-raphaelite-garden` -> `WILDCARD 2 — Vintage Travel Poster`
+- Live prompt payload also serves the new prompt templates and replacement tag sets for both wildcard ids.
+- Live Iterate UI shows the renamed options in the prompt template dropdown and the helper chip `Try wildcard: WILDCARD 1 — Dramatic Graphic Novel`.
+- Live smart rotation batch for book `1` completed through the renamed wildcard prompts without changing prompt ids.
+- Live results grid shows completed cards labeled:
+  - `WILDCARD 2 — Vintage Travel Poster`
+  - `WILDCARD 1 — Dramatic Graphic Novel`
+- Live `GET /api/jobs?limit=20&offset=0` during the deployed run confirmed book-1 jobs were still queued/generated under the unchanged ids:
+  - `alexandria-wildcard-pre-raphaelite-garden`
+  - `alexandria-wildcard-edo-meets-alexandria`
+
+Residual issue observed during live proof:
+- Browser console still reports `404` for `/api/books/1/cover-preview?source=catalog&catalog=classics`. This predates PROMPT-28 and did not block prompt rotation or generation.
+
+Prompt-28 proof artifacts:
+- `/tmp/alexandria-proof-live-prompt28/live-prompt-config-panel-prompt28.png`
+- `/tmp/alexandria-proof-live-prompt28/live-results-section-prompt28.png`
+- `/tmp/alexandria-proof-live-prompt28/live-wildcards-band-prompt28.png`
+- `/tmp/alexandria-proof-live-prompt28/live-iterate-config-prompt28.png`
+- `/tmp/alexandria-proof-live-prompt28/live-iterate-results-prompt28.png`
