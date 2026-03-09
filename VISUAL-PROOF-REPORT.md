@@ -1037,3 +1037,48 @@ Prompt-30 proof artifacts:
 - `/tmp/alexandria-proof-live-prompt30/health-live.json`
 - `/tmp/alexandria-proof-live-prompt30/dracula-books-view.json`
 - `/tmp/alexandria-proof-live-prompt30/dracula-books-view-summary.json`
+
+### 3.0.15 PROMPT-31 Stability, Endpoints, and Models Proof (2026-03-09)
+- Commit: `92faf7a`
+- Deployment: `97f2f7f6-125f-43e9-bd55-00494ade2f0b`
+- Live URL: `https://web-production-900a7.up.railway.app`
+- Build log: `https://railway.com/project/ff92d325-72a5-480f-8ff7-856744b6b859/service/3e03e783-724a-4999-8c55-c83db5a84b5e?id=97f2f7f6-125f-43e9-bd55-00494ade2f0b&`
+
+Verification summary:
+- Live `GET /api/health` returned `200` in `0.4312s` with `status=ok`, `healthy=true`, `books_cataloged=2397`, and startup checks complete.
+- Live `GET /api/healthz` returned `200` in `0.3970s` with `startup.status=ready` and `completed_at=2026-03-09T20:03:19.874416+00:00`.
+- Live `GET /api/version` returned `200` in `0.3784s`.
+- Local latency check against the release worktree passed:
+  - `GET /api/version` average `0.0139s`, max `0.0243s`
+  - `GET /api/health` `0.0096s`
+  - `GET /api/healthz` `0.0206s`
+- Live `GET /api/iterate-data?catalog=classics&limit=1&offset=0` returned `22` models and `22` positive model costs.
+- All PROMPT-31 target model ids are present live:
+  - `openrouter/sourceful/riverflow-v2-pro`
+  - `openrouter/sourceful/riverflow-v2-max-preview`
+  - `openrouter/black-forest-labs/flux.2-max`
+  - `openrouter/black-forest-labs/flux.2-flex`
+  - `openrouter/sourceful/riverflow-v2-standard-preview`
+  - `openrouter/sourceful/riverflow-v2-fast`
+  - `google/gemini-3-pro-image-preview`
+  - `google/gemini-3.1-flash-image-preview`
+- Live `GET /api/books/52/cover-preview?catalog=classics` now returns `200 image/jpeg`.
+- Live `GET /api/visual-qa/image/52?catalog=classics` now returns `404 application/json` with message `No generated images available for this book. Generate covers first.` instead of a server error.
+- Live Visual QA page at `/#visual-qa?book=52&open=1` renders the scoped no-images message instead of failing.
+
+Local validation:
+- `python3 -m py_compile scripts/quality_review.py src/config.py`
+- `node --check src/static/js/pages/iterate.js`
+- `node --check src/static/js/pages/visual-qa.js`
+- `'/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest' tests/test_config_module.py -q`
+- `'/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest' tests/test_quality_review_utils.py -q -k 'startup_healthz_payload or resolve_cover_preview_source_path or load_visual_qa_payload_does_not_generate_on_cache_miss or visual_qa_image_path_reads_index_without_triggering_generation'`
+- `'/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest' tests/test_quality_review_server_smoke.py -q -k 'healthz_binds_before_full_startup or cover_preview_and_visual_qa_missing_errors_are_json or iterate_data_returns_22_priced_models'`
+- Full suite was attempted with `pytest tests/ --maxfail=3`, but the first blocking failure was outside PROMPT-31 scope:
+  - `tests/test_api_docs_route_matrix.py::test_api_docs_get_routes_do_not_5xx`
+  - cause: `GET /api/download-approved` timed out during the API docs route-matrix sweep
+
+Prompt-31 proof artifacts:
+- `/tmp/alexandria-proof-live-prompt31/live-summary-prompt31.png`
+- `/tmp/alexandria-proof-live-prompt31/live-iterate-prompt31.png`
+- `/tmp/alexandria-proof-live-prompt31/live-visual-qa-prompt31.png`
+- `/tmp/alexandria-proof-live-prompt31/live-cover-preview-book52-prompt31.png`
