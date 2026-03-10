@@ -270,7 +270,7 @@ def _append_protagonist_to_scene(scene: str, protagonist: str, *, lead_in: str =
         return base_scene
     if hero.lower() in base_scene.lower():
         return base_scene
-    return f"{base_scene}. {lead_in} {hero}"
+    return f"{base_scene.rstrip(' .!?')}. {lead_in} {hero}"
 
 
 def _is_generic_enrichment(enrichment: dict[str, Any]) -> bool:

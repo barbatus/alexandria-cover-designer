@@ -435,7 +435,7 @@ function appendProtagonistToScene(scene, protagonist, leadIn = 'The main charact
   const hero = specificEnrichmentText(protagonist, 6);
   if (!baseScene || !hero) return baseScene;
   if (baseScene.toLowerCase().includes(hero.toLowerCase())) return baseScene;
-  return `${baseScene}. ${leadIn} ${hero}`;
+  return `${baseScene.replace(/[.!?]+$/g, '')}. ${leadIn} ${hero}`;
 }
 
 function defaultSceneForBook(book) {
