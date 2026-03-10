@@ -1,4 +1,4 @@
-"""Phase 1B — Prompt engineering for 99 books × 5 variants."""
+"""Phase 1B — Prompt engineering for all catalog books × 5 variants."""
 
 from __future__ import annotations
 

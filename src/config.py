@@ -382,6 +382,17 @@ def _resolve_project_path(token: str | Path) -> Path:
     return PROJECT_ROOT / path
 
 
+def _catalog_book_count(token: str | Path) -> int:
+    payload = _load_json(_resolve_project_path(token))
+    if isinstance(payload, list):
+        return len(payload)
+    if isinstance(payload, dict):
+        rows = payload.get("books")
+        if isinstance(rows, list):
+            return len(rows)
+    return 0
+
+
 def _sanitize_all_models(models: list[str]) -> list[str]:
     seen: set[str] = set()
     cleaned: list[str] = []
@@ -399,13 +410,14 @@ def _sanitize_all_models(models: list[str]) -> list[str]:
 
 
 def _default_catalog_payload() -> dict[str, Any]:
+    default_catalog_file = "config/book_catalog.json"
     return {
         "catalogs": [
             {
                 "id": "classics",
                 "name": "Alexandria Classics",
-                "book_count": 99,
-                "catalog_file": "config/book_catalog.json",
+                "book_count": _catalog_book_count(default_catalog_file),
+                "catalog_file": default_catalog_file,
                 "prompts_file": "config/book_prompts.json",
                 "input_covers_dir": "Input Covers",
                 "output_covers_dir": "Output Covers",
@@ -454,12 +466,15 @@ def list_catalogs() -> list[CatalogConfig]:
         prompts_file = _resolve_project_path(str(row.get("prompts_file", "config/book_prompts.json")))
         input_covers_dir = _resolve_project_path(str(row.get("input_covers_dir", "Input Covers")))
         output_covers_dir = _resolve_project_path(str(row.get("output_covers_dir", "Output Covers")))
+        book_count = _catalog_book_count(catalog_file)
+        if book_count <= 0:
+            book_count = int(row.get("book_count", 0) or 0)
 
         catalogs.append(
             CatalogConfig(
                 id=catalog_id,
                 name=str(row.get("name", catalog_id)),
-                book_count=int(row.get("book_count", 0) or 0),
+                book_count=book_count,
                 catalog_file=catalog_file,
                 prompts_file=prompts_file,
                 input_covers_dir=input_covers_dir,
