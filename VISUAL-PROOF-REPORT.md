@@ -2,7 +2,56 @@
 
 Last updated: `2026-03-10`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `39047ab6-c4ec-47da-865d-42e4131a2172`
+Deployment ID: `e444fcb2-bd03-42d3-8553-a9509fe16b69`
+
+## 1.15 PROMPT-33 Scene / Mood / Era Placeholder Resolution (2026-03-10)
+- Git commits (master):
+  - `f04e11c` — Implement PROMPT-33: fix `{SCENE}` / `{MOOD}` / `{ERA}` placeholder resolution
+  - `76014d9` — Fix PROMPT-33 iterate mood enrichment payload
+  - `036fc30` — Fix PROMPT-33 enriched book lookup for placeholder sanitization
+- Railway deploy:
+  - `e444fcb2-bd03-42d3-8553-a9509fe16b69` (`SUCCESS`; active PROMPT-33 proof runtime)
+  - note: direct full-repo uploads timed out because the raw upload context was ~`1.0 GB`; the successful deploy used a slim upload root that matched the Dockerfile copy-set and reduced the deployment bundle to ~`6.3 MB`
+- Local verification before deploy:
+  - `python3 -m py_compile scripts/quality_review.py` -> `PASS`
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/test_quality_review_utils.py -q -k 'resolve_alexandria or sanitize_prompt_placeholders or execute_generation_payload_sanitizes_unresolved or execute_generation_payload_preserves_precomposed_prompt_when_compose_prompt_disabled or execute_generation_payload_forwards_preserve_prompt_text_flag'` -> `PASS`
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/test_iterate_prompt_builder.py tests/test_batch_prompt_builder.py -q` -> `PASS`
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/test_quality_review_server_smoke.py -q -k 'iterate_books_view_filters_by_number or generate_dry_run_resolves_placeholder_prompt_from_enrichment'` -> `PASS`
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/python scripts/validate_prompt_resolution.py` -> `PASSED — All 2397 books have content-relevant enrichment`
+- Full test suite honesty check:
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/ --maxfail=3` -> `3 failed, 646 passed, 1 skipped`
+  - failures were pre-existing / outside PROMPT-33 scope:
+    - `tests/test_api_docs_route_matrix.py::test_api_docs_get_routes_do_not_5xx`
+    - `tests/test_prompt_library_module.py::test_alexandria_prompts_seeded_first_and_scene_placeholders_allowed`
+    - `tests/test_review_workflow.py::test_review_selection_and_session_roundtrip`
+- Functional changes verified live:
+  - live `GET /api/iterate-data?catalog=classics&view=books&search=A%20Room%20with%20a%20View&limit=1&offset=0` now returns:
+    - `number: 1`
+    - `enrichment.iconic_scenes[0]: Lucy Honeychurch stands on the balcony of the Pension Bertolini...`
+    - `enrichment.emotional_tone: A blend of romantic longing, self-discovery, and social critique`
+    - `enrichment.era: Early 20th century, specifically the 1900s`
+  - live Iterate UI for book `1` now auto-populates:
+    - `Scene description` with the book-specific iconic scene
+    - `Mood` with the actual `emotional_tone`
+    - `Era` with the book-specific era
+  - live `POST /api/generate?catalog=classics` dry-run for book `1` with prompt `Book cover illustration only — {SCENE}. The mood is {MOOD}. Era reference: {ERA}.` created job:
+    - `2f070191-b93d-458e-92ed-f2dcfc776ba0`
+    - queued payload prompt:
+      - `Book cover illustration only — Lucy Honeychurch stands on the balcony of the Pension Bertolini, gazing out over the Arno River as the sun sets, casting a golden glow over the city.. The mood is A blend of romantic longing, self-discovery, and social critique. Era reference: Early 20th century, specifically the 1900s.`
+    - unresolved literals are absent:
+      - no `{SCENE}`
+      - no `{MOOD}`
+      - no `{ERA}`
+  - live `GET /api/health` after rollout returned:
+    - `status: ok`
+    - `healthy: true`
+    - `uptime_seconds: 23`
+    - `books_cataloged: 2397`
+- Visual proof artifacts:
+  - live Iterate field-resolution proof: `/tmp/alexandria-proof-live-prompt33/live-iterate-book1-fields-close-prompt33.png`
+  - live iterate-data enrichment proof: `/tmp/alexandria-proof-live-prompt33/live-iterate-data-book1-prompt33.png`
+  - live job payload placeholder-resolution proof: `/tmp/alexandria-proof-live-prompt33/live-job-payload-book1-prompt33.png`
+  - live `/api/health` proof: `/tmp/alexandria-proof-live-prompt33/live-health-prompt33.png`
 
 ## 1.14 PROMPT-32 Shared Drive Save Raw Upload (2026-03-10)
 - Git commits (master):
