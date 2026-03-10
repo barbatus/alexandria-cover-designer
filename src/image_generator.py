@@ -1667,16 +1667,19 @@ def generate_all_models(
                     book_title=book_title,
                     book_author=book_author,
                 )
-            diversified_prompt = _sanitize_prompt_text(
-                _ensure_prompt_enrichment(
-                    diversified_prompt,
-                    runtime=runtime,
-                    book_number=book_number,
-                    title=book_title,
-                    author=book_author,
-                    variant_index=max(0, variant - 1),
+            if preserve_prompt_text:
+                diversified_prompt = _sanitize_prompt_text(diversified_prompt)
+            else:
+                diversified_prompt = _sanitize_prompt_text(
+                    _ensure_prompt_enrichment(
+                        diversified_prompt,
+                        runtime=runtime,
+                        book_number=book_number,
+                        title=book_title,
+                        author=book_author,
+                        variant_index=max(0, variant - 1),
+                    )
                 )
-            )
             seed = _variant_seed(rng=rng, book_number=book_number, model=model, variant=variant)
             if resume and image_path.exists():
                 logger.info(
