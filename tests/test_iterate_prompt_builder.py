@@ -428,25 +428,79 @@ def test_build_genre_aware_rotation_matches_literature_and_varies_scenes():
                 },
             },
             "variantCount": 10,
+            "dayOfYearOverride": 0,
         },
         prompts=TEST_PROMPTS,
     )
 
     assert [row["promptId"] for row in result] == [
         "alexandria-base-romantic-realism",
+        "alexandria-wildcard-dutch-golden-age",
+        "alexandria-base-romantic-realism",
+        "alexandria-wildcard-impressionist-plein-air",
+        "alexandria-base-romantic-realism",
         "alexandria-wildcard-pre-raphaelite-garden",
         "alexandria-base-romantic-realism",
-        "alexandria-wildcard-edo-meets-alexandria",
+        "alexandria-wildcard-art-nouveau-poster",
         "alexandria-base-romantic-realism",
-        "alexandria-wildcard-illuminated-manuscript",
-        "alexandria-base-romantic-realism",
-        "alexandria-wildcard-celestial-cartography",
-        "alexandria-base-romantic-realism",
-        "alexandria-wildcard-temple-of-knowledge",
+        "alexandria-wildcard-pre-raphaelite-dream",
     ]
     assert len({row["sceneOverride"] for row in result}) == 10
     assert all(row["promptId"] != "alexandria-base-classical-devotion" for row in result)
     assert all(row["promptId"] != "alexandria-base-gothic-atmosphere" for row in result)
+
+
+def test_suggested_wildcard_prompt_rotates_by_day_for_same_book():
+    day_zero = _run_iterate_hook(
+        "suggestedWildcardPromptForBook",
+        {
+            "book": {
+                "title": "Emma",
+                "author": "Jane Austen",
+                "genre": "Literary Fiction",
+            },
+            "dayOfYearOverride": 0,
+        },
+    )
+    day_one = _run_iterate_hook(
+        "suggestedWildcardPromptForBook",
+        {
+            "book": {
+                "title": "Emma",
+                "author": "Jane Austen",
+                "genre": "Literary Fiction",
+            },
+            "dayOfYearOverride": 1,
+        },
+    )
+    day_zero_repeat = _run_iterate_hook(
+        "suggestedWildcardPromptForBook",
+        {
+            "book": {
+                "title": "Emma",
+                "author": "Jane Austen",
+                "genre": "Literary Fiction",
+            },
+            "dayOfYearOverride": 0,
+        },
+    )
+
+    assert day_zero["id"] != day_one["id"]
+    assert day_zero["id"] == day_zero_repeat["id"]
+
+
+def test_validate_prompt_before_generation_flags_placeholders_and_generic_markers():
+    result = _run_iterate_hook(
+        "validatePromptBeforeGeneration",
+        {
+            "resolvedPrompt": "Book cover illustration only — {SCENE}. Central protagonist in a pivotal narrative tableau.",
+            "book": {"title": "Emma"},
+        },
+    )
+
+    assert result["valid"] is False
+    assert any("Unresolved placeholders" in error for error in result["errors"])
+    assert any("Generic content marker" in error for error in result["errors"])
 
 
 def test_build_genre_aware_rotation_defaults_to_romantic_realism_when_genre_unknown():

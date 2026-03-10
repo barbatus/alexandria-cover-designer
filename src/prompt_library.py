@@ -40,299 +40,460 @@ ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT = (
     "no dividers."
 )
 
-ALEXANDRIA_SCENE_FIRST_PROMPT_TEMPLATES: dict[str, str] = {
-    "alexandria-base-classical-devotion": (
+def _scene_first_prompt(style_label: str, style_description: str) -> str:
+    return (
         "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
         "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
         "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
-        "clearly recognizable and faithful to the source material. Rendered in a classical golden-age book "
-        "illustration style — warm oil-painting tones, rich earth colours, period-accurate costumes, careful "
-        "attention to historical architecture and landscape. The mood is {MOOD}. Era reference: {ERA}. Circular "
-        "vignette composition with soft edges. Square format, high resolution, print-ready."
-    ),
-    "alexandria-base-philosophical-gravitas": (
-        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
-        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
-        "clearly recognizable and faithful to the source material. Rendered in a contemplative chiaroscuro "
-        "style — deep shadows, selective warm highlights, muted palette of burnt umber, ochre, and grey, with "
-        "a single focal light source creating dramatic atmosphere. The mood is {MOOD}. Era reference: {ERA}. "
-        "Circular vignette composition with soft edges. Square format, high resolution, print-ready."
-    ),
-    "alexandria-base-gothic-atmosphere": (
-        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
-        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
-        "clearly recognizable and faithful to the source material. Rendered in a dark atmospheric Gothic "
-        "illustration style — moonlit shadows, mist, deep indigo and crimson tones, expressionist contrast, "
-        "and dramatic silhouettes against turbulent skies. The mood is {MOOD}. Era reference: {ERA}. Circular "
-        "vignette composition with soft edges. Square format, high resolution, print-ready."
-    ),
-    "alexandria-base-romantic-realism": (
-        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
-        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
-        "clearly recognizable and faithful to the source material. Rendered in 19th-century Romantic realism "
-        "style — warm earth tones, dramatic skies, detailed period clothing, painterly brushwork, and emotionally "
-        "resonant composition. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition with "
-        "soft edges. Square format, high resolution, print-ready."
-    ),
-    "alexandria-base-esoteric-mysticism": (
-        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
-        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
-        "clearly recognizable and faithful to the source material. Rendered in an esoteric mystical illustration "
-        "style — celestial motifs, sacred geometry accents, deep midnight blue and gold palette, luminous ethereal "
-        "lighting, and symbolic depth. The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition "
-        "with soft edges. Square format, high resolution, print-ready."
-    ),
-    "alexandria-wildcard-edo-meets-alexandria": (
-        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
-        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
-        "clearly recognizable and faithful to the source material. Rendered in dramatic graphic novel engraving "
-        "style — bold parallel crosshatching, heavy black outlines, expressive faces in close-up, deep black "
-        "with warm amber and burnt orange highlights, swirling dramatic sky. The mood is {MOOD}. Era reference: "
-        "{ERA}. Circular vignette composition. Square format, high resolution, print-ready."
-    ),
-    "alexandria-wildcard-pre-raphaelite-garden": (
-        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
-        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
-        "clearly recognizable and faithful to the source material. Rendered in bold 1930s vintage travel "
-        "poster style — flat unblended colour blocks with clean outlines, layered depth planes, limited palette "
-        "of burgundy, navy, cream, and forest green, geometric confidence. The mood is {MOOD}. Era reference: "
-        "{ERA}. Circular vignette composition. Square format, high resolution, print-ready."
-    ),
-    "alexandria-wildcard-illuminated-manuscript": (
-        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
-        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
-        "clearly recognizable and faithful to the source material. Rendered in medieval illuminated manuscript "
-        "style — gold leaf accents, ultramarine blue and vermilion, intricate marginalia patterns, flat "
-        "perspective with symbolic scale, and rich decorative detail. The mood is {MOOD}. Era reference: {ERA}. "
-        "Circular vignette composition. Square format, high resolution, print-ready."
-    ),
-    "alexandria-wildcard-celestial-cartography": (
-        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
-        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
-        "clearly recognizable and faithful to the source material. Rendered in scientific cartographic "
-        "illustration style — compass roses, parchment tones, precise linework, sepia and aged-gold palette, "
-        "navigational chart aesthetics, and hand-drawn map detail. The mood is {MOOD}. Era reference: {ERA}. "
-        "Circular vignette composition. Square format, high resolution, print-ready."
-    ),
-    "alexandria-wildcard-temple-of-knowledge": (
-        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-        "No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the "
-        "following specific scene: {SCENE}. Every figure, object, and setting element in this scene must be "
-        "clearly recognizable and faithful to the source material. Rendered in monumental architectural "
-        "illustration style — classical columns, dramatic perspective, warm lamplight on stone, scrolls and "
-        "books as decorative elements, sepia and amber palette with selective gold highlights. The mood is "
-        "{MOOD}. Era reference: {ERA}. Circular vignette composition. Square format, high resolution, print-ready."
-    ),
-}
+        "clearly recognizable and faithful to the source material. "
+        f"Rendered in {style_label} style — {style_description}. "
+        "The mood is {MOOD}. Era reference: {ERA}. Circular vignette composition with soft edges. Square format, "
+        "high resolution, print-ready."
+    )
 
-ALEXANDRIA_PROMPT_SPECS: tuple[dict[str, object], ...] = (
+
+ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
     {
         "id": "alexandria-base-classical-devotion",
         "name": "BASE 1 — Classical Devotion",
-        "prompt_template": (
-            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements, no decorative edges. "
-            "Richly detailed circular book illustration in the golden-age illustration style with saturated colours "
-            "and defined linework: {SCENE}. Sacred atmosphere with luminous divine light rendered as bold golden "
-            "beams breaking through deep blue celestial clouds. Figures in detailed period-accurate religious "
-            "vestments with visible fabric embroidery and textile patterns. Every surface richly detailed — "
-            "individual stone blocks in temple walls, carved relief on sacred objects, folds of robes with visible "
-            "drape weight. Background filled with meaningful religious symbolism specific to the text — relics, "
-            "celestial spheres, architectural fragments of ancient temples. Deep saturated palette of burnished "
-            "gold, sapphire blue, warm candlelit amber, and crimson against deep navy tones. Circular vignette "
-            "composition. The overall mood is {MOOD}. Era reference: {ERA}. Detailed, hand-painted quality with "
-            "the richness and precision of a premium illustrated Bible. Square format, high resolution, print-ready."
+        "style_label": "classical golden-age book illustration",
+        "style_description": (
+            "warm oil-painting tones, rich earth colours, period-accurate costumes, careful attention to "
+            "historical architecture and landscape"
         ),
-        "notes": "Alexandria three-part formula prompt. Best for: Religious, Apocryphal, Biblical.",
+        "notes": "Alexandria base prompt. Best for: Religious, Apocryphal, Biblical.",
         "tags": ["alexandria", "base", "classical-devotion", "religious", "apocryphal", "biblical"],
+        "category": "builtin",
     },
     {
         "id": "alexandria-base-philosophical-gravitas",
         "name": "BASE 2 — Philosophical Gravitas",
-        "prompt_template": (
-            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book "
-            "illustration in the golden-age illustration style with saturated colours and defined linework: "
-            "{SCENE}. Dense period-specific environmental detail rendered with illustrative precision — ancient "
-            "weathered stone architecture with visible cracks and moss, scattered manuscripts and bamboo scrolls, "
-            "gnarled trees with individually drawn leaves, distant landscapes fading into atmospheric haze. Figures "
-            "in historically accurate robes or period dress positioned in contemplative stillness, their expressions "
-            "conveying deep thought. Warm earth tones — rich ochre, sienna, umber, deep olive green — with "
-            "strategic golden light illuminating the central figure. The environment tells the story as much as the "
-            "figures — every object in the scene is meaningful to the text. Circular vignette composition. The mood "
-            "is {MOOD}. Era reference: {ERA}. Detailed, hand-painted book illustration quality. Square format, high "
-            "resolution, print-ready."
+        "style_label": "contemplative chiaroscuro illustration",
+        "style_description": (
+            "deep shadows, selective warm highlights, muted burnt umber and ochre palette, single focal light "
+            "source, grave reflective atmosphere"
         ),
-        "notes": "Alexandria three-part formula prompt. Best for: Philosophy, Self-Help, Strategy.",
+        "notes": "Alexandria base prompt. Best for: Philosophy, Self-Help, Strategy.",
         "tags": ["alexandria", "base", "philosophical-gravitas", "philosophy", "self-help", "strategy"],
+        "category": "builtin",
     },
     {
         "id": "alexandria-base-gothic-atmosphere",
         "name": "BASE 3 — Gothic Atmosphere",
-        "prompt_template": (
-            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book "
-            "illustration in a dark, atmospheric illustration style with saturated colours and dramatic contrast: "
-            "{SCENE}. Densely atmospheric — every element contributes to mounting dread. Moonlight casting long "
-            "shadows through crumbling Gothic architecture with individually rendered stones and cracks. Mist "
-            "curling in detailed tendrils around ancient gravestones. Spectral light bleeding through illustrated "
-            "stained glass. Figures caught in moments of terror or dark revelation, faces lit by a single dramatic "
-            "light source. Palette of deep blacks, midnight blues, sickly verdigris greens, with vivid accents of "
-            "blood-red, ghostly white, or sickly yellow. Dead vines, thorns, and poisonous flowers rendered in "
-            "obsessive illustrative detail. Circular vignette composition. The mood is {MOOD}. Era reference: "
-            "{ERA}. Dark, richly detailed book illustration with the atmospheric intensity of a Victorian penny "
-            "dreadful frontispiece. Square format, high resolution, print-ready."
+        "style_label": "dark atmospheric Gothic illustration",
+        "style_description": (
+            "moonlit shadows, drifting mist, deep indigo and crimson tones, expressionist contrast, dramatic "
+            "silhouettes against turbulent skies"
         ),
-        "notes": "Alexandria three-part formula prompt. Best for: Horror, Gothic, Supernatural.",
+        "notes": "Alexandria base prompt. Best for: Horror, Gothic, Supernatural.",
         "tags": ["alexandria", "base", "gothic-atmosphere", "horror", "gothic", "supernatural"],
+        "category": "builtin",
     },
     {
         "id": "alexandria-base-romantic-realism",
         "name": "BASE 4 — Romantic Realism",
-        "prompt_template": (
-            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book "
-            "illustration in the golden-age illustration style with saturated colours, warm romantic lighting, and "
-            "defined linework: {SCENE}. Every element densely rendered with illustrative precision — individual "
-            "flower petals and stamens, visible fabric embroidery patterns, architectural details, leaves and "
-            "blossoms on trees, ripples and reflections in water. Figures in period-accurate clothing with visible "
-            "textile textures, positioned in the SPECIFIC recognisable location from the book. Sweeping landscape "
-            "or intimate interior filled with environmental storytelling — objects, flora, and setting that could "
-            "only belong to THIS story. Rich, warm, saturated colour palette with dramatic sky — golden sunsets in "
-            "amber and rose, twilight in deep blue and violet, or storm-charged atmospheres in dark teal. The scene "
-            "captures the central emotional moment of the book. Circular vignette composition. The mood is {MOOD}. "
-            "Era reference: {ERA}. Lush, detailed book illustration with the romantic intensity of a premium "
-            "illustrated classics edition. Square format, high resolution, print-ready."
+        "style_label": "19th-century Romantic realism",
+        "style_description": (
+            "warm earth tones, dramatic skies, detailed period clothing, painterly brushwork, emotionally "
+            "resonant composition"
         ),
-        "notes": "Alexandria three-part formula prompt. Best for: Classical Literature, Novels, Drama.",
+        "notes": "Alexandria base prompt. Best for: Classical Literature, Novels, Drama.",
         "tags": ["alexandria", "base", "romantic-realism", "literature", "novels", "drama"],
+        "category": "builtin",
     },
     {
         "id": "alexandria-base-esoteric-mysticism",
         "name": "BASE 5 — Esoteric Mysticism",
-        "prompt_template": (
-            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book "
-            "illustration in a mystical, visionary style with saturated jewel-tone colours and bold linework: "
-            "{SCENE}. Dense with arcane visual detail — alchemical apparatus with individual glass vessels, "
-            "celestial phenomena with visible star patterns and swirling cosmic clouds, mechanical gears and "
-            "astronomical instruments rendered in precise metallic detail. Central figure emanating or receiving "
-            "divine cosmic light — bold golden rays, concentric celestial spheres, deep blue swirling energy. Rich "
-            "saturated jewel-tone palette — deep sapphire blue, molten gold, emerald, amethyst — against profound "
-            "darkness. Every surface has illustrated texture: oxidised bronze, cracked leather, hammered gold, "
-            "weathered parchment. Circular vignette composition. The mood is {MOOD}. Era reference: {ERA}. Richly "
-            "detailed mystical book illustration, as though revealing forbidden knowledge the viewer was never meant "
-            "to see. Square format, high resolution, print-ready."
+        "style_label": "esoteric mystical illustration",
+        "style_description": (
+            "celestial motifs, sacred geometry accents, deep midnight blue and gold palette, luminous ethereal "
+            "lighting, symbolic depth"
         ),
-        "notes": "Alexandria three-part formula prompt. Best for: Occult, Mystical, Forbidden Texts.",
+        "notes": "Alexandria base prompt. Best for: Occult, Mystical, Forbidden Texts.",
         "tags": ["alexandria", "base", "esoteric-mysticism", "occult", "mystical", "esoteric"],
+        "category": "builtin",
     },
     {
         "id": "alexandria-wildcard-edo-meets-alexandria",
         "name": "WILDCARD 1 — Dramatic Graphic Novel",
-        "prompt_template": (
-            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book "
-            "illustration in a dramatic graphic novel engraving style: {SCENE}. The composition uses bold "
-            "parallel crosshatching and line engraving across all figures and surfaces — visible ink strokes "
-            "creating form, depth, and shadow through dense directional linework. Characters rendered in dramatic "
-            "close-up with expressive faces, strong silhouettes, and heavy black outlines. Background layers "
-            "narrative context — architectural landmarks, crowds, dramatic events — rendered as bold silhouettes "
-            "against a turbulent sky. Colour palette strictly limited to deep black, warm amber, burnt orange, "
-            "and selective gold highlights with intense contrast between light and shadow. The sky dominates with "
-            "swirling dramatic clouds in orange and amber. Circular vignette composition. The mood is {MOOD}. Era "
-            "reference: {ERA}. The bold graphic intensity of a revolutionary poster crossed with the narrative "
-            "density of a European graphic novel master engraving. Square format, high resolution, print-ready."
+        "style_label": "dramatic graphic novel engraving",
+        "style_description": (
+            "bold parallel crosshatching, heavy black outlines, expressive faces in close-up, deep black with "
+            "warm amber and burnt orange highlights, swirling dramatic sky"
         ),
         "notes": "Alexandria wildcard prompt. Dramatic amber-black engraving with graphic novel poster energy.",
-        "tags": ["graphic-novel", "crosshatch", "dramatic", "poster-art", "amber", "bold-lines"],
+        "tags": ["alexandria", "wildcard", "dramatic-graphic-novel", "graphic-novel", "crosshatch", "dramatic"],
+        "category": "wildcard",
     },
     {
         "id": "alexandria-wildcard-pre-raphaelite-garden",
         "name": "WILDCARD 2 — Vintage Travel Poster",
-        "prompt_template": (
-            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book "
-            "illustration in the bold flat-colour style of a 1930s vintage travel poster: {SCENE}. The "
-            "composition uses layered depth planes — detailed foreground elements (trees, figures, objects), a "
-            "prominent mid-ground focal structure (building, monument, landscape feature), and a dramatic backdrop "
-            "(mountains, skyline, horizon). All shapes rendered with clean bold outlines and filled with flat "
-            "unblended colour blocks — no gradients, no soft shading, pure colour areas with sharp edges. "
-            "Simplified but recognisable forms with geometric confidence. Colour palette strictly limited to 5-7 "
-            "bold colours: deep burgundy, navy blue, warm cream, burnt orange, forest green, and selective gold "
-            "accents. Strong geometric composition with clear visual hierarchy. Circular vignette composition. The "
-            "mood is {MOOD}. Era reference: {ERA}. The bold graphic confidence of a WPA-era National Park poster "
-            "or Art Deco railway advertisement with rich narrative detail. Square format, high resolution, "
-            "print-ready."
+        "style_label": "bold 1930s vintage travel poster",
+        "style_description": (
+            "flat unblended colour blocks with clean outlines, layered depth planes, burgundy navy cream and "
+            "forest green palette, geometric confidence"
         ),
-        "notes": "Alexandria wildcard prompt. Flat-colour WPA travel-poster composition with bold geometric depth.",
-        "tags": ["vintage-poster", "travel-poster", "flat-colour", "WPA", "bold", "geometric"],
+        "notes": "Alexandria wildcard prompt. Flat-colour travel-poster composition with bold geometric depth.",
+        "tags": ["alexandria", "wildcard", "vintage-travel-poster", "travel-poster", "graphic", "flat-color"],
+        "category": "wildcard",
     },
     {
         "id": "alexandria-wildcard-illuminated-manuscript",
         "name": "WILDCARD 3 — Illuminated Manuscript",
-        "prompt_template": (
-            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book "
-            "illustration in the style of a hand-painted medieval miniature with gold leaf highlights: {SCENE}. "
-            "Vivid opaque colours on burnished gold ground with the obsessive decorative density of the Book of "
-            "Kells or Très Riches Heures du Duc de Berry. Figures in three-quarter view with stylised gestures, "
-            "wearing intricately patterned robes with individually drawn embroidery. Every surface filled with "
-            "meaningful pattern — tessellated floors, brocade fabrics, tooled leather, carved stone. Rich "
-            "saturated lapis lazuli blues, vermillion reds, malachite greens, and hammered gold dominate. Circular "
-            "vignette composition. The mood is {MOOD}. Era reference: {ERA}. Ancient, sacred, illustrated as "
-            "though by a master illuminator in a 9th-century monastery scriptorium. Square format, high "
-            "resolution, print-ready."
+        "style_label": "medieval illuminated manuscript",
+        "style_description": (
+            "gold leaf accents, ultramarine blue and vermilion, intricate marginalia patterns, flat perspective "
+            "with symbolic scale, rich decorative detail"
         ),
         "notes": "Alexandria wildcard prompt. Medieval manuscript energy for ancient or sacred material.",
         "tags": ["alexandria", "wildcard", "illuminated-manuscript", "medieval", "celtic"],
+        "category": "wildcard",
     },
     {
         "id": "alexandria-wildcard-celestial-cartography",
         "name": "WILDCARD 4 — Celestial Cartography",
-        "prompt_template": (
-            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book "
-            "illustration in the style of 17th-century astronomical engravings crossed with richly coloured book "
-            "illustration: {SCENE}. Dense celestial detail — individually rendered stars, planetary bodies with "
-            "visible surface features, eclipses with corona flare, aurora-like curtains of light woven through the "
-            "composition. Fine copper-engraving linework combined with rich saturated colour. Deep indigo sky "
-            "gradations with golden celestial bodies rendered with metallic luminosity. Figures positioned among or "
-            "contemplating celestial phenomena. Circular vignette composition. The mood is {MOOD}. Era reference: "
-            "{ERA}. The scientific precision of a Harmonia Macrocosmica star chart rendered with the rich colour of "
-            "a premium illustrated edition. Square format, high resolution, print-ready."
+        "style_label": "scientific cartographic illustration",
+        "style_description": (
+            "compass roses, parchment tones, precise linework, sepia and aged-gold palette, navigational chart "
+            "aesthetics, hand-drawn map detail"
         ),
         "notes": "Alexandria wildcard prompt. Cosmic engraving language for knowledge-rich or metaphysical titles.",
         "tags": ["alexandria", "wildcard", "celestial-cartography", "celestial", "astronomy"],
+        "category": "wildcard",
     },
     {
         "id": "alexandria-wildcard-temple-of-knowledge",
         "name": "WILDCARD 5 — Temple of Knowledge",
-        "prompt_template": (
-            "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements, no decorative edges. Richly detailed circular book "
-            "illustration combining Egyptian artistic traditions with richly coloured Orientalist illustration "
-            "style: {SCENE}. Bold outlines and ceremonial profile views characteristic of pharaonic art, with rich "
-            "saturated colour, atmospheric lighting, and illustrative depth. Dense architectural detail — carved "
-            "relief patterns (non-readable), papyrus columns with visible paint traces, lotus capitals, sandstone "
-            "textures. Warm saturated palette of desert gold, lapis lazuli blue, terracotta, and malachite green, "
-            "with dramatic shaft-of-light illumination from temple openings. Circular vignette composition. The mood "
-            "is {MOOD}. Era reference: {ERA}. Richly detailed book illustration depicting ancient wisdom, as though "
-            "illustrating the Great Library of Alexandria at the height of its glory. Square format, high "
-            "resolution, print-ready."
+        "style_label": "monumental architectural illustration",
+        "style_description": (
+            "classical columns, dramatic perspective, warm lamplight on stone, scrolls and books as decorative "
+            "elements, sepia and amber palette with selective gold highlights"
         ),
         "notes": "Alexandria wildcard prompt. Direct homage to Alexandria's Egyptian origin and temple symbolism.",
         "tags": ["alexandria", "wildcard", "temple-of-knowledge", "egyptian", "mystical"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-venetian-renaissance",
+        "name": "Venetian Renaissance",
+        "style_label": "Venetian Renaissance oil painting",
+        "style_description": (
+            "Titian-warm glazes, luminous skin tones, rich velvet and brocade fabrics, atmospheric sfumato "
+            "backgrounds, deep jewel-tone crimson sapphire and gold palette"
+        ),
+        "notes": "Alexandria wildcard prompt. Venetian Renaissance richness with glowing jewel-tone depth.",
+        "tags": ["alexandria", "wildcard", "venetian-renaissance", "classical", "fine-art"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-dutch-golden-age",
+        "name": "Dutch Golden Age",
+        "style_label": "Dutch Golden Age painting",
+        "style_description": (
+            "Rembrandt-like chiaroscuro, intimate domestic lighting, meticulous fabric texture, warm amber and "
+            "deep brown palette, candlelit atmosphere with selective highlights"
+        ),
+        "notes": "Alexandria wildcard prompt. Dutch interior drama with intimate candlelit precision.",
+        "tags": ["alexandria", "wildcard", "dutch-golden-age", "classical", "fine-art"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-impressionist-plein-air",
+        "name": "Impressionist Plein Air",
+        "style_label": "French Impressionist plein air",
+        "style_description": (
+            "visible brushstrokes, dappled natural sunlight, soft focus atmospheric depth, luminous pastel and "
+            "sky-blue palette, Monet-like light on water and foliage"
+        ),
+        "notes": "Alexandria wildcard prompt. Sunlit Impressionist atmosphere with airy painterly motion.",
+        "tags": ["alexandria", "wildcard", "impressionist-plein-air", "classical", "fine-art"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-academic-neoclassical",
+        "name": "Academic Neoclassical",
+        "style_label": "Academic Neoclassical painting",
+        "style_description": (
+            "idealized proportions, marble-smooth surfaces, heroic poses, cool grey-blue and warm sandstone "
+            "palette, classical architectural framing, David-like precision and grandeur"
+        ),
+        "notes": "Alexandria wildcard prompt. Neoclassical grandeur with disciplined heroic staging.",
+        "tags": ["alexandria", "wildcard", "academic-neoclassical", "classical", "fine-art"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-baroque-dramatic",
+        "name": "Baroque Dramatic",
+        "style_label": "Baroque dramatic painting",
+        "style_description": (
+            "Caravaggio-intense spotlighting, deep blacks with explosive warm highlights, theatrical gesture and "
+            "expression, swirling drapery, rich crimson and gold against darkness"
+        ),
+        "notes": "Alexandria wildcard prompt. Baroque spotlighting with theatrical emotional force.",
+        "tags": ["alexandria", "wildcard", "baroque-dramatic", "classical", "fine-art"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-art-nouveau-poster",
+        "name": "Art Nouveau Poster",
+        "style_label": "Art Nouveau illustration",
+        "style_description": (
+            "sinuous organic linework, flowing hair and fabric, jewel-tone flat colours with gold outlines, "
+            "Mucha-inspired decorative elegance, nature-integrated composition"
+        ),
+        "notes": "Alexandria wildcard prompt. Art Nouveau elegance with flowing decorative rhythm.",
+        "tags": ["alexandria", "wildcard", "art-nouveau-poster", "illustration", "graphic"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-vintage-pulp-cover",
+        "name": "Vintage Pulp Cover",
+        "style_label": "1940s vintage pulp illustration",
+        "style_description": (
+            "saturated primary colours, high-contrast dramatic lighting, bold expressive faces, painterly gouache "
+            "texture, action-forward composition with dynamic diagonals"
+        ),
+        "notes": "Alexandria wildcard prompt. Pulpy action illustration with bold mid-century energy.",
+        "tags": ["alexandria", "wildcard", "vintage-pulp-cover", "illustration", "graphic"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-woodcut-relief",
+        "name": "Woodcut Relief Print",
+        "style_label": "hand-carved woodcut relief print",
+        "style_description": (
+            "bold black lines on warm cream, hatched shadow textures, simplified dramatic forms, limited "
+            "two-tone palette, Dürer-inspired precision with folk art warmth"
+        ),
+        "notes": "Alexandria wildcard prompt. Woodcut austerity with carved graphic punch.",
+        "tags": ["alexandria", "wildcard", "woodcut-relief", "illustration", "graphic"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-art-deco-glamour",
+        "name": "Art Deco Glamour",
+        "style_label": "Art Deco glamour illustration",
+        "style_description": (
+            "geometric symmetry, sleek metallic gold and silver accents, jade green and midnight black palette, "
+            "elongated elegant figures, Chrysler Building-era luxury and angular precision"
+        ),
+        "notes": "Alexandria wildcard prompt. Art Deco luxury with angular metropolitan polish.",
+        "tags": ["alexandria", "wildcard", "art-deco-glamour", "illustration", "graphic"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-soviet-constructivist",
+        "name": "Soviet Constructivist",
+        "style_label": "Soviet Constructivist poster",
+        "style_description": (
+            "bold angular composition, red black cream and steel grey palette, photomontage-inspired layering, "
+            "diagonal dynamic energy, heroic monumental scale"
+        ),
+        "notes": "Alexandria wildcard prompt. Constructivist urgency with bold political poster force.",
+        "tags": ["alexandria", "wildcard", "soviet-constructivist", "illustration", "graphic"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-ukiyo-e-woodblock",
+        "name": "Ukiyo-e Woodblock",
+        "style_label": "Japanese ukiyo-e woodblock print",
+        "style_description": (
+            "flat colour planes with precise black outlines, asymmetric composition, indigo and vermilion palette, "
+            "stylized wave and cloud motifs, Hokusai-inspired naturalistic detail"
+        ),
+        "notes": "Alexandria wildcard prompt. Ukiyo-e clarity with strong asymmetric composition.",
+        "tags": ["alexandria", "wildcard", "ukiyo-e-woodblock", "eastern", "cross-cultural"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-persian-miniature",
+        "name": "Persian Miniature",
+        "style_label": "Persian miniature painting",
+        "style_description": (
+            "bird's-eye multi-level perspective, jewel-bright lapis lazuli and emerald palette, intricate floral "
+            "details, gold leaf accents, delicate figure rendering with expressive faces"
+        ),
+        "notes": "Alexandria wildcard prompt. Persian miniature luminosity with jewel-bright layered perspective.",
+        "tags": ["alexandria", "wildcard", "persian-miniature", "eastern", "cross-cultural"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-chinese-ink-wash",
+        "name": "Chinese Ink Wash",
+        "style_label": "Chinese ink wash painting",
+        "style_description": (
+            "misty mountain atmosphere, graded ink tones from deep black to pale grey, negative space as a "
+            "compositional element, bamboo-brush spontaneity, Song dynasty landscape grandeur"
+        ),
+        "notes": "Alexandria wildcard prompt. Ink-wash restraint with spacious atmospheric depth.",
+        "tags": ["alexandria", "wildcard", "chinese-ink-wash", "eastern", "cross-cultural"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-ottoman-illumination",
+        "name": "Ottoman Illumination",
+        "style_label": "Ottoman illuminated manuscript",
+        "style_description": (
+            "turquoise and coral palette with gold filigree, tulip and carnation motifs, flat decorative "
+            "perspective, intricate geometric borders, courtly mineral-pigment elegance"
+        ),
+        "notes": "Alexandria wildcard prompt. Ottoman courtly illumination with vibrant mineral ornament.",
+        "tags": ["alexandria", "wildcard", "ottoman-illumination", "eastern", "cross-cultural"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-film-noir-shadows",
+        "name": "Film Noir Shadows",
+        "style_label": "film noir cinematic",
+        "style_description": (
+            "high-contrast black and white with selective warm amber highlights, venetian blind shadow patterns, "
+            "rain-slicked surfaces, cigarette-smoke atmosphere, dramatic low-angle perspective"
+        ),
+        "notes": "Alexandria wildcard prompt. Noir contrast with smoky urban menace.",
+        "tags": ["alexandria", "wildcard", "film-noir-shadows", "atmospheric", "moody"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-pre-raphaelite-dream",
+        "name": "Pre-Raphaelite Dream",
+        "style_label": "Pre-Raphaelite painting",
+        "style_description": (
+            "jewel-bright saturated colours, hyper-detailed botanical elements, flowing auburn hair and "
+            "medieval-inspired drapery, Waterhouse-like romantic atmosphere"
+        ),
+        "notes": "Alexandria wildcard prompt. Pre-Raphaelite romanticism with lush botanical intensity.",
+        "tags": ["alexandria", "wildcard", "pre-raphaelite-dream", "atmospheric", "moody"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-twilight-symbolism",
+        "name": "Twilight Symbolism",
+        "style_label": "Symbolist painting",
+        "style_description": (
+            "dreamlike twilight atmosphere, deep purple and midnight blue palette with phosphorescent accents, "
+            "enigmatic figure poses, Redon-inspired otherworldly luminescence, mythology blended with nature"
+        ),
+        "notes": "Alexandria wildcard prompt. Symbolist twilight with strange luminous mood.",
+        "tags": ["alexandria", "wildcard", "twilight-symbolism", "atmospheric", "moody"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-northern-renaissance",
+        "name": "Northern Renaissance",
+        "style_label": "Northern Renaissance oil painting",
+        "style_description": (
+            "Van Eyck meticulous detail, cool silvery light through leaded glass windows, rich textile patterns, "
+            "precise botanical accuracy, intimate domestic scale with symbolic objects"
+        ),
+        "notes": "Alexandria wildcard prompt. Northern Renaissance precision with intimate symbolic detail.",
+        "tags": ["alexandria", "wildcard", "northern-renaissance", "atmospheric", "moody"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-william-morris-textile",
+        "name": "William Morris Textile",
+        "style_label": "William Morris Arts and Crafts",
+        "style_description": (
+            "intertwining vines and birds framing the scene, muted sage green and indigo palette, hand-printed "
+            "woodblock texture, medieval-inspired naturalism, Kelmscott Press decorative richness"
+        ),
+        "notes": "Alexandria wildcard prompt. Arts and Crafts ornament with hand-printed texture.",
+        "tags": ["alexandria", "wildcard", "william-morris-textile", "decorative", "ornamental"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-klimt-gold-leaf",
+        "name": "Klimt Gold Leaf",
+        "style_label": "Gustav Klimt decorative",
+        "style_description": (
+            "lavish gold leaf mosaic patterns integrated with realistic figures, Byzantine-inspired geometric "
+            "abstraction, warm ochre and deep emerald palette, sensuous flowing forms"
+        ),
+        "notes": "Alexandria wildcard prompt. Klimt-like ornament with sensuous gold mosaic richness.",
+        "tags": ["alexandria", "wildcard", "klimt-gold-leaf", "decorative", "ornamental"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-celtic-knotwork",
+        "name": "Celtic Knotwork",
+        "style_label": "Celtic illuminated manuscript",
+        "style_description": (
+            "interlaced knotwork framing the scene, Book of Kells-inspired zoomorphic details, deep forest green "
+            "and burnished gold palette, spiralling decorative accents, insular art precision"
+        ),
+        "notes": "Alexandria wildcard prompt. Celtic manuscript knotwork with mythic illuminated precision.",
+        "tags": ["alexandria", "wildcard", "celtic-knotwork", "decorative", "ornamental"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-botanical-plate",
+        "name": "Botanical Plate",
+        "style_label": "18th-century botanical illustration",
+        "style_description": (
+            "precise scientific observation, delicate hand-tinted watercolour washes on cream paper, naturalist "
+            "field-drawing accuracy, muted sage and rose palette, Redouté-inspired elegance"
+        ),
+        "notes": "Alexandria wildcard prompt. Botanical illustration discipline with delicate naturalist grace.",
+        "tags": ["alexandria", "wildcard", "botanical-plate", "cartographic", "scientific"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-antique-map",
+        "name": "Antique Map",
+        "style_label": "antique cartographic illustration",
+        "style_description": (
+            "aged parchment texture, hand-engraved linework, sepia and faded indigo palette, compass rose "
+            "elements, sea monsters and ships in margins, Age-of-Exploration wonder"
+        ),
+        "notes": "Alexandria wildcard prompt. Antique map wonder with engraved exploratory drama.",
+        "tags": ["alexandria", "wildcard", "antique-map", "cartographic", "scientific"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-maritime-chart",
+        "name": "Maritime Chart",
+        "style_label": "naval maritime illustration",
+        "style_description": (
+            "dramatic seascape composition, storm-grey and deep ocean-blue palette, copper-engraving linework, "
+            "billowing sails and rigging detail, Turner-inspired atmospheric light on waves"
+        ),
+        "notes": "Alexandria wildcard prompt. Maritime chart drama with seafaring linework and storm light.",
+        "tags": ["alexandria", "wildcard", "maritime-chart", "cartographic", "scientific"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-naturalist-field-drawing",
+        "name": "Naturalist Field Drawing",
+        "style_label": "Victorian naturalist field drawing",
+        "style_description": (
+            "precise pencil and watercolour, expedition-journal authenticity, warm sepia and olive green palette, "
+            "scientific curiosity with artistic sensitivity, Audubon-inspired detail"
+        ),
+        "notes": "Alexandria wildcard prompt. Expedition-journal naturalism with observational precision.",
+        "tags": ["alexandria", "wildcard", "naturalist-field-drawing", "cartographic", "scientific"],
+        "category": "wildcard",
     },
 )
+
+ALEXANDRIA_PROMPT_SPECS: tuple[dict[str, object], ...] = tuple(
+    {
+        "id": str(spec["id"]),
+        "name": str(spec["name"]),
+        "prompt_template": _scene_first_prompt(
+            str(spec["style_label"]),
+            str(spec["style_description"]),
+        ),
+        "notes": str(spec["notes"]),
+        "tags": list(spec["tags"]),
+        "category": str(spec["category"]),
+    }
+    for spec in ALEXANDRIA_PROMPT_CATALOG
+)
+
+ALEXANDRIA_SCENE_FIRST_PROMPT_TEMPLATES: dict[str, str] = {
+    str(spec["id"]): str(spec["prompt_template"])
+    for spec in ALEXANDRIA_PROMPT_SPECS
+}
 
 
 @dataclass(slots=True)
@@ -706,12 +867,39 @@ class PromptLibrary:
                 prompt_id,
                 str(spec.get("prompt_template", "")).strip(),
             )
+            target_notes = str(spec.get("notes", "")).strip()
+            target_tags = list(spec.get("tags", [])) if isinstance(spec.get("tags", []), list) else ["alexandria"]
+            target_category = str(spec.get("category", "builtin") or "builtin").strip()
             if not prompt_id or not name:
                 continue
             current = self._prompts.get(prompt_id) or existing_by_name.get(name.lower())
             if current is not None:
+                current_changed = False
+                if str(current.name or "").strip() != name:
+                    current.name = name
+                    current_changed = True
                 if str(current.prompt_template or "").strip() != target_template:
                     current.prompt_template = target_template
+                    current_changed = True
+                if str(current.notes or "").strip() != target_notes:
+                    current.notes = target_notes
+                    current_changed = True
+                if list(current.tags or []) != target_tags:
+                    current.tags = list(target_tags)
+                    current_changed = True
+                if str(current.category or "").strip() != target_category:
+                    current.category = target_category
+                    current_changed = True
+                if str(current.negative_prompt or "").strip() != ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT:
+                    current.negative_prompt = ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT
+                    current_changed = True
+                if str(current.source_book or "").strip() != "builtin":
+                    current.source_book = "builtin"
+                    current_changed = True
+                if str(current.source_model or "").strip() != "openrouter/google/gemini-3-pro-image-preview":
+                    current.source_model = "openrouter/google/gemini-3-pro-image-preview"
+                    current_changed = True
+                if current_changed:
                     current.updated_at = _utc_now()
                     self._prompts[current.id] = current
                     changed = True
@@ -728,9 +916,9 @@ class PromptLibrary:
                 quality_score=1.0,
                 saved_by="system",
                 created_at=created_at,
-                notes=str(spec.get("notes", "")).strip(),
-                tags=list(spec.get("tags", [])) if isinstance(spec.get("tags", []), list) else ["alexandria"],
-                category="builtin",
+                notes=target_notes,
+                tags=target_tags,
+                category=target_category,
                 version=1,
                 usage_count=0,
                 win_count=0,

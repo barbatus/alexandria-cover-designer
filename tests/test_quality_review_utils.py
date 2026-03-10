@@ -2962,6 +2962,21 @@ def test_sanitize_prompt_placeholders_logs_and_replaces(caplog: pytest.LogCaptur
     assert "Sanitized unresolved placeholder {ERA}" in caplog.text
 
 
+def test_validate_prompt_before_generation_flags_generic_and_unresolved_content(caplog: pytest.LogCaptureFixture):
+    book = {"title": "Emma"}
+    with caplog.at_level("WARNING"):
+        valid, warnings = qr._validate_prompt_before_generation(
+            "Book cover illustration only — {SCENE}. Central protagonist in a pivotal narrative tableau.",
+            book,
+        )
+
+    assert valid is False
+    assert any("Unresolved placeholder" in warning for warning in warnings)
+    assert any("Generic content" in warning for warning in warnings)
+    assert any("Scene content does not appear" in warning for warning in warnings)
+    assert "Prompt validation warnings for 'Emma'" in caplog.text
+
+
 def test_ensure_enriched_prompt_replaces_generic_scene_and_mood():
     book = {
         "title": "Gulliver's Travels",
@@ -3014,6 +3029,41 @@ def test_ensure_prompt_book_context_rotates_scene_anchor_for_variant():
     assert "CRITICAL SCENE REQUIREMENT" in resolved
     assert "Brobdingnag" in resolved
     assert "Lilliput" not in resolved
+
+
+def test_ensure_prompt_book_context_preserves_scene_first_prompt_order():
+    book = {
+        "title": "Emma",
+        "author": "Jane Austen",
+        "enrichment": {
+            "iconic_scenes": [
+                "Emma Woodhouse and Harriet Smith walk through the gardens of Hartfield at sunset",
+            ],
+            "emotional_tone": "witty romantic self-discovery",
+            "era": "Regency England",
+        },
+    }
+
+    prompt = (
+        "Book cover illustration only - no text, no title, no author name, no lettering of any kind. "
+        "No border, no frame, no ornamental elements. "
+        "This circular medallion illustration MUST depict the following specific scene: {SCENE}. "
+        "Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. "
+        "Rendered in Romantic Realism style - luminous regency atmosphere. "
+        "The mood is {MOOD}. Era reference: {ERA}. "
+        "Circular vignette composition with soft edges. Square format, high resolution, print-ready."
+    )
+
+    resolved = qr._ensure_prompt_book_context(
+        prompt=prompt,
+        book=book,
+        require_motif=True,
+        variant_index=0,
+    )
+
+    assert resolved.startswith("Book cover illustration only")
+    assert "Illustration for 'Emma'" not in resolved
+    assert "CRITICAL SCENE REQUIREMENT" not in resolved
 
 
 def test_is_generic_enrichment_detects_placeholder_payload():

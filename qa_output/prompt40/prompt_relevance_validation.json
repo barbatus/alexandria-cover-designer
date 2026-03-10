@@ -1,0 +1,108 @@
+{
+  "ok": true,
+  "books": 2397,
+  "alexandria_prompts": 35,
+  "prompt_templates_checked": 35,
+  "resolved_prompt_combinations_checked": 344050,
+  "issues": 0,
+  "samples": [
+    {
+      "book_number": 1,
+      "book_title": "A Room with a View",
+      "prompt_id": "alexandria-base-esoteric-mysticism",
+      "prompt_name": "BASE 5 — Esoteric Mysticism",
+      "variant_index": 0,
+      "prompt_preview": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: Lucy Honeychurch stands on the balcony of the Pension Bertolini, gazing out over the Arno River as the sun sets, casting a golden glow over the city. The main character is Lucy Honeych"
+    },
+    {
+      "book_number": 1,
+      "book_title": "A Room with a View",
+      "prompt_id": "alexandria-base-esoteric-mysticism",
+      "prompt_name": "BASE 5 — Esoteric Mysticism",
+      "variant_index": 1,
+      "prompt_preview": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: In the lush gardens of the Pension Bertolini, Lucy and George Emerson share a moment of connection, surrounded by vibrant flowers and the sounds of nature. The main character is Lucy H"
+    },
+    {
+      "book_number": 1,
+      "book_title": "A Room with a View",
+      "prompt_id": "alexandria-base-esoteric-mysticism",
+      "prompt_name": "BASE 5 — Esoteric Mysticism",
+      "variant_index": 2,
+      "prompt_preview": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: Cecil Vyse proposes to Lucy in the drawing room of her family's home in Surrey, the room filled with elegant furnishings and a sense of tension in the air. The main character is Lucy H"
+    },
+    {
+      "book_number": 1,
+      "book_title": "A Room with a View",
+      "prompt_id": "alexandria-base-esoteric-mysticism",
+      "prompt_name": "BASE 5 — Esoteric Mysticism",
+      "variant_index": 3,
+      "prompt_preview": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: Lucy and George meet unexpectedly in the Piazza della Signoria, where street performers entertain a crowd, and their eyes lock amidst the lively atmosphere. The main character is Lucy "
+    },
+    {
+      "book_number": 1,
+      "book_title": "A Room with a View",
+      "prompt_id": "alexandria-base-esoteric-mysticism",
+      "prompt_name": "BASE 5 — Esoteric Mysticism",
+      "variant_index": 4,
+      "prompt_preview": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: On the hillside of Fiesole, Lucy stands alone, contemplating her choices as the breathtaking view of Florence unfolds behind her, symbolizing her inner conflict. The main character is "
+    },
+    {
+      "book_number": 1,
+      "book_title": "A Room with a View",
+      "prompt_id": "alexandria-base-romantic-realism",
+      "prompt_name": "BASE 4 — Romantic Realism",
+      "variant_index": 0,
+      "prompt_preview": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: Lucy Honeychurch stands on the balcony of the Pension Bertolini, gazing out over the Arno River as the sun sets, casting a golden glow over the city. The main character is Lucy Honeych"
+    },
+    {
+      "book_number": 1,
+      "book_title": "A Room with a View",
+      "prompt_id": "alexandria-base-romantic-realism",
+      "prompt_name": "BASE 4 — Romantic Realism",
+      "variant_index": 1,
+      "prompt_preview": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: In the lush gardens of the Pension Bertolini, Lucy and George Emerson share a moment of connection, surrounded by vibrant flowers and the sounds of nature. The main character is Lucy H"
+    },
+    {
+      "book_number": 1,
+      "book_title": "A Room with a View",
+      "prompt_id": "alexandria-base-romantic-realism",
+      "prompt_name": "BASE 4 — Romantic Realism",
+      "variant_index": 2,
+      "prompt_preview": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: Cecil Vyse proposes to Lucy in the drawing room of her family's home in Surrey, the room filled with elegant furnishings and a sense of tension in the air. The main character is Lucy H"
+    },
+    {
+      "book_number": 1,
+      "book_title": "A Room with a View",
+      "prompt_id": "alexandria-base-romantic-realism",
+      "prompt_name": "BASE 4 — Romantic Realism",
+      "variant_index": 3,
+      "prompt_preview": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: Lucy and George meet unexpectedly in the Piazza della Signoria, where street performers entertain a crowd, and their eyes lock amidst the lively atmosphere. The main character is Lucy "
+    },
+    {
+      "book_number": 1,
+      "book_title": "A Room with a View",
+      "prompt_id": "alexandria-base-romantic-realism",
+      "prompt_name": "BASE 4 — Romantic Realism",
+      "variant_index": 4,
+      "prompt_preview": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: On the hillside of Fiesole, Lucy stands alone, contemplating her choices as the breathtaking view of Florence unfolds behind her, symbolizing her inner conflict. The main character is "
+    },
+    {
+      "book_number": 1,
+      "book_title": "A Room with a View",
+      "prompt_id": "alexandria-base-gothic-atmosphere",
+      "prompt_name": "BASE 3 — Gothic Atmosphere",
+      "variant_index": 0,
+      "prompt_preview": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: Lucy Honeychurch stands on the balcony of the Pension Bertolini, gazing out over the Arno River as the sun sets, casting a golden glow over the city. The main character is Lucy Honeych"
+    },
+    {
+      "book_number": 1,
+      "book_title": "A Room with a View",
+      "prompt_id": "alexandria-base-gothic-atmosphere",
+      "prompt_name": "BASE 3 — Gothic Atmosphere",
+      "variant_index": 1,
+      "prompt_preview": "Book cover illustration only — no text, no title, no author name, no lettering of any kind. No border, no frame, no ornamental elements. This circular medallion illustration MUST depict the following specific scene: In the lush gardens of the Pension Bertolini, Lucy and George Emerson share a moment of connection, surrounded by vibrant flowers and the sounds of nature. The main character is Lucy H"
+    }
+  ],
+  "duration_seconds": 13.589,
+  "issue_samples": []
+}

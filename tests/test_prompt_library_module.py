@@ -167,7 +167,13 @@ def test_seeded_alexandria_builtins_are_scene_first(tmp_path: Path, monkeypatch)
         if prompt.id.startswith("alexandria-")
     }
 
-    assert len(prompts) >= 10
+    assert len(prompts) == 35
+    wildcard_prompts = [
+        prompt
+        for prompt in prompts.values()
+        if "wildcard" in {tag.lower() for tag in prompt.tags}
+    ]
+    assert len(wildcard_prompts) == 30
     for prompt_id, prompt in prompts.items():
         template = prompt.prompt_template
         assert template.startswith("Book cover illustration only")

@@ -833,6 +833,27 @@ def test_validate_prompt_relevance_uses_variant_scene_anchor_from_enrichment(tmp
     assert "Lilliput" not in prompt
 
 
+def test_validate_prompt_relevance_preserves_scene_first_prompt_order():
+    prompt = ig._validate_prompt_relevance(
+        (
+            "Book cover illustration only - no text, no title, no author name, no lettering of any kind. "
+            "No border, no frame, no ornamental elements. "
+            "This circular medallion illustration MUST depict the following specific scene: "
+            "Emma Woodhouse and Harriet Smith walk through the gardens of Hartfield at sunset. "
+            "Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. "
+            "Rendered in Romantic Realism style - luminous regency atmosphere. "
+            "The mood is witty romantic self-discovery. Era reference: Regency England. "
+            "Circular vignette composition with soft edges. Square format, high resolution, print-ready."
+        ),
+        book_title="Emma",
+        book_author="Jane Austen",
+    )
+
+    assert prompt.startswith("Book cover illustration only")
+    assert "Book cover illustration for 'Emma'" not in prompt
+    assert "CRITICAL SCENE REQUIREMENT" not in prompt
+
+
 def test_validate_prompt_relevance_falls_back_to_motif_when_enrichment_is_generic(tmp_path: Path):
     runtime = _Runtime(tmp_path)
     enriched_path = ig.config.enriched_catalog_path(config_dir=runtime.config_dir)

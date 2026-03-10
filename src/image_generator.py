@@ -353,6 +353,17 @@ def _prompt_reference_tokens(value: str) -> list[str]:
     return [token for token in tokens if len(token) >= 4]
 
 
+def _looks_like_scene_first_prompt(prompt: str) -> bool:
+    text = " ".join(str(prompt or "").lower().split()).strip()
+    if not text.startswith("book cover illustration only"):
+        return False
+    first_320 = text[:320]
+    return "{scene}" in first_320 or (
+        "this circular medallion illustration" in first_320
+        and ("must depict" in first_320 or "scene:" in first_320 or "illustration must" in first_320)
+    )
+
+
 def _validate_prompt_relevance(
     prompt: str,
     book_title: str,
@@ -367,6 +378,8 @@ def _validate_prompt_relevance(
     title = str(book_title or "").strip()
     author = str(book_author or "").strip()
     if not title:
+        return base_prompt
+    if _looks_like_scene_first_prompt(base_prompt):
         return base_prompt
 
     prompt_lower = base_prompt.lower()

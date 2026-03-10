@@ -2506,6 +2506,7 @@ def _execute_generation_payload(
             )
     if book_row is not None:
         logger.info("Generation prompt for book %s (%s): %s", book, prompt_source, prompt)
+        _validate_prompt_before_generation(prompt, book_row)
 
     dry_run = forced_dry_run or (not runtime.has_any_api_key())
     job_id = str(payload.get("job_id", "")).strip()
@@ -5169,6 +5170,17 @@ def _prompt_reference_tokens(value: str) -> list[str]:
     return [token for token in re.findall(r"[a-z0-9]+", str(value or "").lower()) if len(token) >= 4]
 
 
+def _looks_like_scene_first_prompt(prompt: str) -> bool:
+    text = " ".join(str(prompt or "").lower().split()).strip()
+    if not text.startswith("book cover illustration only"):
+        return False
+    first_320 = text[:320]
+    return "{scene}" in first_320 or (
+        "this circular medallion illustration" in first_320
+        and ("must depict" in first_320 or "scene:" in first_320 or "illustration must" in first_320)
+    )
+
+
 def _ensure_prompt_book_context(
     *,
     prompt: str,
@@ -5181,6 +5193,8 @@ def _ensure_prompt_book_context(
     title = str(book.get("title", "") or "").strip()
     author = str(book.get("author", "") or "").strip()
     if not title:
+        return text
+    if _looks_like_scene_first_prompt(text):
         return text
 
     text_lower = text.lower()
@@ -5249,6 +5263,13 @@ _GENERIC_ENRICHMENT_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _GENERIC_SCENE_FALLBACK_PATTERN = _GENERIC_ENRICHMENT_PATTERN
+_PROMPT_VALIDATION_GENERIC_MARKERS: tuple[str, ...] = _GENERIC_ENRICHMENT_MARKERS + (
+    "{scene}",
+    "{mood}",
+    "{era}",
+    "{title}",
+    "{author}",
+)
 
 
 def _clean_enrichment_text(value: Any) -> str:
@@ -5594,6 +5615,34 @@ def _sanitize_prompt_placeholders(
         return replacements.get(key, "")
 
     return _PLACEHOLDER_PATTERN.sub(_replace, text).strip()
+
+
+def _validate_prompt_before_generation(prompt: str, book: dict[str, Any]) -> tuple[bool, list[str]]:
+    """Validate final prompts before sending them to the image model."""
+    text = str(prompt or "").strip()
+    warnings: list[str] = []
+    lowered = text.lower()
+    for placeholder in ("{SCENE}", "{MOOD}", "{ERA}", "{title}", "{author}"):
+        if placeholder.lower() in lowered:
+            warnings.append(f"Unresolved placeholder: {placeholder}")
+    first_300 = lowered[:300]
+    generic_marker = next(
+        (marker for marker in _PROMPT_VALIDATION_GENERIC_MARKERS if marker and marker in first_300),
+        "",
+    )
+    if generic_marker:
+        warnings.append(f"Generic content: '{generic_marker}'")
+    if not any(needle in first_300 for needle in ("scene:", "must depict", "illustration must")):
+        warnings.append("Scene content does not appear in first 300 characters")
+    if len(text) < 200:
+        warnings.append(f"Prompt too short ({len(text)} chars)")
+    if warnings:
+        logger.warning(
+            "Prompt validation warnings for '%s': %s",
+            str(book.get("title", "Unknown") or "Unknown"),
+            warnings,
+        )
+    return (len(warnings) == 0, warnings)
 
 
 def _ensure_enriched_prompt(
@@ -9919,6 +9968,7 @@ def serve_review_webapp(
                             variant_index=max(0, requested_variant - 1),
                             scene_override=scene_description,
                         )
+                    _validate_prompt_before_generation(prompt, book_row)
                 idempotency_key = str(body.get("idempotency_key", "")).strip() or _generation_idempotency_key(
                     catalog_id=runtime_req.catalog_id,
                     book=book,
@@ -11680,6 +11730,7 @@ def serve_review_webapp(
                             variant_index=max(0, requested_variant - 1),
                             scene_override=scene_description,
                         )
+                    _validate_prompt_before_generation(prompt, book_row)
                 active_models = [str(item).strip() for item in models if str(item).strip()]
                 if not active_models:
                     return self._send_error(
