@@ -1,8 +1,65 @@
 # Visual Proof Report
 
-Last updated: `2026-03-09`
+Last updated: `2026-03-10`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `980848f9-ff15-4527-b19b-bc8d45335020`
+Deployment ID: `39047ab6-c4ec-47da-865d-42e4131a2172`
+
+## 1.14 PROMPT-32 Shared Drive Save Raw Upload (2026-03-10)
+- Git commits (master):
+  - `ed50423` — Implement PROMPT-32: switch Drive upload to Shared Drive
+  - `3b71fa9` — Fix PROMPT-32 Shared Drive probe cleanup
+  - `de03ada` — Refine PROMPT-32 Shared Drive probe cleanup
+  - `e79b5f7` — Tune PROMPT-32 Shared Drive probe timing
+- Railway deploy:
+  - `39047ab6-c4ec-47da-865d-42e4131a2172` (`SUCCESS`; active PROMPT-32 proof runtime)
+- Local verification before deploy:
+  - `python3 -m py_compile src/gdrive_sync.py src/drive_manager.py scripts/quality_review.py` -> `PASS`
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/test_gdrive_sync_module.py -q` -> `PASS`
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/test_drive_manager_module.py -q` -> `PASS`
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/test_quality_review_utils.py -q` -> `PASS`
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/test_quality_review_server_smoke.py -q` -> `PASS`
+- Full test suite honesty check:
+  - `/Users/timzengerink/Documents/Coding Folder/Alexandria Cover designer/.venv/bin/pytest tests/ --maxfail=3` -> `3 failed, 639 passed, 1 skipped`
+  - failures were pre-existing / outside PROMPT-32 scope:
+    - `tests/test_api_docs_route_matrix.py::test_api_docs_get_routes_do_not_5xx`
+    - `tests/test_prompt_library_module.py::test_alexandria_prompts_seeded_first_and_scene_placeholders_allowed`
+    - `tests/test_review_workflow.py::test_review_selection_and_session_roundtrip`
+- Functional changes verified live:
+  - Shared Drive parent folder was switched to:
+    - `0ABLZWLOVzq-qUk9PVA`
+  - live `GET /api/drive-status` now returns:
+    - `parent_folder_id: 0ABLZWLOVzq-qUk9PVA`
+    - `parent_folder_access: true`
+    - `write_access: true`
+    - `write_probe_error: ""`
+    - `retry_supported: true`
+  - live `GET /api/health` now reports startup checks passed with:
+    - `save_raw_drive_write_access`
+    - `detail: Drive upload: OK (Shared Drive)`
+  - live startup logs confirm the exact runtime message:
+    - `Drive upload: OK (Shared Drive) for folder 0ABLZWLOVzq-qUk9PVA.`
+- Live generation + Save Raw proof:
+  - live generation job via Drive cover source:
+    - `job_id: e08ef531-8f40-49ce-8d8b-d0d293f1c070`
+    - `book: 1`
+    - `selected_cover_id: 1CNdTKlE6DjMRJa3TsZJy7Zv2_H-CjO-x`
+    - `model: openrouter/google/gemini-3-pro-image-preview`
+    - `compositor_mode: pdf`
+  - direct live `POST /api/save-raw` for that job returned:
+    - `ok: true`
+    - `status: saved`
+    - `drive_ok: true`
+    - `drive_folder_id: 1iOnlACWXY8Hq8H_a9mYn4HVj2K05LYa0`
+    - `drive_url: https://drive.google.com/drive/folders/1iOnlACWXY8Hq8H_a9mYn4HVj2K05LYa0`
+    - `uploaded_count: 2`
+    - `failed_count: 0`
+  - live browser proof on the deployed Iterate page also completed a fresh book `1` run and rendered the result card to:
+    - `✓ Saved`
+    - no retry/failure state remained on the card
+- Visual proof artifacts:
+  - live Iterate saved-state screenshot: `/tmp/alexandria-proof-live-prompt32/live-iterate-saved-prompt32.png`
+  - live `/api/drive-status` screenshot: `/tmp/alexandria-proof-live-prompt32/live-drive-status-prompt32.png`
+  - live `/api/health` screenshot: `/tmp/alexandria-proof-live-prompt32/live-health-prompt32.png`
 
 ## 1.13 PROMPT-29 Enrichment Rewrite + Drive Write Truth + Pricing Sync (2026-03-09)
 - Git commit (master):
