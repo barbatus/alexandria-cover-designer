@@ -17,6 +17,11 @@ const AUTO_ROTATE_PROMPT_OPTION = {
   label: 'Auto-Rotate — Baseline + Wildcards (Recommended)',
   description: 'Automatically rotates the 5 Alexandria base prompts with genre-matched wildcards.',
 };
+const PROMPT_ID_ALIASES = {
+  'alexandria-wildcard-antique-map-illustration': 'alexandria-wildcard-antique-map',
+  'alexandria-wildcard-naturalist-field-study': 'alexandria-wildcard-naturalist-field-drawing',
+  'alexandria-wildcard-romantic-landscape': 'alexandria-wildcard-twilight-symbolism',
+};
 const PREFERRED_DEFAULT_MODELS = [
   DEFAULT_MODEL_ID,
   'nano-banana-pro',
@@ -934,8 +939,18 @@ function normalizedPromptName(value) {
   return String(value || '').trim().toLowerCase();
 }
 
-function findPromptById(promptId) {
+function canonicalPromptId(promptId) {
   const token = _normalizePromptText(promptId);
+  if (!token) return '';
+  const alias = PROMPT_ID_ALIASES[token];
+  if (!alias) return token;
+  const prompts = sortPromptsForUI(DB.dbGetAll('prompts'));
+  const hasAlias = prompts.some((prompt) => _normalizePromptText(prompt?.id) === alias);
+  return hasAlias ? alias : token;
+}
+
+function findPromptById(promptId) {
+  const token = canonicalPromptId(promptId);
   if (!token) return null;
   return sortPromptsForUI(DB.dbGetAll('prompts')).find((prompt) => _normalizePromptText(prompt?.id) === token) || null;
 }
@@ -1003,8 +1018,8 @@ function defaultAutoPromptConfigForBook(book) {
 }
 
 function basePromptRotationForBook(book) {
-  const preferredBase = String(defaultAutoPromptConfigForBook(book)?.base || ALEXANDRIA_BASE_PROMPT_IDS.romanticRealism).trim();
-  return Array.from(new Set([preferredBase, ...ALEXANDRIA_BASE_ROTATION].filter(Boolean)));
+  const preferredBase = canonicalPromptId(defaultAutoPromptConfigForBook(book)?.base || ALEXANDRIA_BASE_PROMPT_IDS.romanticRealism);
+  return Array.from(new Set([preferredBase, ...ALEXANDRIA_BASE_ROTATION.map((promptId) => canonicalPromptId(promptId))].filter(Boolean)));
 }
 
 function buildGenreAwareRotation({ book, variantCount, referenceDate = new Date() }) {
@@ -1012,7 +1027,7 @@ function buildGenreAwareRotation({ book, variantCount, referenceDate = new Date(
   const config = defaultAutoPromptConfigForBook(book);
   const baseIds = basePromptRotationForBook(book);
   const wildcardIds = Array.isArray(config?.wildcards)
-    ? config.wildcards.map((value) => String(value || '').trim()).filter(Boolean)
+    ? config.wildcards.map((value) => canonicalPromptId(String(value || '').trim())).filter(Boolean)
     : [];
   const wildcardSeed = wildcardIds.length
     ? (_hashString(`${book?.title || ''}::${book?.author || ''}`) + _dayOfYear(referenceDate)) % wildcardIds.length
@@ -1060,7 +1075,7 @@ function buildVariantPromptAssignments({ book, variantCount, referenceDate = new
 }
 
 function promptTemplateForPromptId(promptId) {
-  return String(findPromptById(promptId)?.prompt_template || '').trim();
+  return String(findPromptById(canonicalPromptId(promptId))?.prompt_template || '').trim();
 }
 
 function buildEditableVariantPromptPlan({ book, variantCount, previousPlan = [], preserveExisting = true, referenceDate = new Date() }) {
@@ -1913,8 +1928,8 @@ window.Pages.iterate = {
     const applyPromptSelection = (promptId, { forceAlexandriaDefaults = false, variantNumber = _activeVariantPrompt } = {}) => {
       const item = _variantPromptPlan.find((entry) => Number(entry?.variant || 0) === Number(variantNumber || 0));
       if (!item) return null;
-      const selectedPromptId = String(promptId || '').trim();
-      const resolvedPromptId = selectedPromptId || String(item.autoPromptId || '').trim();
+      const selectedPromptId = canonicalPromptId(String(promptId || '').trim());
+      const resolvedPromptId = selectedPromptId || canonicalPromptId(String(item.autoPromptId || '').trim());
       const selected = resolvedPromptId ? DB.dbGet('prompts', String(resolvedPromptId)) : null;
       item.usesAutoAssignment = !selectedPromptId;
       item.promptId = resolvedPromptId;
