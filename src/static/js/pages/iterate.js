@@ -1980,6 +1980,10 @@ window.Pages.iterate = {
         _providerConnectivity = connectivityPayload?.providers && typeof connectivityPayload.providers === 'object'
           ? connectivityPayload.providers
           : {};
+        const workerCount = Number(healthPayload?.jobs?.workers_configured || 0);
+        if (Number.isFinite(workerCount) && workerCount > 0 && window.JobQueue) {
+          window.JobQueue.MAX_CONCURRENT = Math.max(1, Math.min(4, workerCount));
+        }
         return { healthPayload, connectivityPayload };
       } catch (err) {
         _providerRuntime = {};

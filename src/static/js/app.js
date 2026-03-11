@@ -116,7 +116,7 @@ window.JobQueue = {
   COMPOSITE_TIMEOUT: 15000,
   RETRY_THRESHOLD: 0.35,
   MAX_RETRIES: 2,
-  DEAD_JOB_TIMEOUT: 480000,
+  DEAD_JOB_TIMEOUT: 1200000,
 
   queue: [],
   running: new Map(),
@@ -243,9 +243,11 @@ window.JobQueue = {
   resumeStuckJobs() {
     DB.dbGetAll('jobs').forEach((job) => {
       if (!['completed', 'failed', 'queued'].includes(job.status)) {
-        job.status = 'failed';
-        job.error = 'Interrupted by page reload';
-        job.completed_at = new Date().toISOString();
+        const backendJobId = String(job?.backend_job_id || '').trim();
+        job.status = backendJobId ? 'queued' : 'cancelled';
+        job._subStatus = backendJobId ? 'Browser restarted; backend job may still be running.' : '';
+        job.error = backendJobId ? '' : 'Interrupted by page reload before backend status could be recovered';
+        job.completed_at = backendJobId ? '' : new Date().toISOString();
         DB.dbPut('jobs', job);
       }
     });
@@ -274,7 +276,7 @@ window.JobQueue = {
       }
       if (elapsedMs > this.DEAD_JOB_TIMEOUT) {
         const backendStatus = String(entry.job._backendStatus || '').trim().toLowerCase();
-        const backendStillActive = backendStatus === 'running' || backendStatus === 'retrying';
+        const backendStillActive = backendStatus === 'running' || backendStatus === 'retrying' || backendStatus === 'queued';
         if (backendStillActive) {
           DB.dbPut('jobs', entry.job);
           continue;
@@ -357,6 +359,7 @@ window.JobQueue = {
               library_prompt_id: String(job.library_prompt_id || '').trim() || undefined,
               scene_description: String(job.scene_description || '').trim() || undefined,
               prompt_template_id: String(job.prompt_template_id || '').trim() || undefined,
+              fallback_models: Array.isArray(job.fallback_models) ? job.fallback_models.slice() : undefined,
               cover_source: 'drive',
               selected_cover_id: resolvedSelectedCoverId,
               selected_cover_book_number: resolvedBookNumber,
@@ -367,6 +370,8 @@ window.JobQueue = {
               onProgress: (backendJob) => {
                 const backendStatus = String(backendJob?.status || '').trim().toLowerCase();
                 const backendUpdatedAt = String(backendJob?.updated_at || backendJob?.started_at || '').trim();
+                const backendJobId = String(backendJob?.id || backendJob?.job_id || '').trim();
+                if (backendJobId) job.backend_job_id = backendJobId;
                 const stages = backendJob?.result?.stages || backendJob?.stages || {};
                 let stageToken = '';
                 if (stages && typeof stages === 'object') {
@@ -456,6 +461,7 @@ window.JobQueue = {
         }
 
         job.cost_usd += Number(row.cost || OpenRouter.MODEL_COSTS[job.model] || 0);
+        job.model = String(row.model || job.model || '').trim() || job.model;
 
         if (score >= this.RETRY_THRESHOLD || attempts >= this.MAX_RETRIES + 1) {
           break;

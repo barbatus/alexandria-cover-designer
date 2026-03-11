@@ -2387,6 +2387,22 @@ def _is_retryable_stage_error(*, stage: str, exc: Exception) -> bool:
     return False
 
 
+def _normalized_model_fallback_sequence(primary_models: list[str], fallback_models: list[Any] | None = None) -> list[str]:
+    out: list[str] = []
+    for item in [*(primary_models or []), *([*fallback_models] if isinstance(fallback_models, list) else [])]:
+        token = str(item or "").strip()
+        if not token or token in out:
+            continue
+        out.append(token)
+    return out
+
+
+def _should_try_next_generation_model(exc: Exception) -> bool:
+    if isinstance(exc, JobStageError):
+        return exc.stage == "generate"
+    return isinstance(exc, (image_generator.RetryableGenerationError, requests.RequestException, TimeoutError, RuntimeError, OSError))
+
+
 def _execute_generation_payload(
     payload: dict[str, Any],
     *,
@@ -2433,6 +2449,13 @@ def _execute_generation_payload(
     active_models = models or runtime.all_models
     if not active_models:
         raise ValueError("No models available for generation")
+    fallback_models_raw = payload.get("fallback_models", [])
+    fallback_models = [
+        str(item).strip()
+        for item in fallback_models_raw
+        if isinstance(fallback_models_raw, list) and str(item).strip()
+    ]
+    fallback_models = [token for token in fallback_models if token not in active_models]
 
     composed_prompt_payload: dict[str, Any] = {}
     book_row = _book_row_for_number(runtime=runtime, book_number=book)
@@ -2550,32 +2573,73 @@ def _execute_generation_payload(
             return _is_job_model_cancelled(job_id=job_id, catalog_id=runtime.catalog_id, model=str(model_name))
 
         try:
-            results = image_generator.generate_single_book(
-                book_number=book,
-                prompts_path=runtime.prompts_path,
-                output_dir=runtime.tmp_dir / "generated",
-                models=active_models,
-                variants=variants,
-                prompt_variant=requested_variant,
-                prompt_text=prompt,
-                library_prompt_id=library_prompt_id or None,
-                provider_override=provider_override,
-                resume=False,
-                dry_run=dry_run,
-                cancel_checker=_cancel_checker if job_id else None,
-                preserve_prompt_text=preserve_prompt_text,
+            attempted_model_chain = _normalized_model_fallback_sequence(
+                active_models,
+                fallback_models if len(active_models) == 1 and variants == 1 else [],
             )
-            serialized = _serialize_generation_results(runtime=runtime, book=book, results=results, job_id=job_id)
-            if library_prompt_id:
-                for row in serialized:
-                    if isinstance(row, dict):
-                        row["library_prompt_id"] = library_prompt_id
-            if not dry_run:
-                successful_rows = [row for row in serialized if isinstance(row, dict) and bool(row.get("success"))]
-                if not successful_rows:
-                    summarized_failures = _summarize_generation_failures(serialized)
+            accumulated_failures: list[dict[str, Any]] = []
+            last_model_exc: Exception | None = None
+
+            for model_index, candidate_model in enumerate(attempted_model_chain):
+                try:
+                    results = image_generator.generate_single_book(
+                        book_number=book,
+                        prompts_path=runtime.prompts_path,
+                        output_dir=runtime.tmp_dir / "generated",
+                        models=[candidate_model],
+                        variants=variants,
+                        prompt_variant=requested_variant,
+                        prompt_text=prompt,
+                        library_prompt_id=library_prompt_id or None,
+                        provider_override=provider_override,
+                        resume=False,
+                        dry_run=dry_run,
+                        cancel_checker=_cancel_checker if job_id else None,
+                        preserve_prompt_text=preserve_prompt_text,
+                    )
+                    candidate_serialized = _serialize_generation_results(
+                        runtime=runtime,
+                        book=book,
+                        results=results,
+                        job_id=job_id,
+                    )
+                    if library_prompt_id:
+                        for row in candidate_serialized:
+                            if isinstance(row, dict):
+                                row["library_prompt_id"] = library_prompt_id
+                    if attempted_model_chain and len(attempted_model_chain) > 1:
+                        for row in candidate_serialized:
+                            if isinstance(row, dict):
+                                row["attempted_model_chain"] = attempted_model_chain[: model_index + 1]
+                    if dry_run:
+                        serialized = candidate_serialized
+                        break
+                    successful_rows = [row for row in candidate_serialized if isinstance(row, dict) and bool(row.get("success"))]
+                    if successful_rows:
+                        serialized = candidate_serialized
+                        break
+                    summarized_failures = _summarize_generation_failures(candidate_serialized)
+                    if summarized_failures:
+                        accumulated_failures.extend(summarized_failures)
+                    else:
+                        accumulated_failures.append(
+                            {
+                                "model": candidate_model,
+                                "variant": int(requested_variant),
+                                "error": "All generation attempts failed; no successful variants.",
+                                "error_type": "generation_error",
+                            }
+                        )
+                    if model_index < len(attempted_model_chain) - 1:
+                        logger.warning(
+                            "Generation model fallback for book %s switching from %s to %s after empty result set",
+                            book,
+                            candidate_model,
+                            attempted_model_chain[model_index + 1],
+                        )
+                        continue
                     failure_details: list[str] = []
-                    for row in summarized_failures:
+                    for row in accumulated_failures:
                         model = str(row.get("model", "unknown"))
                         variant = _safe_int(row.get("variant"), 0)
                         error_text = str(row.get("error", "") or "unknown error").strip()
@@ -2590,8 +2654,36 @@ def _execute_generation_payload(
                         stage="generate",
                         message=message,
                         retryable=False,
-                        details={"failures": summarized_failures},
+                        details={"failures": accumulated_failures},
                     )
+                except Exception as exc:
+                    last_model_exc = exc
+                    if isinstance(exc, JobStageError) and isinstance(exc.details, dict):
+                        detail_rows = exc.details.get("failures", [])
+                        if isinstance(detail_rows, list):
+                            accumulated_failures.extend([row for row in detail_rows if isinstance(row, dict)])
+                    elif not dry_run:
+                        accumulated_failures.append(
+                            {
+                                "model": candidate_model,
+                                "variant": int(requested_variant),
+                                "error": str(exc),
+                                "error_type": exc.__class__.__name__,
+                            }
+                        )
+                    if model_index < len(attempted_model_chain) - 1 and _should_try_next_generation_model(exc):
+                        logger.warning(
+                            "Generation model fallback for book %s switching from %s to %s after %s",
+                            book,
+                            candidate_model,
+                            attempted_model_chain[model_index + 1],
+                            str(exc),
+                        )
+                        continue
+                    raise
+
+            if not serialized and last_model_exc is not None:
+                raise last_model_exc
         except Exception as exc:
             if checkpoint:
                 _set_checkpoint_stage(
@@ -11767,6 +11859,7 @@ def serve_review_webapp(
             if path == "/api/generate":
                 book = int(body.get("book", 0))
                 models = list(body.get("models", [])) if isinstance(body.get("models", []), list) else []
+                fallback_models = list(body.get("fallback_models", [])) if isinstance(body.get("fallback_models", []), list) else []
                 variants = int(body.get("variants", 5))
                 requested_variant = max(1, _safe_int(body.get("variant"), 1))
                 prompt = str(body.get("prompt", ""))
@@ -11912,6 +12005,11 @@ def serve_review_webapp(
                 active_models = [str(item).strip() for item in models if str(item).strip()]
                 if not active_models:
                     active_models = [config.DEFAULT_MODEL]
+                active_fallback_models = [
+                    str(item).strip()
+                    for item in fallback_models
+                    if str(item).strip() and str(item).strip() not in active_models
+                ]
                 valid_catalog_source, catalog_source_error = _validate_catalog_cover_request(
                     runtime=runtime_req,
                     book=book,
@@ -11966,6 +12064,7 @@ def serve_review_webapp(
                                 **({"preserve_prompt_text": True} if preserve_prompt_text else {}),
                                 "variant": requested_variant,
                                 "scene_description": scene_description,
+                                "fallback_models": active_fallback_models,
                                 "composed_prompt": str(composed_prompt_payload.get("prompt", "")).strip(),
                                 "prompt_components": composed_prompt_payload,
                                 "inferred_genre": str(composed_prompt_payload.get("genre", "")).strip(),
@@ -12046,6 +12145,7 @@ def serve_review_webapp(
                             "catalog": runtime_req.catalog_id,
                             "book": book,
                             "models": active_models,
+                            "fallback_models": active_fallback_models,
                             "variants": variants,
                             "prompt": prompt,
                             "provider": provider or "all",

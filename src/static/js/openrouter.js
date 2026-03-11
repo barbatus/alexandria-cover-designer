@@ -140,6 +140,11 @@ window.OpenRouter = {
     if (options.prompt_template_id) payload.prompt_template_id = String(options.prompt_template_id).trim();
     if (options.template_id) payload.template_id = String(options.template_id).trim();
     if (options.scene_description) payload.scene_description = String(options.scene_description).trim();
+    if (Array.isArray(options.fallback_models) && options.fallback_models.length > 0) {
+      payload.fallback_models = options.fallback_models
+        .map((item) => String(item || '').trim())
+        .filter(Boolean);
+    }
 
     const generateResp = await fetch('/api/generate', {
       method: 'POST',

@@ -3423,6 +3423,83 @@ def test_execute_generation_payload_forwards_preserve_prompt_text_flag(tmp_path:
     assert captured["preserve_prompt_text"] is True
 
 
+def test_execute_generation_payload_uses_backend_fallback_models_until_success(tmp_path: Path, monkeypatch):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg = replace(cfg, openrouter_api_key="test-key", openai_api_key="openai-key")
+    monkeypatch.setattr(qr.config, "get_config", lambda *_args, **_kwargs: cfg)
+
+    call_models: list[list[str]] = []
+
+    def _fake_generate_single_book(**kwargs):  # type: ignore[no-untyped-def]
+        models = [str(item) for item in kwargs.get("models", [])]
+        call_models.append(models)
+        model = models[0]
+        if model == "openrouter/google/gemini-3-pro-image-preview":
+            return [
+                {
+                    "model": model,
+                    "variant": 1,
+                    "success": False,
+                    "error": "Google error 403: Your API key was reported as leaked. Please use another API key.",
+                }
+            ]
+        return [
+            {
+                "model": model,
+                "variant": 1,
+                "success": True,
+                "image_path": "tmp/generated/1/openai__gpt-image-1-mini/variant_1.png",
+                "composited_path": "Output Covers/saved_composites/1/fallback_variant_1_openai_gpt-image-1-mini.jpg",
+                "cost": 0.01,
+                "job_id": "job-fallback-1",
+            }
+        ]
+
+    monkeypatch.setattr(qr.image_generator, "generate_single_book", _fake_generate_single_book)
+    monkeypatch.setattr(qr, "_serialize_generation_results", lambda **kwargs: kwargs["results"])
+    monkeypatch.setattr(qr, "_load_json", lambda *_args, **_kwargs: {})
+    monkeypatch.setattr(qr, "_current_run_generated_paths", lambda **_kwargs: set())
+    monkeypatch.setattr(qr, "_prune_stale_generated_variants_for_book", lambda **_kwargs: None)
+    monkeypatch.setattr(qr.cover_compositor, "composite_all_variants", lambda **_kwargs: None)
+    monkeypatch.setattr(qr.pdf_compositor, "find_source_pdf_for_book", lambda **_kwargs: None)
+    monkeypatch.setattr(qr, "_assert_composite_validation_within_limits", lambda **_kwargs: None)
+    monkeypatch.setattr(qr, "_hydrate_serialized_result_paths", lambda **kwargs: kwargs["rows"])
+    monkeypatch.setattr(qr, "_attach_print_validation_to_rows", lambda **_kwargs: None)
+    monkeypatch.setattr(qr, "_trigger_visual_qa_generation_async", lambda **_kwargs: None)
+    monkeypatch.setattr(qr, "_record_generation_costs", lambda **_kwargs: None)
+    monkeypatch.setattr(qr.state_db_store, "append_generation_records", lambda **_kwargs: 0)
+    monkeypatch.setattr(qr.state_db_store, "export_history_payload", lambda **_kwargs: {"items": []})
+    monkeypatch.setattr(qr, "_build_review_data_payload", lambda *_args, **_kwargs: {"books": []})
+    monkeypatch.setattr(qr, "_invalidate_cache", lambda *_args, **_kwargs: 1)
+
+    result = qr._execute_generation_payload(
+        {
+            "catalog": "classics",
+            "book": 1,
+            "models": ["openrouter/google/gemini-3-pro-image-preview"],
+            "fallback_models": ["openai/gpt-image-1-mini"],
+            "variants": 1,
+            "variant": 1,
+            "prompt": "Book cover illustration only — no text. Exact Alexandria prompt.",
+            "prompt_source": "custom",
+            "compose_prompt": False,
+            "preserve_prompt_text": True,
+            "cover_source": "catalog",
+            "dry_run": False,
+        }
+    )
+
+    assert call_models == [
+        ["openrouter/google/gemini-3-pro-image-preview"],
+        ["openai/gpt-image-1-mini"],
+    ]
+    assert result["results"][0]["model"] == "openai/gpt-image-1-mini"
+    assert result["results"][0]["attempted_model_chain"] == [
+        "openrouter/google/gemini-3-pro-image-preview",
+        "openai/gpt-image-1-mini",
+    ]
+
+
 def test_execute_generation_payload_drive_source_downloads_cover_before_composite(tmp_path: Path, monkeypatch):
     cfg = _build_runtime_for_startup_checks(tmp_path)
     cfg = replace(cfg, openai_api_key="test-key", gdrive_source_folder_id="source-folder-id")
