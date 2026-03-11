@@ -76,6 +76,18 @@ def _run_iterate_ui_defaults() -> dict:
     return _run_iterate_hook(function_name="iterateUiDefaults", payload={})
 
 
+def _run_iterate_generation_jobs(payload: dict) -> dict:
+    return _run_iterate_hook(function_name="buildIterateGenerationJobs", payload=payload)
+
+
+def _run_iterate_result_sort(jobs: list[dict], sort_mode: str) -> list[dict]:
+    return _run_iterate_hook(function_name="sortIterateResultJobs", payload={"jobs": jobs, "sortMode": sort_mode})
+
+
+def _run_save_raw_request_payload(job: dict) -> dict:
+    return _run_iterate_hook(function_name="saveRawRequestPayloadForJob", payload={"job": job})
+
+
 def test_iterate_prompt_builder_keeps_library_prompt_precomposed():
     result = _run_iterate_prompt_builder(
         {
@@ -162,6 +174,109 @@ def test_iterate_variant_summary_lines_are_single_line_and_compact():
 
     assert lines == ["Variant 1: Romantic Realism — Gulliver wakes on the beach in Lilliput."]
     assert "\n" not in lines[0]
+
+
+def test_iterate_generation_jobs_expand_variants_across_multiple_models():
+    result = _run_iterate_generation_jobs(
+        {
+            "bookId": 7,
+            "book": {
+                "title": "Gulliver's Travels",
+                "author": "Jonathan Swift",
+            },
+            "selectedModels": [
+                "nano-banana-pro",
+                "google/gemini-2.5-flash-image",
+            ],
+            "selectedCoverId": "cover-7",
+            "selectedCoverBookNumber": 7,
+            "variantEntries": [
+                {
+                    "variant": 1,
+                    "assignedScene": "Gulliver waking up on the beach in Lilliput.",
+                    "assignedMood": "astonished",
+                    "assignedEra": "18th century",
+                    "promptPayload": {
+                        "prompt": "Book cover illustration only - no text. Gulliver waking up on the beach in Lilliput.",
+                        "styleId": "romantic-realism",
+                        "styleLabel": "Romantic Realism",
+                        "promptSource": "library",
+                        "backendPromptSource": "custom",
+                        "composePrompt": False,
+                        "preservePromptText": True,
+                        "libraryPromptId": "alexandria-base-romantic-realism",
+                    },
+                },
+                {
+                    "variant": 2,
+                    "assignedScene": "Gulliver standing in the grand palace.",
+                    "assignedMood": "wry",
+                    "assignedEra": "18th century",
+                    "promptPayload": {
+                        "prompt": "Book cover illustration only - no text. Gulliver standing in the grand palace.",
+                        "styleId": "romantic-realism",
+                        "styleLabel": "Romantic Realism",
+                        "promptSource": "library",
+                        "backendPromptSource": "custom",
+                        "composePrompt": False,
+                        "preservePromptText": True,
+                        "libraryPromptId": "alexandria-base-romantic-realism",
+                    },
+                },
+            ],
+        }
+    )
+
+    jobs = result["jobs"]
+    assert result["validationError"] == ""
+    assert len(jobs) == 4
+    assert [job["variant"] for job in jobs] == [1, 1, 2, 2]
+    assert [job["model"] for job in jobs] == [
+        "nano-banana-pro",
+        "google/gemini-2.5-flash-image",
+        "nano-banana-pro",
+        "google/gemini-2.5-flash-image",
+    ]
+
+
+def test_iterate_result_sort_groups_cards_by_model_then_variant():
+    jobs = _run_iterate_result_sort(
+        [
+            {"id": "c", "model": "nano-banana-pro", "variant": 2, "created_at": "2026-03-11T10:00:03Z"},
+            {"id": "a", "model": "google/gemini-2.5-flash-image", "variant": 2, "created_at": "2026-03-11T10:00:01Z"},
+            {"id": "d", "model": "nano-banana-pro", "variant": 1, "created_at": "2026-03-11T10:00:04Z"},
+            {"id": "b", "model": "google/gemini-2.5-flash-image", "variant": 1, "created_at": "2026-03-11T10:00:02Z"},
+        ],
+        "model",
+    )
+
+    assert [job["id"] for job in jobs] == ["b", "a", "d", "c"]
+
+
+def test_save_raw_request_payload_uses_display_variant_without_selector_variant():
+    payload = _run_save_raw_request_payload(
+        {
+            "variant": 3,
+            "style_label": "Romantic Realism",
+            "model": "nano-banana-pro",
+            "results_json": json.dumps(
+                {
+                    "result": {
+                        "job_id": "backend-job-7",
+                        "variant": 1,
+                        "raw_art_path": "output/raw_art/7/job-7_variant_1.png",
+                        "saved_composited_path": "output/saved_composites/7/job-7_variant_1.jpg",
+                    }
+                }
+            ),
+        }
+    )
+
+    assert payload["job_id"] == "backend-job-7"
+    assert payload["display_variant"] == 3
+    assert payload["style_label"] == "Romantic Realism"
+    assert payload["expected_model"] == "nano-banana-pro"
+    assert "expected_variant" not in payload
 
 
 def test_iterate_scene_pool_filters_generic_enrichment_and_uses_prompt_context():

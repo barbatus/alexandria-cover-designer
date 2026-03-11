@@ -10,6 +10,7 @@ let _variantPromptPlan = [];
 let _activeVariantPrompt = 1;
 let _sequentialRunState = null;
 let _lastGeneratedJobIds = [];
+let _resultsSortMode = 'model';
 const DEFAULT_VARIANT_COUNT = 10;
 const SEQUENTIAL_BATCH_SIZE = 4;
 const AUTO_ROTATE_PROMPT_OPTION_LABEL = 'Auto-Rotate (Recommended)';
@@ -389,6 +390,109 @@ const GENRE_PROMPT_ALIASES = {
 function modelIdToLabel(modelId) {
   const model = OpenRouter.MODELS.find((m) => m.id === modelId);
   return model?.label || modelId;
+}
+
+function buildIterateGenerationJobs({
+  bookId,
+  book,
+  selectedModels,
+  variantEntries,
+  selectedCoverId = '',
+  selectedCoverBookNumber = 0,
+}) {
+  const normalizedModels = Array.from(
+    new Set(
+      (Array.isArray(selectedModels) ? selectedModels : [])
+        .map((modelId) => String(modelId || '').trim())
+        .filter(Boolean)
+    )
+  );
+  const jobs = [];
+  let validationError = '';
+
+  (Array.isArray(variantEntries) ? variantEntries : []).forEach((entry) => {
+    if (validationError) return;
+    const promptPayload = entry?.promptPayload || {};
+    const validation = validatePromptBeforeGeneration({ prompt: promptPayload.prompt, book });
+    if (!validation.ok) {
+      validationError = validation.errors[0];
+      return;
+    }
+    normalizedModels.forEach((modelId) => {
+      jobs.push({
+        id: uuid(),
+        book_id: bookId,
+        model: modelId,
+        variant: Number(entry?.variant || 1),
+        status: 'queued',
+        prompt: promptPayload.prompt,
+        style_id: promptPayload.styleId,
+        style_label: promptPayload.styleLabel,
+        prompt_source: promptPayload.promptSource,
+        backend_prompt_source: promptPayload.backendPromptSource,
+        compose_prompt: promptPayload.composePrompt,
+        preserve_prompt_text: promptPayload.preservePromptText,
+        library_prompt_id: promptPayload.libraryPromptId,
+        scene_description: String(entry?.assignedScene || '').trim(),
+        mood: String(entry?.assignedMood || '').trim(),
+        era: String(entry?.assignedEra || '').trim(),
+        selected_cover_id: selectedCoverId,
+        selected_cover_book_number: selectedCoverBookNumber,
+        quality_score: null,
+        cost_usd: 0,
+        generated_image_blob: null,
+        composited_image_blob: null,
+        started_at: null,
+        completed_at: null,
+        error: null,
+        results_json: null,
+        retries: 0,
+        _elapsed: 0,
+        _subStatus: '',
+        _compositeFailed: false,
+        _compositeError: null,
+        created_at: new Date().toISOString(),
+      });
+    });
+  });
+
+  return { jobs, validationError };
+}
+
+function sortIterateResultJobs(jobs, sortMode = 'model') {
+  const rows = Array.isArray(jobs) ? jobs.slice() : [];
+  const createdAt = (job) => new Date(job?.created_at || 0).getTime();
+  const variantNumber = (job) => Number(job?.variant || 0);
+  const modelLabel = (job) => modelIdToLabel(String(job?.model || '')).toLowerCase();
+  const newestFirst = (left, right) => createdAt(right) - createdAt(left);
+
+  return rows.sort((left, right) => {
+    if (sortMode === 'newest') return newestFirst(left, right);
+    if (sortMode === 'variant') {
+      const byVariant = variantNumber(left) - variantNumber(right);
+      if (byVariant !== 0) return byVariant;
+      const byModel = modelLabel(left).localeCompare(modelLabel(right));
+      if (byModel !== 0) return byModel;
+      return newestFirst(left, right);
+    }
+    const byModel = modelLabel(left).localeCompare(modelLabel(right));
+    if (byModel !== 0) return byModel;
+    const byVariant = variantNumber(left) - variantNumber(right);
+    if (byVariant !== 0) return byVariant;
+    return newestFirst(left, right);
+  });
+}
+
+function saveRawRequestPayloadForJob(job) {
+  const resultRow = resultRowForJob(job);
+  return {
+    job_id: backendJobIdForJob(job),
+    style_label: String(job?.style_label || '').trim(),
+    display_variant: Number(job?.variant || 0),
+    expected_model: String(job?.model || '').trim(),
+    expected_raw_art_path: String(resultRow.raw_art_path || '').trim(),
+    expected_saved_composited_path: String(resultRow.saved_composited_path || resultRow.composited_path || '').trim(),
+  };
 }
 
 function resolvePromptIdAlias(promptId) {
@@ -1139,6 +1243,9 @@ window.__ITERATE_TEST_HOOKS__.defaultSceneForBook = defaultSceneForBook;
 window.__ITERATE_TEST_HOOKS__.applyPromptPlaceholders = applyPromptPlaceholders;
 window.__ITERATE_TEST_HOOKS__.validatePromptBeforeGeneration = validatePromptBeforeGeneration;
 window.__ITERATE_TEST_HOOKS__.isGenericContent = _isGenericContent;
+window.__ITERATE_TEST_HOOKS__.buildIterateGenerationJobs = (payload) => buildIterateGenerationJobs(payload);
+window.__ITERATE_TEST_HOOKS__.sortIterateResultJobs = ({ jobs, sortMode }) => sortIterateResultJobs(jobs, sortMode);
+window.__ITERATE_TEST_HOOKS__.saveRawRequestPayloadForJob = ({ job }) => saveRawRequestPayloadForJob(job);
 
 function sortPromptsForUI(prompts) {
   return [...(Array.isArray(prompts) ? prompts : [])].sort((left, right) => {
@@ -1391,13 +1498,14 @@ function saveRawButtonState(job) {
   const status = String(job?.save_raw_status || '').trim().toLowerCase();
   const driveUrl = String(job?.save_raw_drive_url || '').trim();
   const warning = String(job?.save_raw_warning || '').trim();
+  const localFolder = String(job?.save_raw_local_folder || '').trim();
   const truncatedWarning = warning.length > 220 ? `${warning.slice(0, 220)}…` : warning;
 
   if (status === 'saved') {
     return {
       label: '✓ Saved',
       style: 'background:#2d6a4f;color:#fff;font-weight:600;',
-      title: driveUrl ? 'Click to open in Google Drive' : 'Saved raw package.',
+      title: driveUrl ? 'Click to open in Google Drive' : (localFolder || 'Saved raw package.'),
       driveUrl,
       status,
     };
@@ -1405,9 +1513,9 @@ function saveRawButtonState(job) {
 
   if (status === 'partial') {
     return {
-      label: '✓ Saved (Drive unavailable)',
+      label: '✓ Saved (Local)',
       style: 'background:#d4af37;color:#0a1628;font-weight:600;',
-      title: truncatedWarning || 'Saved locally; Google Drive unavailable.',
+      title: truncatedWarning || localFolder || 'Saved locally; Google Drive unavailable.',
       driveUrl: '',
       status,
     };
@@ -1661,7 +1769,7 @@ window.Pages.iterate = {
         <div class="card-header iterate-card-header">
           <div>
             <h3 class="card-title">Generate Illustrations</h3>
-            <p class="text-sm text-muted iterate-flow-note">Book → Variants → Style → Model → Generate.</p>
+            <p class="text-sm text-muted iterate-flow-note">Book → Variants → Style → Models → Generate.</p>
           </div>
           <button class="btn btn-secondary btn-sm" id="iterAdvancedToggle" type="button" aria-expanded="false">Advanced</button>
         </div>
@@ -1703,12 +1811,12 @@ window.Pages.iterate = {
         </div>
 
         <div class="form-group">
-          <label class="form-label">Model</label>
-          <select class="form-select" id="iterModelSelect">
-            <option value="">Loading models…</option>
-          </select>
+          <label class="form-label">Models</label>
+          <div class="model-card-grid" id="iterModelCards">
+            <div class="text-xs text-muted">Loading models…</div>
+          </div>
           <p class="text-xs text-muted mt-8" id="iterModelSummary">Loading recommended model…</p>
-          <p class="text-xs text-muted mt-8" id="iterCostBreakdown">Cost breakdown will update when a model is selected.</p>
+          <p class="text-xs text-muted mt-8" id="iterCostBreakdown">Cost breakdown will update when models are selected.</p>
         </div>
 
         <div class="flex justify-between items-center iterate-primary-actions">
@@ -1789,7 +1897,7 @@ window.Pages.iterate = {
     const enrichmentSummaryEl = document.getElementById('iterEnrichmentSummary');
     const advancedToggleBtn = document.getElementById('iterAdvancedToggle');
     const advanced = document.getElementById('iterAdvanced');
-    const modelSelectEl = document.getElementById('iterModelSelect');
+    const modelCardsEl = document.getElementById('iterModelCards');
     const variantsEl = document.getElementById('iterVariants');
     const promptSelEl = document.getElementById('iterPromptSel');
     const promptRotationInfoEl = document.getElementById('iterPromptRotationInfo');
@@ -2189,55 +2297,90 @@ window.Pages.iterate = {
 
     const updateCost = () => {
       const variants = Number(variantsEl?.value || DEFAULT_VARIANT_COUNT);
-      const selected = Array.from(_selectedModelIds);
-      const total = selected.reduce((sum, modelId) => sum + Number(OpenRouter.MODEL_COSTS[modelId] || 0) * variants, 0);
+      const selected = Array.from(_selectedModelIds)
+        .map((modelId) => ({
+          id: modelId,
+          label: modelIdToLabel(modelId),
+          unitCost: Number(OpenRouter.MODEL_COSTS[modelId] || 0),
+        }));
+      const total = selected.reduce((sum, model) => sum + (model.unitCost * variants), 0);
+      const totalImages = variants * selected.length;
       const est = document.getElementById('iterCostEst');
       const breakdown = document.getElementById('iterCostBreakdown');
       if (est) {
         const worst = total * 3;
-        est.textContent = `Est. cost: $${total.toFixed(3)} · worst-case $${worst.toFixed(3)}`;
+        const imageSummary = selected.length ? ` · ${totalImages} image${totalImages === 1 ? '' : 's'}` : '';
+        est.textContent = `Est. cost: $${total.toFixed(3)}${imageSummary} · worst-case $${worst.toFixed(3)}`;
       }
       if (breakdown) {
         if (!selected.length) {
           breakdown.textContent = 'No models selected.';
         } else {
-          const modelId = selected[0];
-          const unit = Number(OpenRouter.MODEL_COSTS[modelId] || 0);
-          breakdown.textContent = `Cost breakdown: ${modelIdToLabel(modelId)} ($${unit.toFixed(3)} × ${variants} = $${total.toFixed(3)}).`;
+          const details = selected
+            .slice(0, 3)
+            .map((model) => `${model.label} ($${model.unitCost.toFixed(3)} × ${variants} = $${(model.unitCost * variants).toFixed(3)})`);
+          const extra = selected.length > 3 ? `; +${selected.length - 3} more model${selected.length - 3 === 1 ? '' : 's'}` : '';
+          breakdown.textContent = `Cost breakdown: ${totalImages} images across ${selected.length} model${selected.length === 1 ? '' : 's'}: ${details.join('; ')}${extra}.`;
         }
       }
     };
 
     const updateModelSummary = () => {
       if (!modelSummaryEl) return;
-      const selected = Array.from(_selectedModelIds);
+      const selected = Array.from(_selectedModelIds).filter(Boolean);
       if (!selected.length) {
-        modelSummaryEl.textContent = 'No model selected.';
+        modelSummaryEl.textContent = 'No models selected.';
         return;
       }
-      const modelId = selected[0];
-      const unit = Number(OpenRouter.MODEL_COSTS[modelId] || 0);
-      const provider = providerFromModel(modelId);
-      modelSummaryEl.textContent = `${modelIdToLabel(modelId)} · ${provider === 'google' ? 'Google Direct' : provider} · $${unit.toFixed(3)}/image`;
-    };
-
-    const renderModelSelect = () => {
-      if (!modelSelectEl) return;
-      modelSelectEl.innerHTML = buildModelSelectOptions(OpenRouter.MODELS) || '<option value="">No models available</option>';
-      const selectedId = Array.from(_selectedModelIds)[0] || _defaultModelId || normalizedModelId(OpenRouter.MODELS[0] || null) || '';
-      if (selectedId) {
-        _selectedModelIds = new Set([selectedId]);
-        modelSelectEl.value = selectedId;
+      if (selected.length === 1) {
+        const modelId = selected[0];
+        const unit = Number(OpenRouter.MODEL_COSTS[modelId] || 0);
+        const provider = providerFromModel(modelId);
+        modelSummaryEl.textContent = `${modelIdToLabel(modelId)} · ${provider === 'google' ? 'Google Direct' : provider} · $${unit.toFixed(3)}/image`;
+        return;
       }
+      const summary = selected
+        .slice(0, 3)
+        .map((modelId) => modelIdToLabel(modelId))
+        .join(', ');
+      const extra = selected.length > 3 ? ` +${selected.length - 3} more` : '';
+      modelSummaryEl.textContent = `${selected.length} models selected: ${summary}${extra}.`;
+    };
+
+    const renderModelCardsUi = () => {
+      if (!modelCardsEl) return;
+      const availableModels = Array.isArray(OpenRouter.MODELS) ? OpenRouter.MODELS : [];
+      const availableIds = new Set(availableModels.map((model) => normalizedModelId(model)).filter(Boolean));
+      const preservedSelections = Array.from(_selectedModelIds).filter((modelId) => availableIds.has(modelId));
+      if (preservedSelections.length) {
+        _selectedModelIds = new Set(preservedSelections);
+      } else {
+        const defaultSelections = _defaultSelectedModelIds.filter((modelId) => availableIds.has(modelId));
+        _selectedModelIds = new Set(defaultSelections);
+      }
+      const { html, visibleIds } = renderModelCards({
+        models: availableModels,
+        selectedIds: _selectedModelIds,
+        activeFilter: 'all',
+        searchText: '',
+      });
+      _lastVisibleModelIds = visibleIds;
+      modelCardsEl.innerHTML = html || '<div class="text-xs text-muted">No models available.</div>';
       updateCost();
       updateModelSummary();
     };
 
-    modelSelectEl?.addEventListener('change', () => {
-      const modelId = String(modelSelectEl.value || '').trim();
-      _selectedModelIds = modelId ? new Set([modelId]) : new Set();
-      updateCost();
-      updateModelSummary();
+    modelCardsEl?.addEventListener('change', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLInputElement) || !target.classList.contains('iter-model-check')) return;
+      const modelId = String(target.value || '').trim();
+      if (!modelId) return;
+      if (target.checked) {
+        _selectedModelIds.add(modelId);
+      } else {
+        _selectedModelIds.delete(modelId);
+      }
+      renderModelCardsUi();
     });
 
     variantPlanEl?.addEventListener('click', (event) => {
@@ -2306,7 +2449,7 @@ window.Pages.iterate = {
       if (item) item.eraVal = String(eraEl.value || '');
       updatePromptPreview();
     });
-    renderModelSelect();
+    renderModelCardsUi();
     syncAdvancedVisibility(false);
     updateBatchProgress();
     updatePromptRotationInfo(String(promptSelEl?.value || '').trim());
@@ -2365,10 +2508,9 @@ window.Pages.iterate = {
     }
     const selectedModels = Array.from(_selectedModelIds);
     if (!selectedModels.length) {
-      Toast.warning('Select one image model.');
+      Toast.warning('Select at least one image model.');
       return;
     }
-    const selectedModel = selectedModels[0];
 
     const variantCount = Number(document.getElementById('iterVariants')?.value || DEFAULT_VARIANT_COUNT);
     const books = DB.dbGetAll('books');
@@ -2395,50 +2537,13 @@ window.Pages.iterate = {
     const selectedCoverId = String(book.cover_jpg_id || book.drive_cover_id || '').trim();
     const selectedCoverBookNumber = Number(book.number || book.id || bookId || 0);
 
-    const jobs = [];
-    let validationError = '';
-    variantEntries.forEach((entry) => {
-      if (validationError) return;
-      const promptPayload = entry?.promptPayload || {};
-      const validation = validatePromptBeforeGeneration({ prompt: promptPayload.prompt, book });
-      if (!validation.ok) {
-        validationError = validation.errors[0];
-        return;
-      }
-      jobs.push({
-        id: uuid(),
-        book_id: bookId,
-        model: selectedModel,
-        variant: Number(entry?.variant || 1),
-        status: 'queued',
-        prompt: promptPayload.prompt,
-        style_id: promptPayload.styleId,
-        style_label: promptPayload.styleLabel,
-        prompt_source: promptPayload.promptSource,
-        backend_prompt_source: promptPayload.backendPromptSource,
-        compose_prompt: promptPayload.composePrompt,
-        preserve_prompt_text: promptPayload.preservePromptText,
-        library_prompt_id: promptPayload.libraryPromptId,
-        scene_description: String(entry?.assignedScene || '').trim(),
-        mood: String(entry?.assignedMood || '').trim(),
-        era: String(entry?.assignedEra || '').trim(),
-        selected_cover_id: selectedCoverId,
-        selected_cover_book_number: selectedCoverBookNumber,
-        quality_score: null,
-        cost_usd: 0,
-        generated_image_blob: null,
-        composited_image_blob: null,
-        started_at: null,
-        completed_at: null,
-        error: null,
-        results_json: null,
-        retries: 0,
-        _elapsed: 0,
-        _subStatus: '',
-        _compositeFailed: false,
-        _compositeError: null,
-        created_at: new Date().toISOString(),
-      });
+    const { jobs, validationError } = buildIterateGenerationJobs({
+      bookId,
+      book,
+      selectedModels,
+      variantEntries,
+      selectedCoverId,
+      selectedCoverBookNumber,
     });
 
     if (validationError) {
@@ -2612,19 +2717,25 @@ window.Pages.iterate = {
       return;
     }
 
-    const completed = jobs.filter((job) => job.status === 'completed').length;
-    if (count) count.textContent = `${completed} completed · ${jobs.length} total`;
+    const sortedJobs = sortIterateResultJobs(jobs, _resultsSortMode);
+    const completed = sortedJobs.filter((job) => job.status === 'completed').length;
+    if (count) count.textContent = `${completed} completed · ${sortedJobs.length} total`;
     const recentRunIds = new Set(Array.isArray(_lastGeneratedJobIds) ? _lastGeneratedJobIds : []);
     const saveAllJobs = (recentRunIds.size
-      ? jobs.filter((job) => recentRunIds.has(job.id))
-      : jobs)
+      ? sortedJobs.filter((job) => recentRunIds.has(job.id))
+      : sortedJobs)
       .filter((job) => String(job.status || '') === 'completed');
     if (resultsActionsEl) {
-      resultsActionsEl.innerHTML = saveAllJobs.length
-        ? `<button class="btn btn-secondary btn-sm" id="iterSaveAllBtn">Save All (${saveAllJobs.length})</button>`
-        : '';
+      resultsActionsEl.innerHTML = `
+        <select class="form-select" id="iterResultsSort" style="min-width:180px;max-width:180px;">
+          <option value="model" ${_resultsSortMode === 'model' ? 'selected' : ''}>Sort: Model</option>
+          <option value="variant" ${_resultsSortMode === 'variant' ? 'selected' : ''}>Sort: Variant</option>
+          <option value="newest" ${_resultsSortMode === 'newest' ? 'selected' : ''}>Sort: Newest</option>
+        </select>
+        ${saveAllJobs.length ? `<button class="btn btn-secondary btn-sm" id="iterSaveAllBtn">Save All (${saveAllJobs.length})</button>` : ''}
+      `;
     }
-    grid.innerHTML = jobs.map((job) => {
+    grid.innerHTML = sortedJobs.map((job) => {
       const previewSources = resolveCompositePreviewSources(job, 'display');
       const src = previewSources[0] || '';
       const fallbackSrc = previewSources[1] || '';
@@ -2636,6 +2747,9 @@ window.Pages.iterate = {
       const errorText = status === 'failed' ? String(job.error || '').trim() : '';
       const saveResultState = saveResultButtonState(job);
       const saveRawState = saveRawButtonState(job);
+      const styleLabel = String(job.style_label || 'Default').trim() || 'Default';
+      const variantLabel = `V${Math.max(1, Number(job.variant || 1))}`;
+      const modelLabel = modelIdToLabel(job.model);
       return `
         <div class="result-card ${hasPreview ? '' : 'result-card-empty'}" ${hasPreview ? `data-view="${job.id}"` : ''}>
           ${hasPreview
@@ -2649,7 +2763,8 @@ window.Pages.iterate = {
             <div class="quality-meter">
               <div class="quality-bar"><div class="quality-fill ${qualityClass(quality)}" style="width:${Math.round(quality * 100)}%"></div></div>
             </div>
-            <div class="card-meta">$${Number(job.cost_usd || 0).toFixed(3)} · ${job.style_label || 'Default'}</div>
+            <div class="card-meta">${escapeHtml(modelLabel)} · ${escapeHtml(variantLabel)} · ${escapeHtml(styleLabel)}</div>
+            <div class="card-meta">$${Number(job.cost_usd || 0).toFixed(3)}</div>
             ${errorText ? `<div class="card-meta text-danger">${errorText}</div>` : ''}
             <div class="flex gap-4 mt-8 result-card-actions">
               <button class="btn btn-secondary btn-sm" data-dl-comp="${job.id}" ${showDownloads ? '' : 'disabled'}>⬇ Download</button>
@@ -2663,6 +2778,13 @@ window.Pages.iterate = {
         </div>
       `;
     }).join('');
+
+    document.getElementById('iterResultsSort')?.addEventListener('change', (event) => {
+      const target = event.target;
+      if (!(target instanceof HTMLSelectElement)) return;
+      _resultsSortMode = String(target.value || 'model').trim() || 'model';
+      this.loadExistingResults();
+    });
 
     grid.querySelectorAll('img.thumb').forEach((img) => {
       img.addEventListener('error', () => {
@@ -2977,10 +3099,11 @@ window.Pages.iterate = {
     button.textContent = 'Saving...';
 
     try {
+      const payload = saveRawRequestPayloadForJob(job);
       const resp = await fetch('/api/save-raw', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ job_id: backendJobId }),
+        body: JSON.stringify(payload),
       });
       const data = await resp.json();
       if (!resp.ok || !data.ok) {
@@ -2998,9 +3121,11 @@ window.Pages.iterate = {
       this.loadExistingResults();
 
       if (partial) {
-        Toast.warning('Saved locally; Google Drive unavailable.');
+        Toast.warning(job.save_raw_local_folder
+          ? `Saved locally; Google Drive unavailable. ${job.save_raw_local_folder}`
+          : 'Saved locally; Google Drive unavailable.');
       } else {
-        Toast.success('Saved raw package.');
+        Toast.success(job.save_raw_drive_url ? 'Saved raw package to Drive.' : 'Saved raw package.');
       }
     } catch (err) {
       button.textContent = '✗ Failed';

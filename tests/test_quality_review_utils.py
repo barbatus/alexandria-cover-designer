@@ -1192,9 +1192,9 @@ def test_save_raw_payload_for_job_returns_partial_when_drive_upload_fails(
             "ok": False,
             "folder_id": "drive-folder-1",
             "drive_url": "https://drive.google.com/drive/folders/drive-folder-1",
-            "uploaded": [{"name": "Temple Dawn – A. Writer (generated raw).jpg"}],
-            "failed": [{"name": "Temple Dawn – A. Writer.ai", "error": "storageQuotaExceeded"}],
-            "warning": "Drive upload partially completed: 5 uploaded, 1 failed.",
+            "uploaded": [{"name": "Temple_Dawn_V1_Saved_Cover_raw.png"}],
+            "failed": [{"name": "Temple_Dawn_V1_Saved_Cover_composite.png", "error": "storageQuotaExceeded"}],
+            "warning": "Drive upload partially completed: 1 uploaded, 1 failed.",
         },
     )
 
@@ -1204,8 +1204,10 @@ def test_save_raw_payload_for_job_returns_partial_when_drive_upload_fails(
     assert payload["status"] == "partial"
     assert payload["retry_available"] is True
     assert payload["drive_folder_id"] == "drive-folder-1"
-    assert len(payload["saved_files"]) == 6
-    assert {Path(path).suffix for path in payload["saved_files"]} == {".jpg", ".pdf", ".ai"}
+    assert payload["raw_file_name"] == "Temple_Dawn_V1_Saved_Cover_raw.png"
+    assert payload["composite_file_name"] == "Temple_Dawn_V1_Saved_Cover_composite.png"
+    assert len(payload["saved_files"]) == 2
+    assert {Path(path).suffix for path in payload["saved_files"]} == {".png"}
     assert all(Path(path).exists() for path in payload["saved_files"])
     assert "Drive upload partially completed" in str(payload["warning"])
 
@@ -1266,6 +1268,69 @@ def test_save_raw_context_uses_unique_package_folder_per_result(tmp_path: Path):
     assert Path(first_context["local_folder"]) != Path(second_context["local_folder"])
     assert "job-alpha" in str(first_context["package_folder_name"])
     assert "job-beta" in str(second_context["package_folder_name"])
+
+
+def test_save_raw_context_uses_display_variant_and_style_for_png_names(tmp_path: Path):
+    cfg = _build_runtime_for_startup_checks(tmp_path)
+    cfg.book_catalog_path.write_text(
+        json.dumps([{"number": 4, "title": "Emma", "author": "Jane Austen"}]),
+        encoding="utf-8",
+    )
+    raw_path = cfg.output_dir / "raw_art" / "4" / "job-emma_variant_1_openrouter_google_gemini-3-pro-image-preview.png"
+    comp_path = cfg.output_dir / "saved_composites" / "4" / "job-emma_variant_1_openrouter_google_gemini-3-pro-image-preview.jpg"
+    raw_path.parent.mkdir(parents=True, exist_ok=True)
+    comp_path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (64, 64), (15, 25, 35)).save(raw_path, format="PNG")
+    Image.new("RGB", (64, 64), (35, 25, 15)).save(comp_path, format="JPEG")
+
+    job = qr.job_store.JobRecord(
+        id="job-emma",
+        idempotency_key="idem-job-emma",
+        job_type="generate_cover",
+        status="completed",
+        catalog_id="classics",
+        book_number=4,
+        payload={},
+        result={
+            "results": [
+                {
+                    "success": True,
+                    "variant": 1,
+                    "model": "openrouter/google/gemini-3-pro-image-preview",
+                    "raw_art_path": qr._to_project_relative(raw_path),
+                    "saved_composited_path": qr._to_project_relative(comp_path),
+                }
+            ]
+        },
+        error={},
+        attempts=1,
+        max_attempts=3,
+        priority=100,
+        retry_after="",
+        created_at=datetime.now(timezone.utc).isoformat(),
+        updated_at=datetime.now(timezone.utc).isoformat(),
+        started_at=datetime.now(timezone.utc).isoformat(),
+        finished_at=datetime.now(timezone.utc).isoformat(),
+        worker_id="",
+    )
+
+    context = qr._save_raw_context_for_job(
+        runtime=cfg,
+        job=job,
+        expected={
+            "display_variant": 3,
+            "style_label": "Romantic Realism",
+            "expected_model": "openrouter/google/gemini-3-pro-image-preview",
+            "expected_raw_art_path": qr._to_project_relative(raw_path),
+            "expected_saved_composited_path": qr._to_project_relative(comp_path),
+        },
+    )
+
+    assert context["variant"] == 3
+    assert context["style_label"] == "Romantic Realism"
+    assert context["package_folder_name"].startswith("save-raw__job-emma__variant-3__")
+    assert context["raw_file_name"] == "Emma_V3_Romantic_Realism_raw.png"
+    assert context["comp_file_name"] == "Emma_V3_Romantic_Realism_composite.png"
 
 
 def test_save_raw_context_refuses_mutable_tmp_only_artifacts(tmp_path: Path):
@@ -1463,6 +1528,15 @@ def test_save_raw_payload_uses_nested_drive_folder_parts_per_result(
     comp_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (64, 64), (13, 23, 33)).save(raw_path, format="PNG")
     Image.new("RGB", (64, 64), (43, 53, 63)).save(comp_path, format="JPEG")
+    qr._write_saved_composite_manifest(
+        composite_path=comp_path,
+        job_token="job-emma",
+        book_number=4,
+        variant=3,
+        model_token="openrouter_google_gemini-3-pro-image-preview",
+        raw_art_source=raw_path,
+        raw_art_path_token=qr._to_project_relative(raw_path),
+    )
 
     job = qr.job_store.JobRecord(
         id="job-emma",
@@ -1515,6 +1589,12 @@ def test_save_raw_payload_uses_nested_drive_folder_parts_per_result(
     assert payload["status"] == "saved"
     assert captured["folder_parts"][0] == "4. Emma - Jane Austen"
     assert captured["folder_parts"][1].startswith("save-raw__job-emma__variant-3__")
+    assert payload["raw_file_name"] == "Emma_V3_Saved_Cover_raw.png"
+    assert payload["composite_file_name"] == "Emma_V3_Saved_Cover_composite.png"
+    assert {Path(path).name for path in payload["saved_files"]} == {
+        "Emma_V3_Saved_Cover_raw.png",
+        "Emma_V3_Saved_Cover_composite.png",
+    }
 
 
 def test_save_result_payload_for_job_uses_prompt45_drive_folder_and_png_name(

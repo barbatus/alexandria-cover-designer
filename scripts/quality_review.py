@@ -15185,11 +15185,14 @@ def _row_variant_number(row: dict[str, Any] | None) -> int:
 def _save_raw_expectation_from_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
     source = payload if isinstance(payload, dict) else {}
     variant_value = source.get("expected_variant", source.get("variant", 0))
+    display_variant_value = source.get("display_variant", 0)
     model_value = source.get("expected_model", source.get("model", ""))
     raw_art_value = source.get("expected_raw_art_path", source.get("raw_art_path", ""))
     saved_composited_value = source.get("expected_saved_composited_path", source.get("saved_composited_path", ""))
     return {
         "variant": max(0, _safe_int(variant_value, 0)),
+        "display_variant": max(0, _safe_int(display_variant_value, 0)),
+        "style_label": str(source.get("style_label", "") or "").strip(),
         "model": str(model_value or "").strip(),
         "raw_art_path": str(raw_art_value or "").strip(),
         "saved_composited_path": str(saved_composited_value or "").strip(),
@@ -15303,9 +15306,14 @@ def _resolve_durable_composite_image_path(*, runtime: config.Config, row: dict[s
     return None
 
 
-def _save_raw_package_folder_name(*, job: job_store.JobRecord, row: dict[str, Any]) -> str:
+def _save_raw_package_folder_name(
+    *,
+    job: job_store.JobRecord,
+    row: dict[str, Any],
+    display_variant: int | None = None,
+) -> str:
     job_token = _generation_artifact_job_token(job_id=str(job.id or "").strip(), row=row)
-    variant = max(1, _row_variant_number(row))
+    variant = max(1, int(display_variant or 0) or _row_variant_number(row))
     model_token = image_generator._model_to_directory(str(row.get("model", "") or "unknown"))  # type: ignore[attr-defined]
     safe_model_token = _display_filename_token(model_token, allow_en_dash=False).replace(" ", "_")
     return f"save-raw__{job_token}__variant-{variant}__{safe_model_token}"
@@ -15352,6 +15360,53 @@ def _display_filename_token(text: str, *, allow_en_dash: bool = True) -> str:
         token = token.replace("–", "-")
     token = re.sub(r"\s+", " ", token).strip()
     return token or "Untitled"
+
+
+def _save_raw_display_variant(*, expected: dict[str, Any] | None, row: dict[str, Any]) -> int:
+    requested = max(0, _safe_int((expected or {}).get("display_variant"), 0))
+    if requested > 0:
+        return requested
+    return max(1, _row_variant_number(row))
+
+
+def _save_raw_style_label(
+    *,
+    expected: dict[str, Any] | None,
+    job: job_store.JobRecord,
+    row: dict[str, Any],
+) -> str:
+    if isinstance(expected, dict):
+        requested = str(expected.get("style_label", "") or "").strip()
+        if requested:
+            return requested
+    payload_style = ""
+    if isinstance(job.payload, dict):
+        payload_style = str(job.payload.get("style_label", "") or "").strip()
+    return str(
+        payload_style
+        or row.get("style_label")
+        or row.get("prompt_name")
+        or "Saved Cover"
+    ).strip()
+
+
+def _save_raw_filename_prefix(*, title: str, variant: int, style_label: str) -> str:
+    title_token = _safe_filename_component(title)
+    style_token = _safe_filename_component(style_label or "Saved Cover")
+    return f"{title_token}_V{max(1, int(variant))}_{style_token}"
+
+
+def _export_png_asset(
+    *,
+    source_image: Path | None,
+    local_folder: Path,
+    file_name: str,
+) -> str | None:
+    if source_image is None or not source_image.exists():
+        return None
+    destination = local_folder / file_name
+    _copy_image_with_format(source_image, destination, format_name="PNG")
+    return str(destination)
 
 
 def _copy_image_with_format(source: Path, destination: Path, *, format_name: str) -> Path:
@@ -15704,8 +15759,18 @@ def _save_raw_context_for_job(
         or "0"
     ).strip()
     book_folder_name = f"{catalog_number}. {title} - {author}"
-    file_stem = f"{title} – {author}"
-    package_folder_name = _save_raw_package_folder_name(job=job, row=selected_row)
+    display_variant = _save_raw_display_variant(expected=expected, row=selected_row)
+    style_label = _save_raw_style_label(expected=expected, job=job, row=selected_row)
+    file_prefix = _save_raw_filename_prefix(
+        title=str(book.get("title", f"Book {int(job.book_number or 0)}")),
+        variant=display_variant,
+        style_label=style_label,
+    )
+    package_folder_name = _save_raw_package_folder_name(
+        job=job,
+        row=selected_row,
+        display_variant=display_variant,
+    )
     raw_source = _resolve_durable_raw_image_path(runtime=runtime, row=selected_row)
     comp_source = _resolve_durable_composite_image_path(runtime=runtime, row=selected_row)
     if raw_source is None and comp_source is None:
@@ -15728,11 +15793,12 @@ def _save_raw_context_for_job(
         "folder_name": package_folder_name,
         "local_folder": _local_save_raw_root(runtime=runtime) / book_folder_name / package_folder_name,
         "raw_source": raw_source,
-        "raw_basename": f"{file_stem} (generated raw)",
+        "raw_file_name": f"{file_prefix}_raw.png",
         "comp_source": comp_source,
-        "comp_basename": file_stem,
-        "variant": _row_variant_number(selected_row),
+        "comp_file_name": f"{file_prefix}_composite.png",
+        "variant": display_variant,
         "model": str(selected_row.get("model", "") or "").strip(),
+        "style_label": style_label,
         "selected_row": selected_row,
     }
 
@@ -15751,45 +15817,31 @@ def _materialize_save_raw_package(
     saved_files: list[str] = []
 
     raw_source = context["raw_source"]
+    raw_file_name = str(context["raw_file_name"])
     if isinstance(raw_source, Path) and raw_source.exists():
-        saved_files.extend(
-            _export_asset_triplet(
-                source_image=raw_source,
-                existing_pdf=None,
-                existing_ai=None,
-                local_folder=local_folder,
-                base_filename=str(context["raw_basename"]),
-            )
+        saved_path = _export_png_asset(
+            source_image=raw_source,
+            local_folder=local_folder,
+            file_name=raw_file_name,
         )
+        if saved_path:
+            saved_files.append(saved_path)
     else:
-        missing_files.extend(
-            [
-                f"{context['raw_basename']}.jpg",
-                f"{context['raw_basename']}.pdf",
-                f"{context['raw_basename']}.ai",
-            ]
-        )
+        missing_files.append(raw_file_name)
         warnings.append("Generated raw image not found.")
 
     comp_source = context["comp_source"]
+    comp_file_name = str(context["comp_file_name"])
     if isinstance(comp_source, Path) and comp_source.exists():
-        saved_files.extend(
-            _export_asset_triplet(
-                source_image=comp_source,
-                existing_pdf=None,
-                existing_ai=None,
-                local_folder=local_folder,
-                base_filename=str(context["comp_basename"]),
-            )
+        saved_path = _export_png_asset(
+            source_image=comp_source,
+            local_folder=local_folder,
+            file_name=comp_file_name,
         )
+        if saved_path:
+            saved_files.append(saved_path)
     else:
-        missing_files.extend(
-            [
-                f"{context['comp_basename']}.jpg",
-                f"{context['comp_basename']}.pdf",
-                f"{context['comp_basename']}.ai",
-            ]
-        )
+        missing_files.append(comp_file_name)
         warnings.append("Composite image not found.")
 
     if not saved_files:
@@ -15807,6 +15859,9 @@ def _materialize_save_raw_package(
         "warning": " ".join(warnings).strip() or None,
         "variant": context["variant"],
         "model": context["model"],
+        "style_label": context["style_label"],
+        "raw_file_name": raw_file_name,
+        "composite_file_name": comp_file_name,
     }
 
 
@@ -15847,6 +15902,9 @@ def _save_raw_payload_for_job(
         "missing_files": local_payload["missing_files"],
         "variant": local_payload["variant"],
         "model": local_payload["model"],
+        "style_label": local_payload["style_label"],
+        "raw_file_name": local_payload["raw_file_name"],
+        "composite_file_name": local_payload["composite_file_name"],
         "status": saved_status,
         "drive_ok": bool(drive_payload.get("ok", False)),
         "drive_url": drive_payload.get("drive_url"),

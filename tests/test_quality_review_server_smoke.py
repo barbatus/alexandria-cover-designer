@@ -405,6 +405,70 @@ def test_quality_review_server_save_raw_rejects_mismatched_card_selector(tmp_pat
         _stop_server(process)
 
 
+def test_quality_review_server_save_raw_uses_display_variant_and_style_for_png_files(tmp_path: Path):
+    config_dir = tmp_path / "config"
+    input_dir = tmp_path / "input"
+    output_dir = tmp_path / "output"
+    tmp_dir = tmp_path / "tmp"
+    data_dir = tmp_path / "data"
+    jobs_db_path = data_dir / "jobs.sqlite3"
+    _write_save_raw_smoke_config(config_dir=config_dir, input_dir=input_dir, output_dir=output_dir)
+    raw_art_path = output_dir / "raw_art" / "4" / "job-emma-a_variant_1_openrouter_google_gemini-3-pro-image-preview.png"
+    saved_composited_path = output_dir / "saved_composites" / "4" / "job-emma-a_variant_1_openrouter_google_gemini-3-pro-image-preview.jpg"
+    _write_image(raw_art_path, (24, 44, 84), format_name="PNG")
+    _write_image(saved_composited_path, (84, 44, 24), format_name="JPEG")
+    _seed_completed_save_raw_job(
+        jobs_db_path=jobs_db_path,
+        job_id="job-emma-a",
+        book_number=4,
+        variant=1,
+        model="openrouter/google/gemini-3-pro-image-preview",
+        raw_art_path=raw_art_path,
+        saved_composited_path=saved_composited_path,
+    )
+
+    process, base_url = _start_server(
+        extra_env={
+            "CATALOG_ID": "save-raw-smoke",
+            "CONFIG_DIR": str(config_dir),
+            "OUTPUT_DIR": str(output_dir),
+            "TMP_DIR": str(tmp_dir),
+            "DATA_DIR": str(data_dir),
+            "JOBS_DB_PATH": str(jobs_db_path),
+            "GOOGLE_CREDENTIALS_PATH": str(tmp_path / "missing-drive-creds.json"),
+            "GOOGLE_CREDENTIALS_JSON": "",
+        }
+    )
+    try:
+        status, payload = _request_json(
+            base_url,
+            "/api/save-raw",
+            method="POST",
+            payload={
+                "job_id": "job-emma-a",
+                "display_variant": 3,
+                "style_label": "Romantic Realism",
+                "expected_model": "openrouter/google/gemini-3-pro-image-preview",
+                "expected_raw_art_path": str(raw_art_path),
+                "expected_saved_composited_path": str(saved_composited_path),
+            },
+        )
+
+        assert status == 200
+        assert payload.get("status") == "partial"
+        assert payload.get("variant") == 3
+        assert payload.get("style_label") == "Romantic Realism"
+        assert str(payload.get("package_folder_name", "")).startswith("save-raw__job-emma-a__variant-3__")
+        assert payload.get("raw_file_name") == "Emma_V3_Romantic_Realism_raw.png"
+        assert payload.get("composite_file_name") == "Emma_V3_Romantic_Realism_composite.png"
+        assert {Path(path).name for path in payload.get("saved_files", [])} == {
+            "Emma_V3_Romantic_Realism_raw.png",
+            "Emma_V3_Romantic_Realism_composite.png",
+        }
+    finally:
+        _stop_server(process)
+
+
 def test_quality_review_server_save_raw_separates_same_book_results_into_unique_packages(tmp_path: Path):
     config_dir = tmp_path / "config"
     input_dir = tmp_path / "input"
@@ -492,8 +556,10 @@ def test_quality_review_server_save_raw_separates_same_book_results_into_unique_
         assert payload_a.get("local_folder") != payload_b.get("local_folder")
         assert payload_a.get("drive_ok") is False
         assert payload_b.get("drive_ok") is False
-        assert len(payload_a.get("saved_files", [])) == 6
-        assert len(payload_b.get("saved_files", [])) == 6
+        assert len(payload_a.get("saved_files", [])) == 2
+        assert len(payload_b.get("saved_files", [])) == 2
+        assert {Path(path).suffix for path in payload_a.get("saved_files", [])} == {".png"}
+        assert {Path(path).suffix for path in payload_b.get("saved_files", [])} == {".png"}
         assert all(Path(path).exists() for path in payload_a.get("saved_files", []))
         assert all(Path(path).exists() for path in payload_b.get("saved_files", []))
     finally:
