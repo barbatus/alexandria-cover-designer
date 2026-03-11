@@ -1240,6 +1240,7 @@ window.__ITERATE_TEST_HOOKS__.modelAvailability = ({ model, providerConnectivity
 window.__ITERATE_TEST_HOOKS__.defaultSelectedModelIds = ({ models, providerConnectivity, providerRuntime }) => (
   defaultSelectedModelIds(models || [], { providerConnectivity, providerRuntime })
 );
+window.__ITERATE_TEST_HOOKS__.fallbackModelsForSelection = (modelId) => fallbackModelsForSelection(modelId);
 window.__ITERATE_TEST_HOOKS__.buildVariantJobs = ({
   book,
   bookId,
@@ -1310,7 +1311,8 @@ function saveRawButtonState(job) {
 }
 
 function normalizedModelId(model) {
-  return String(model?.id || '').trim();
+  if (typeof model === 'string') return String(model).trim();
+  return String(model?.id || model?.model || '').trim();
 }
 
 function providerFromModel(modelId) {

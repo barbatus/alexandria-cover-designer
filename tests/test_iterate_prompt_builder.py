@@ -419,3 +419,17 @@ def test_iterate_variant_jobs_create_exactly_one_job_per_variant_with_rotating_m
     assert {job["variant"] for job in result["jobs"]} == {1, 2, 3, 4}
     assert len({job["prompt_template_id"] for job in result["jobs"]}) == 4
     assert len({job["scene_description"] for job in result["jobs"]}) == 4
+
+
+def test_iterate_fallback_models_for_nano_selection_are_populated():
+    result = _run_iterate_hook(
+        function_name="fallbackModelsForSelection",
+        payload="openrouter/google/gemini-3-pro-image-preview",
+    )
+
+    assert result == [
+        "openai/gpt-image-1-mini",
+        "openai/gpt-image-1",
+        "openrouter/openai/gpt-5-image-mini",
+        "openrouter/openai/gpt-5-image",
+    ]
