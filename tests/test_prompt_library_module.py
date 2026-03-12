@@ -214,11 +214,18 @@ def test_seeded_alexandria_base_prompts_use_full_canvas_no_medallion_language(tm
             "no floral border frame, no scrollwork frame."
         ) in prompt.negative_prompt
 
-    assert "Art Nouveau Pre-Raphaelite illustration style" in prompts["alexandria-base-classical-devotion"].prompt_template
-    assert (
-        "romantic Pre-Raphaelite realism with Art Nouveau influence"
-        in prompts["alexandria-base-romantic-realism"].prompt_template
-    )
+    classical = prompts["alexandria-base-classical-devotion"].prompt_template
+    romantic = prompts["alexandria-base-romantic-realism"].prompt_template
+
+    assert "Alphonse Mucha and Edward Burne-Jones" in classical
+    assert "#0a1628" in classical
+    assert "#c5941a" in classical
+    assert "visible gold leaf effect" in classical
+
+    assert "Dante Gabriel Rossetti and William Morris" in romantic
+    assert "#0e1f3d" in romantic
+    assert "#d4a017" in romantic
+    assert "Victorian botanical plate" in romantic
 
 
 def test_build_prompt_best_prompts_add_anchor(tmp_path: Path, monkeypatch):
