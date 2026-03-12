@@ -104,6 +104,12 @@ def test_iterate_html_keeps_cover_source_selector_outside_quick_controls():
     assert "coverSourceSelect" not in quick_block
 
 
+def test_iterate_html_preserves_resolved_prompt_requests():
+    iterate_html = (STATIC_DIR / "iterate.html").read_text(encoding="utf-8")
+    assert "compose_prompt: false" in iterate_html
+    assert "preserve_prompt_text: true" in iterate_html
+
+
 def test_static_html_uses_current_design_revision_token():
     offenders = []
     for path in _html_files():
