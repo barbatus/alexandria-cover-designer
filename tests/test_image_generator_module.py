@@ -294,12 +294,24 @@ def test_guardrailed_prompt_strips_text_and_frame_directions():
     raw = "Typography-led circular vignette composition with circular medallion illustration, ribbon banner and title text"
     guarded = ig._guardrailed_prompt(raw).lower()
     assert "typography-led" not in guarded
-    assert "circular vignette composition" in guarded
+    assert "circular vignette composition" not in guarded
     assert "circular medallion illustration" not in guarded
     assert "ribbon banner" not in guarded
     assert "mandatory output rules" in guarded
     assert "no text" in guarded
     assert "vivid, high-saturation painterly palette" in guarded
+
+
+def test_sanitize_prompt_text_preserves_negative_medallion_terms():
+    raw = (
+        "Book cover illustration only. No border, no frame, no medallion, no decorative edge. "
+        "Full scene composition filling the entire canvas, no circular framing."
+    )
+    sanitized = ig._sanitize_prompt_text(raw).lower()
+    assert "no medallion" in sanitized
+    assert "no circular framing" in sanitized
+    assert "no decorative edge" in sanitized
+    assert "no circular ." not in sanitized
 
 
 def test_content_guardrail_score_flags_rings_text_and_dullness():
@@ -326,6 +338,19 @@ def test_content_guardrail_score_flags_rings_text_and_dullness():
     score_vibrant, issues_vibrant, _metrics_vibrant = ig._content_guardrail_score(vibrant)
     assert score_vibrant < ig.MAX_CONTENT_VIOLATION_SCORE
     assert "low_vibrancy" not in issues_vibrant
+
+
+def test_content_guardrail_flags_circular_crop_artifact():
+    artifact = Image.new("RGBA", (256, 256), (244, 244, 244, 255))
+    draw = ImageDraw.Draw(artifact, "RGBA")
+    draw.ellipse((18, 18, 238, 238), fill=(28, 70, 128, 255))
+    draw.ellipse((26, 26, 230, 230), outline=(255, 230, 170, 255), width=4)
+    draw.rectangle((88, 108, 170, 160), fill=(210, 150, 88, 255))
+
+    score_artifact, issues_artifact, metrics_artifact = ig._content_guardrail_score(artifact)
+    assert score_artifact > ig.MAX_CONTENT_VIOLATION_SCORE
+    assert "circular_crop_artifact" in issues_artifact
+    assert float(metrics_artifact.get("circular_crop_penalty", 0.0)) > 0.26
 
 
 def test_content_guardrail_detects_rectangular_internal_frame():

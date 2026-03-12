@@ -129,11 +129,11 @@ window.StyleDiversifier = {
 
   buildDiversifiedPrompt(title, author, style) {
     const styleModifier = style?.modifier || 'Classical illustration using ruby red, emerald green, cobalt blue, amber gold, and ivory highlights.';
-    const canvasDirective = 'The final image must be a FULL rectangular canvas of solid painted scene — no circular boundaries, no vignette edges, no decorative rings. Think of this as a square painting that will later be cropped into a circle, NOT as a circular medallion with its own frame.';
+    const canvasDirective = 'The final image must be a FULL rectangular canvas of solid painted scene — no circular boundaries, no circular framing, no vignette edges, no decorative rings, no medallion composition. Treat it as a true edge-to-edge square painting with scene detail extending into the corners.';
     return [
       `Create a breathtaking, richly colored illustration for the classic book "${title}" by ${author}.`,
       'Identify the single most iconic, dramatic, and visually striking scene from this specific story — the moment readers remember most vividly.',
-      'No border, no frame, no decorative edge.',
+      'No border, no frame, no decorative edge, no medallion composition.',
       'Depict that scene as a luminous full-bleed narrative illustration for a luxury leather-bound edition.',
       'Adapt all motifs, costumes, architecture, and symbols strictly to this specific book; avoid cross-book visual clichés.',
       'Fill the entire rectangular composition with rich detail and vivid color — no empty space, no plain backgrounds.',

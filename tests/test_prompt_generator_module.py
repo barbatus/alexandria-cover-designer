@@ -104,6 +104,18 @@ def test_prompt_constraints_strip_typography_and_frame_directions():
     assert "full-bleed narrative scene" in constrained
 
 
+def test_prompt_constraints_preserve_negative_medallion_and_circular_terms():
+    raw = (
+        "Book cover illustration only. No border, no frame, no medallion, no decorative edge. "
+        "Full scene composition filling the entire canvas, no circular framing."
+    )
+    constrained = pg._ensure_prompt_constraints(raw).lower()
+    assert "no medallion" in constrained
+    assert "no circular framing" in constrained or "no circular frame" in constrained
+    assert "no decorative edge" in constrained
+    assert "no circular ." not in constrained
+
+
 def test_generate_all_prompts_and_save(tmp_path: Path):
     catalog_path = tmp_path / "catalog.json"
     templates_path = tmp_path / "templates.json"

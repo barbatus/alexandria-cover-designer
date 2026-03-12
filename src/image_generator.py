@@ -116,6 +116,7 @@ STRICT_SCENE_GUARDRAIL = (
     "Mandatory output rules: produce only the scene artwork. "
     "No text, no letters, no numbers, no words, no logos, no title design, no labels, "
     "no ribbons, no banners, no plaques, no inscriptions, no calligraphy, no medallion ring, "
+    "no medallion composition, no circular vignette, no circular framing, no circular crop, "
     "no frame, no border, no decorative edge, no seal, no coin, no emblem."
 )
 NO_ORNAMENT_GUARDRAIL = (
@@ -138,7 +139,8 @@ TEXT_ARTIFACT_ORNAMENT_TINY_MIN = 0.017
 ARTIFACT_RETRY_LIMIT = 3
 ARTIFACT_RETRY_APPEND = (
     "Retry instruction: scene artwork only. Absolutely no words, letters, numbers, logos, labels, ribbons, "
-    "banners, plaques, medallion rings, circular frames, ornamental borders, decorative edges, "
+    "banners, plaques, medallion rings, medallion compositions, circular frames, circular vignettes, "
+    "circular crops, ornamental borders, decorative edges, "
     "filigree, scrollwork, arabesques, ornamental curls, black ornamental silhouettes, or lace-like cutout motifs."
 )
 ALEXANDRIA_NEGATIVE_PROMPT = (
@@ -146,11 +148,12 @@ ALEXANDRIA_NEGATIVE_PROMPT = (
     "no labels, no watermarks, no signatures, no inscriptions of any kind. No modern elements, no photography, "
     "no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, "
     "no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, "
-    "no blurry medallion illustration, no off-centre composition, no white or light backgrounds."
+    "no blurry medallion illustration, no medallion composition, no circular vignette, no circular framing, "
+    "no off-centre composition, no white or light backgrounds."
 )
 _PROMPT_REMOVAL_PATTERNS: tuple[str, ...] = (
     r"\bcircular vignette composition\b",
-    r"(?<!no )\bcircular(?:\s+medallion)?(?:\s+frame)?\b",
+    r"(?<!no )\bcircular(?:\s+medallion)?(?:\s+frame|\s+framing)?\b",
     r"\btypography(?:[- ]led)?\b",
     r"\btext[- ]safe\b",
     r"\btitle[- ]safe\b",
@@ -171,8 +174,7 @@ _PROMPT_REMOVAL_PATTERNS: tuple[str, ...] = (
     r"\binner(?:\s+frame|\s+ring|\s+border)?\b",
     r"(?<!no )\bdecorative(?:\s+edge|\s+frame|\s+border)?\b",
     r"(?<!no )\bornamental(?:\s+border|\s+frame|\s+edge)?\b",
-    r"\bframing\b",
-    r"\bmedallion(?:\s+zone|\s+opening|\s+window)?\b",
+    r"(?<!no )\bmedallion(?:\s+(?:zone|opening|window|ring|frame|border|composition))?\b",
     r"\bgilt ornament language\b",
 )
 
@@ -265,6 +267,7 @@ def _is_artifact_generation_error(message: str) -> bool:
             "text_or_banner_artifact",
             "inner_frame_or_ring_artifact",
             "rectangular_frame_artifact",
+            "circular_crop_artifact",
             "content guardrail",
         )
     )
@@ -2605,6 +2608,71 @@ def _rectangular_frame_penalty(edge_map: np.ndarray, mask: np.ndarray) -> tuple[
     }
 
 
+def _circular_crop_penalty(rgb: np.ndarray, mask: np.ndarray) -> tuple[float, dict[str, float]]:
+    h, w = rgb.shape[:2]
+    if h <= 24 or w <= 24 or not np.any(mask):
+        return 0.0, {
+            "center_foreground_ratio": 0.0,
+            "outer_foreground_ratio": 0.0,
+            "corner_foreground_ratio": 0.0,
+            "corner_background_match_ratio": 0.0,
+            "corner_color_spread": 1.0,
+        }
+
+    patch_h = max(8, int(h * 0.16))
+    patch_w = max(8, int(w * 0.16))
+    corner_mask = np.zeros((h, w), dtype=bool)
+    corner_mask[:patch_h, :patch_w] = True
+    corner_mask[:patch_h, w - patch_w :] = True
+    corner_mask[h - patch_h :, :patch_w] = True
+    corner_mask[h - patch_h :, w - patch_w :] = True
+    corner_mask &= mask
+    if not np.any(corner_mask):
+        return 0.0, {
+            "center_foreground_ratio": 0.0,
+            "outer_foreground_ratio": 0.0,
+            "corner_foreground_ratio": 0.0,
+            "corner_background_match_ratio": 0.0,
+            "corner_color_spread": 1.0,
+        }
+
+    corner_pixels = rgb[corner_mask]
+    background = np.median(corner_pixels, axis=0)
+    background_delta = np.linalg.norm(rgb - background.reshape(1, 1, 3), axis=2)
+    corner_delta = background_delta[corner_mask]
+    threshold = max(28.0, float(np.percentile(corner_delta, 92)) + 10.0) if corner_delta.size else 28.0
+    foreground = (background_delta >= threshold) & mask
+
+    yy, xx = np.ogrid[:h, :w]
+    nx = (xx - ((w - 1.0) / 2.0)) / max(1.0, w / 2.0)
+    ny = (yy - ((h - 1.0) / 2.0)) / max(1.0, h / 2.0)
+    radial = np.sqrt((nx ** 2) + (ny ** 2))
+    center_band = mask & (radial <= 0.55)
+    outer_band = mask & (radial >= 0.82)
+
+    center_foreground_ratio = float(foreground[center_band].mean()) if np.any(center_band) else 0.0
+    outer_foreground_ratio = float(foreground[outer_band].mean()) if np.any(outer_band) else 0.0
+    corner_foreground_ratio = float(foreground[corner_mask].mean()) if np.any(corner_mask) else 0.0
+    corner_background_match_ratio = float((background_delta[corner_mask] < (threshold * 0.55)).mean()) if np.any(corner_mask) else 0.0
+    corner_color_spread = float(np.std((corner_pixels / 255.0).reshape(-1, 3))) if corner_pixels.size else 1.0
+
+    structure_penalty = (
+        (0.46 * _clip((center_foreground_ratio - 0.66) / 0.22))
+        + (0.32 * _clip((0.18 - outer_foreground_ratio) / 0.18))
+        + (0.22 * _clip((0.14 - corner_foreground_ratio) / 0.14))
+    )
+    flat_background_gate = _clip((0.12 - corner_color_spread) / 0.12)
+    background_match_gate = _clip((corner_background_match_ratio - 0.72) / 0.18)
+    penalty = structure_penalty * ((0.55 * background_match_gate) + (0.45 * flat_background_gate))
+    return _clip(penalty), {
+        "center_foreground_ratio": center_foreground_ratio,
+        "outer_foreground_ratio": outer_foreground_ratio,
+        "corner_foreground_ratio": corner_foreground_ratio,
+        "corner_background_match_ratio": corner_background_match_ratio,
+        "corner_color_spread": corner_color_spread,
+    }
+
+
 def _content_guardrail_score(image: Image.Image) -> tuple[float, list[str], dict[str, float]]:
     rgba = np.array(image.convert("RGBA"), dtype=np.uint8)
     rgb = rgba[..., :3].astype(np.float32)
@@ -2645,9 +2713,16 @@ def _content_guardrail_score(image: Image.Image) -> tuple[float, list[str], dict
 
     ring_penalty, ring_metrics = _ring_artifact_penalty(edge_map=edge_map, mask=mask)
     frame_penalty, frame_metrics = _rectangular_frame_penalty(edge_map=edge_map, mask=mask)
+    circular_crop_penalty, circular_metrics = _circular_crop_penalty(rgb=rgb, mask=mask)
     dull_penalty, color_metrics = _dull_palette_penalty(rgb=rgb, mask=mask)
 
-    score = (0.52 * text_penalty) + (0.30 * ring_penalty) + (0.28 * frame_penalty) + (0.18 * dull_penalty)
+    score = (
+        (0.44 * text_penalty)
+        + (0.22 * ring_penalty)
+        + (0.20 * frame_penalty)
+        + (0.34 * circular_crop_penalty)
+        + (0.16 * dull_penalty)
+    )
     score = _clip(score)
 
     issues: list[str] = []
@@ -2657,12 +2732,15 @@ def _content_guardrail_score(image: Image.Image) -> tuple[float, list[str], dict
         issues.append("inner_frame_or_ring_artifact")
     if frame_penalty > 0.22:
         issues.append("rectangular_frame_artifact")
+    if circular_crop_penalty > 0.26:
+        issues.append("circular_crop_artifact")
     if dull_penalty > 0.12:
         issues.append("low_vibrancy")
     metrics = {
         "text_penalty": float(text_penalty),
         "ring_penalty": float(ring_penalty),
         "frame_penalty": float(frame_penalty),
+        "circular_crop_penalty": float(circular_crop_penalty),
         "dull_penalty": float(dull_penalty),
         "tiny_component_ratio": float(tiny_ratio),
         "tiny_effective": float(tiny_effective),
@@ -2672,6 +2750,11 @@ def _content_guardrail_score(image: Image.Image) -> tuple[float, list[str], dict
         "ring_peaks": float(ring_metrics.get("ring_peaks", 0.0)),
         "frame_line_strength": float(frame_metrics.get("line_strength", 0.0)),
         "frame_vs_center_ratio": float(frame_metrics.get("frame_vs_center_ratio", 0.0)),
+        "circular_center_foreground_ratio": float(circular_metrics.get("center_foreground_ratio", 0.0)),
+        "circular_outer_foreground_ratio": float(circular_metrics.get("outer_foreground_ratio", 0.0)),
+        "circular_corner_foreground_ratio": float(circular_metrics.get("corner_foreground_ratio", 0.0)),
+        "circular_corner_background_match_ratio": float(circular_metrics.get("corner_background_match_ratio", 0.0)),
+        "circular_corner_color_spread": float(circular_metrics.get("corner_color_spread", 0.0)),
         "mean_saturation": float(color_metrics.get("mean_saturation", 0.0)),
     }
     return score, issues, metrics

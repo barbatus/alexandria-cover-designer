@@ -40,15 +40,16 @@ REQUIRED_PHRASE_VIVID = "vivid, high-saturation painterly color palette, colorfu
 REQUIRED_PHRASE_NO_EMPTY = "no empty space, no plain backgrounds"
 REQUIRED_PHRASE_CANVAS = (
     "The final image must be a FULL rectangular canvas of solid painted scene — "
-    "no circular boundaries, no vignette edges, no decorative rings. "
-    "Think of this as a square painting that will later be cropped into a circle, "
-    "NOT as a circular medallion with its own frame."
+    "no circular boundaries, no circular framing, no vignette edges, no decorative rings. "
+    "Treat the artwork as a true edge-to-edge square painting with scene detail extending to the corners, "
+    "not as a medallion, vignette, or framed emblem."
 )
 REQUIRED_PHRASE_NO_FRAME_RUNTIME = (
-    "no border, no frame, no circular border, no circular frame, no wreath, no garland, no vine ring, no floral ring"
+    "no border, no frame, no medallion, no decorative edge, no circular border, "
+    "no circular frame, no circular framing, no wreath, no garland, no vine ring, no floral ring"
 )
 REQUIRED_PHRASE_CANVAS_RUNTIME = (
-    "full rectangular canvas, no vignette edges, no decorative rings"
+    "full rectangular canvas, no vignette edges, no decorative rings, no circular framing"
 )
 REQUIRED_PHRASE_NO_ORNAMENT_RUNTIME = (
     "no filigree, no scrollwork, no arabesques, no ornamental curls, "
@@ -97,7 +98,7 @@ _REMOVAL_PATTERNS: tuple[str, ...] = (
     r"(?<!no )\blace(?:-like)?(?:\s+cutout)?(?:\s+motifs?)?\b",
     r"(?<!no )\bornamental(?:\s+border|\s+frame|\s+edge)?\b",
     r"(?<!no )\bdecorative(?:\s+edge|\s+frame|\s+border)?\b",
-    r"(?<!no )\bcircular(?:\s+medallion|\s+vignette|\s+frame|\s+boundary|\s+cropping)?\b",
+    r"(?<!no )\bcircular(?:\s+medallion|\s+vignette|\s+frame|\s+boundary|\s+cropping|\s+framing)?\b",
     r"\binner(?:\s+frame|\s+border|\s+ring)?\b",
     r"(?<!no )\bcircular frame\b",
     r"(?<!no )\bdecorative rings?\b",
@@ -109,8 +110,7 @@ _REMOVAL_PATTERNS: tuple[str, ...] = (
     r"\bnameplate\b",
     r"\bplaque\b",
     r"\bseal\b",
-    r"\bframing\b",
-    r"\bmedallion\s+(?:ring|frame|window|zone)\b",
+    r"(?<!no )\bmedallion(?:\s+(?:ring|frame|window|zone|border|composition))?\b",
     r"\bposter(?:\s+layout)?\b",
     r"\btitle(?:\s+treatment|\s+text)?\b",
     r"\btypography\b",
@@ -306,9 +306,9 @@ def build_diversified_prompt(
     motif_symbols = _limit_words(motif_symbols, max_words=14)
     canvas_directive = (
         "The final image must be a FULL rectangular canvas of solid painted scene — "
-        "no circular boundaries, no vignette edges, no decorative rings. "
-        "Think of this as a square painting that will later be cropped into a circle, "
-        "NOT as a circular medallion with its own frame."
+        "no circular boundaries, no circular framing, no vignette edges, no decorative rings. "
+        "Treat it as a true edge-to-edge square painting with scene detail extending into the corners, "
+        "not as a medallion, vignette, or framed emblem."
     )
     base = " ".join(
         [
@@ -447,6 +447,10 @@ def _prepend_missing_runtime_constraints(prompt: str) -> str:
         missing.append("no border")
     if "no frame" not in low:
         missing.append("no frame")
+    if "no medallion" not in low:
+        missing.append("no medallion")
+    if "no circular framing" not in low and "no circular frame" not in low:
+        missing.append("no circular framing")
     if "no text" not in low:
         missing.append("no text, no letters, no words, no typography")
     if "full rectangular canvas" not in low:
