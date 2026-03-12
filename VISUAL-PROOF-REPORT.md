@@ -1,10 +1,40 @@
 # VISUAL PROOF REPORT
 
-Date: 2026-03-10
+Date: 2026-03-12
 
-Last updated: `2026-03-08`
+Last updated: `2026-03-12`
 Deployment URL: `https://web-production-900a7.up.railway.app`
-Deployment ID: `87ac4e06-68e7-4089-82b0-18a810c5c0cb`
+Deployment ID: `e18bdf07-0352-463d-9371-7d9322d5ed2e`
+
+## 1.8 PROMPT-48C Enrichment Badge + Default Variants (2026-03-12)
+- Git commit:
+  - `9388657` — `Fix iterate enrichment badge retries`
+- Railway deploy:
+  - `e18bdf07-0352-463d-9371-7d9322d5ed2e` (`SUCCESS`)
+- Local validation before deploy:
+  - `node --check src/static/js/pages/iterate.js` -> `PASS`
+  - `python3 -m pytest -q tests/test_iterate_prompt_builder.py -k 'ui_defaults or variant_option_html or enrichment_badge_state or enrichment_retry_policy'` -> `PASS`
+  - note: the broader `tests/test_iterate_prompt_builder.py` file still has an unrelated pre-existing `science` wildcard mapping failure outside Prompt 48C scope
+- Live health after rollout:
+  - `GET /api/health` -> `status=ok`
+  - `healthy=true`
+  - `books_cataloged=2397`
+  - `uptime_seconds=124`
+- Live route/header proof:
+  - `GET /iterate` returned `HTTP/2 200`
+  - `Cache-Control: no-store` present
+- Live Iterate verification:
+  - fresh production load showed `Enrichment: Healthy (2397/2397 real)`
+  - enrichment summary showed `Real: 2397/2397. Generic: 0. Missing: 0.`
+  - fresh production load showed `Variants = 10`
+  - after selecting `3. Gulliver’s Travels into Several Remote Regions of the World`, setting `Variants = 7`, and changing `Style` to `BASE 4 — Romantic Realism`, the page still showed `Variants = 7`
+  - browser-side state proof after style change:
+    - `variantValue = "7"`
+    - `styleValue = "alexandria-base-romantic-realism"`
+    - `enrichmentBadge = "Enrichment: Healthy (2397/2397 real)"`
+- Visual proof artifacts:
+  - fresh live iterate load: `/private/tmp/alexandria-prompt48c/output/playwright/prompt48c/live-iterate-fresh-healthy-10.png`
+  - live style-change persistence proof: `/private/tmp/alexandria-prompt48c/output/playwright/prompt48c/live-iterate-style-change-variant-7.png`
 
 ## 1.7 PROMPT-22 Model Routing + Prompt Library + Save Raw (2026-03-08)
 - Git commits:
