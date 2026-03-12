@@ -128,3 +128,16 @@ def test_resolve_full_resolution_composite_source_rewrites_thumbnail_url_to_asse
     )
 
     assert result == "/api/asset?path=Output%20Covers%2Fsaved_composites%2F4%2Fcover%20image.jpg"
+
+
+def test_build_retry_prompt_stays_full_bleed_and_anti_medallion():
+    result = _run_app_hook(
+        "buildRetryPrompt",
+        "Book cover illustration only — no text. Exact Alexandria prompt.",
+    )
+
+    lowered = result.lower()
+    assert "full-bleed rectangular composition" in lowered
+    assert "no medallion" in lowered
+    assert "no vignette" in lowered
+    assert "circular vignette illustration centered and fully contained" not in lowered

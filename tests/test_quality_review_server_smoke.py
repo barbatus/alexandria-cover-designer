@@ -879,6 +879,7 @@ def test_quality_review_server_generate_dry_run_resolves_placeholder_prompt_from
                     "prompt": "Book cover illustration only — {SCENE}. The mood is {MOOD}. Era reference: {ERA}.",
                     "prompt_source": "custom",
                     "compose_prompt": False,
+                    "preserve_prompt_text": True,
                     "cover_source": "drive",
                     "async": True,
                     "dry_run": True,
@@ -891,6 +892,8 @@ def test_quality_review_server_generate_dry_run_resolves_placeholder_prompt_from
             body = json.loads(response.read().decode("utf-8"))
         payload = body.get("job", {}).get("payload", {})
         prompt = str(payload.get("prompt", "")).strip()
+        assert payload.get("compose_prompt") is False
+        assert payload.get("preserve_prompt_text") is True
         assert "{SCENE}" not in prompt
         assert "{MOOD}" not in prompt
         assert "{ERA}" not in prompt

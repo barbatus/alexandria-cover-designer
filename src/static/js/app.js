@@ -328,7 +328,7 @@ window.JobQueue = {
       while (attempts < this.MAX_RETRIES + 1) {
         attempts += 1;
         const retryPrompt = attempts > 1
-          ? `${job.prompt} IMPORTANT: This must be a circular vignette illustration centered and fully contained.`
+          ? buildRetryPrompt(job.prompt)
           : job.prompt;
         const currentBookRow = DB.dbGet('books', Number(job.book_id || 0))
           || DB.dbGetAll('books').find((row) => Number(row?.id || 0) === Number(job.book_id || 0))
@@ -524,6 +524,10 @@ window.JobQueue = {
   },
 };
 
+function buildRetryPrompt(prompt) {
+  return `${String(prompt || '').trim()} IMPORTANT: Retry with a visibly different full-bleed rectangular composition and stronger palette separation. No medallion, no vignette, no border, no text.`.trim();
+}
+
 window.uuid = () => {
   if (crypto.randomUUID) return crypto.randomUUID();
   return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -650,6 +654,7 @@ window.__APP_TEST_HOOKS__.buildProjectThumbnailUrl = (value, size = 'large', ver
   window.buildProjectThumbnailUrl(value, size, versionToken)
 );
 window.__APP_TEST_HOOKS__.resolveFullResolutionCompositeSource = (value) => resolveFullResolutionCompositeSource(value);
+window.__APP_TEST_HOOKS__.buildRetryPrompt = (value) => buildRetryPrompt(value);
 
 function warnIfSuspiciousCompositeBlob(blob, source) {
   if (!(blob instanceof Blob)) return;
