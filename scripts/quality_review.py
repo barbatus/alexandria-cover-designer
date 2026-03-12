@@ -127,6 +127,12 @@ except ModuleNotFoundError:  # pragma: no cover
 
 logger = get_logger(__name__)
 
+STYLE_EDGE_TRIM_PROMPT_MARKERS = {
+    "alphonse mucha and edward burne-jones": "base1",
+    "dante gabriel rossetti and william morris": "base4",
+}
+STYLE_EDGE_TRIM_RATIO = 0.10
+
 REVIEW_DATA_PATH = PROJECT_ROOT / "data" / "review_data.json"
 ITERATE_DATA_PATH = PROJECT_ROOT / "data" / "iterate_data.json"
 COMPARE_DATA_PATH = PROJECT_ROOT / "data" / "compare_data.json"
@@ -1950,6 +1956,47 @@ def _serialize_generation_results(
     return serialized
 
 
+def _apply_style_edge_trim(
+    *,
+    results: list[image_generator.GenerationResult],
+    trim_ratio: float = STYLE_EDGE_TRIM_RATIO,
+) -> None:
+    ratio = max(0.0, min(float(trim_ratio), 0.2))
+    if ratio <= 0:
+        return
+    for row in results:
+        prompt_text = " ".join(str(getattr(row, "prompt", "") or "").split()).strip().lower()
+        style_token = next(
+            (label for marker, label in STYLE_EDGE_TRIM_PROMPT_MARKERS.items() if marker in prompt_text),
+            "",
+        )
+        image_path = getattr(row, "image_path", None)
+        if not style_token:
+            continue
+        if not bool(getattr(row, "success", False)) or image_path is None:
+            continue
+        path = Path(image_path)
+        if not path.exists():
+            continue
+        try:
+            with Image.open(path) as image:
+                width, height = image.size
+                dx = max(1, int(width * ratio))
+                dy = max(1, int(height * ratio))
+                if (width - (2 * dx)) < 64 or (height - (2 * dy)) < 64:
+                    continue
+                trimmed = image.crop((dx, dy, width - dx, height - dy)).resize((width, height), Image.Resampling.LANCZOS)
+                trimmed.save(path)
+            logger.info(
+                "Applied style edge trim to %s for %s (ratio=%.3f)",
+                path,
+                style_token,
+                ratio,
+            )
+        except Exception as exc:
+            logger.warning("Failed to apply style edge trim to %s: %s", path, exc)
+
+
 def _generation_artifact_job_token(*, job_id: str = "", row: dict[str, Any] | None = None) -> str:
     explicit = re.sub(r"[^A-Za-z0-9_-]+", "", str(job_id or "").strip())[:64]
     if explicit:
@@ -2602,6 +2649,7 @@ def _execute_generation_payload(
                 cancel_checker=_cancel_checker if job_id else None,
                 preserve_prompt_text=preserve_prompt_text,
             )
+            _apply_style_edge_trim(results=results)
             serialized = _serialize_generation_results(runtime=runtime, book=book, results=results, job_id=job_id)
             if library_prompt_id:
                 for row in serialized:

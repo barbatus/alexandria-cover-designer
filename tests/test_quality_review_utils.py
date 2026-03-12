@@ -23,6 +23,27 @@ def test_cache_key_stable_and_sorted():
     assert key == "classics:/api/x?a=z&b=1,2"
 
 
+def test_apply_style_edge_trim_crops_matching_prompt_edges(tmp_path: Path):
+    image_path = tmp_path / "bordered.png"
+    image = Image.new("RGB", (100, 100), (240, 240, 240))
+    for x in range(100):
+        for y in range(100):
+            if x < 10 or y < 10 or x >= 90 or y >= 90:
+                image.putpixel((x, y), (8, 12, 24))
+    image.save(image_path)
+
+    row = SimpleNamespace(
+        prompt="Rendered in the style of Alphonse Mucha and Edward Burne-Jones.",
+        image_path=image_path,
+        success=True,
+    )
+
+    qr._apply_style_edge_trim(results=[row], trim_ratio=0.10)
+
+    with Image.open(image_path) as trimmed:
+        assert trimmed.getpixel((0, 0)) != (8, 12, 24)
+
+
 def test_performance_summary_payload_reports_quantiles(monkeypatch: pytest.MonkeyPatch):
     runtime = SimpleNamespace(catalog_id="classics")
     sample_rows = [
