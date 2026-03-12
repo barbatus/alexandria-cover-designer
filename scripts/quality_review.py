@@ -160,6 +160,8 @@ SAVE_RAW_DRIVE_PROBE_TIMEOUT_SECONDS = max(0.1, float(os.getenv("SAVE_RAW_DRIVE_
 SAVE_RAW_DRIVE_PROBE_DELETE_ATTEMPTS = max(1, int(os.getenv("SAVE_RAW_DRIVE_PROBE_DELETE_ATTEMPTS", "6")))
 SAVE_RAW_DRIVE_PROBE_DELETE_DELAY_SECONDS = max(0.0, float(os.getenv("SAVE_RAW_DRIVE_PROBE_DELETE_DELAY_SECONDS", "0.1")))
 SAVE_TO_DRIVE_RESPONSE_TIMEOUT_SECONDS = max(0.1, float(os.getenv("SAVE_TO_DRIVE_RESPONSE_TIMEOUT_SECONDS", "4.5")))
+SAVE_RAW_RESPONSE_TIMEOUT_SECONDS = max(0.1, float(os.getenv("SAVE_RAW_RESPONSE_TIMEOUT_SECONDS", "0.5")))
+SAVE_RESULT_RESPONSE_TIMEOUT_SECONDS = max(0.1, float(os.getenv("SAVE_RESULT_RESPONSE_TIMEOUT_SECONDS", "10")))
 SAVE_PROMPT_DRIVE_SUBDIR = "saved_prompts"
 FALLBACK_FAVICON_SVG = (
     b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
@@ -15258,12 +15260,11 @@ def _copy_pdf_bytes_as_ai(source_pdf: Path, destination_ai: Path) -> Path:
     return destination_ai
 
 
-def _resolve_composite_companion_for_job(
+def _resolve_composite_companion_for_row(
     *,
-    job: job_store.JobRecord,
+    row: dict[str, Any] | None,
     suffix: str,
 ) -> Path | None:
-    row = _primary_job_result_row(job)
     if not isinstance(row, dict):
         return None
     key = "composited_pdf_path" if suffix == ".pdf" else "composited_ai_path"
@@ -15783,11 +15784,12 @@ def _materialize_save_raw_package(
 
     comp_source = context["comp_source"]
     if isinstance(comp_source, Path) and comp_source.exists():
+        selected_row = context.get("selected_row")
         saved_files.extend(
             _export_asset_triplet(
                 source_image=comp_source,
-                existing_pdf=None,
-                existing_ai=None,
+                existing_pdf=_resolve_composite_companion_for_row(row=selected_row, suffix=".pdf"),
+                existing_ai=_resolve_composite_companion_for_row(row=selected_row, suffix=".ai"),
                 local_folder=local_folder,
                 base_filename=str(context["comp_basename"]),
             )
@@ -15835,6 +15837,7 @@ def _save_raw_payload_for_job(
             str(local_payload.get("package_folder_name", "") or "").strip(),
         ],
         parent_folder_id=SAVE_RAW_DRIVE_FOLDER_ID,
+        timeout_seconds=SAVE_RAW_RESPONSE_TIMEOUT_SECONDS,
         operation_name="Save Raw",
     )
     warnings = [
@@ -15944,8 +15947,8 @@ def _materialize_save_result_package(
 
     saved_files = _export_asset_triplet(
         source_image=comp_source,
-        existing_pdf=None,
-        existing_ai=None,
+        existing_pdf=_resolve_composite_companion_for_row(row=context.get("selected_row"), suffix=".pdf"),
+        existing_ai=_resolve_composite_companion_for_row(row=context.get("selected_row"), suffix=".ai"),
         local_folder=local_folder,
         base_filename=str(context["comp_basename"]),
     )
@@ -15979,6 +15982,7 @@ def _save_result_payload_for_job(
             str(local_payload.get("package_folder_name", "") or "").strip(),
         ],
         parent_folder_id=SAVE_RESULT_DRIVE_FOLDER_ID,
+        timeout_seconds=SAVE_RESULT_RESPONSE_TIMEOUT_SECONDS,
         operation_name="Save Result",
     )
     warnings = [

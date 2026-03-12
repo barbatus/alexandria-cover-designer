@@ -1547,7 +1547,7 @@ def test_save_raw_payload_uses_nested_drive_folder_parts_per_result(
 
     captured: dict[str, Any] = {}
 
-    def _fake_upload_folder_to_drive(**kwargs):  # type: ignore[no-untyped-def]
+    def _fake_upload_folder_to_drive_with_fallback(**kwargs):  # type: ignore[no-untyped-def]
         captured.update(kwargs)
         return {
             "ok": True,
@@ -1558,13 +1558,14 @@ def test_save_raw_payload_uses_nested_drive_folder_parts_per_result(
             "warning": None,
         }
 
-    monkeypatch.setattr(qr, "_upload_folder_to_drive", _fake_upload_folder_to_drive)
+    monkeypatch.setattr(qr, "_upload_folder_to_drive_with_fallback", _fake_upload_folder_to_drive_with_fallback)
 
     payload = qr._save_raw_payload_for_job(runtime=cfg, job=job)
 
     assert payload["status"] == "saved"
     assert captured["folder_parts"][0] == "4. Emma - Jane Austen"
     assert captured["folder_parts"][1].startswith("save-raw__job-emma__variant-3__")
+    assert captured["timeout_seconds"] == qr.SAVE_RAW_RESPONSE_TIMEOUT_SECONDS
 
 
 def test_save_result_payload_uses_shared_drive_parent_folder(
@@ -1577,8 +1578,13 @@ def test_save_result_payload_uses_shared_drive_parent_folder(
         encoding="utf-8",
     )
     comp_path = cfg.output_dir / "saved_composites" / "4" / "job-emma-result_variant_3_openrouter_google_gemini-3-pro-image-preview.jpg"
+    pdf_path = cfg.tmp_dir / "composited" / "4" / "openrouter__google__gemini-3-pro-image-preview" / "variant_3.pdf"
+    ai_path = cfg.tmp_dir / "composited" / "4" / "openrouter__google__gemini-3-pro-image-preview" / "variant_3.ai"
     comp_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
     Image.new("RGB", (64, 64), (43, 53, 63)).save(comp_path, format="JPEG")
+    pdf_path.write_bytes(b"%PDF-shared-drive-proof%")
+    ai_path.write_bytes(b"%PDF-shared-drive-proof-ai%")
 
     job = qr.job_store.JobRecord(
         id="job-emma-result",
@@ -1595,6 +1601,8 @@ def test_save_result_payload_uses_shared_drive_parent_folder(
                     "variant": 3,
                     "model": "openrouter/google/gemini-3-pro-image-preview",
                     "saved_composited_path": qr._to_project_relative(comp_path),
+                    "composited_pdf_path": qr._to_project_relative(pdf_path),
+                    "composited_ai_path": qr._to_project_relative(ai_path),
                 }
             ]
         },
@@ -1633,9 +1641,12 @@ def test_save_result_payload_uses_shared_drive_parent_folder(
     assert captured["parent_folder_id"] == qr.SAVE_RESULT_DRIVE_FOLDER_ID == "0ABLZWLOVzq-qUk9PVA"
     assert captured["folder_parts"][0] == "4. Emma - Jane Austen"
     assert captured["folder_parts"][1].startswith("save-result__job-emma-result__variant-3__")
+    assert captured["timeout_seconds"] == qr.SAVE_RESULT_RESPONSE_TIMEOUT_SECONDS
     assert len(payload["saved_files"]) == 3
     assert {Path(path).suffix for path in payload["saved_files"]} == {".jpg", ".pdf", ".ai"}
     assert all(Path(path).exists() for path in payload["saved_files"])
+    assert Path(payload["saved_files"][1]).read_bytes() == b"%PDF-shared-drive-proof%"
+    assert Path(payload["saved_files"][2]).read_bytes() == b"%PDF-shared-drive-proof-ai%"
 
 
 def test_save_raw_drive_status_payload_reports_parent_folder_access(
