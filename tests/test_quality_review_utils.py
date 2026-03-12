@@ -1640,8 +1640,8 @@ def test_save_result_payload_uses_shared_drive_parent_folder(
     assert payload["drive_ok"] is True
     assert payload["local_path"] == payload["local_folder"]
     assert captured["parent_folder_id"] == qr.SAVE_RESULT_DRIVE_FOLDER_ID == "0ABLZWLOVzq-qUk9PVA"
-    assert captured["folder_parts"][0] == "4. Emma - Jane Austen"
-    assert captured["folder_parts"][1].startswith("save-result__job-emma-result__variant-3__")
+    assert captured["folder_parts"] == [payload["package_folder_name"]]
+    assert captured["folder_parts"][0].startswith("save-result__job-emma-result__variant-3__")
     assert captured["timeout_seconds"] == qr.SAVE_RESULT_RESPONSE_TIMEOUT_SECONDS
     assert captured["assume_unique_leaf"] is True
     assert len(payload["saved_files"]) == 3

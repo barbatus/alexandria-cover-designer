@@ -16052,7 +16052,6 @@ def _save_result_payload_for_job(
         runtime=runtime,
         local_folder=Path(local_payload["local_folder"]),
         folder_parts=[
-            str(local_payload.get("book_folder_name", "") or "").strip(),
             str(local_payload.get("package_folder_name", "") or "").strip(),
         ],
         parent_folder_id=SAVE_RESULT_DRIVE_FOLDER_ID,
