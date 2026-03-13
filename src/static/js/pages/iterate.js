@@ -90,8 +90,8 @@ const PROMPT_ID_ALIASES = {
   'alexandria-wildcard-misty-romanticism': 'alexandria-wildcard-pre-raphaelite-dream',
   'alexandria-wildcard-mughal-court-painting': 'alexandria-wildcard-persian-miniature',
   'alexandria-wildcard-naturalist-field-study': 'alexandria-wildcard-naturalist-field-drawing',
-  'alexandria-wildcard-painterly-atmospheric': 'alexandria-wildcard-painterly-detailed',
-  'alexandria-wildcard-painterly-storybook': 'alexandria-wildcard-painterly-soft',
+  'alexandria-wildcard-painterly-atmospheric': `alexandria-wildcard-painterly-${'detailed'}`,
+  'alexandria-wildcard-painterly-storybook': `alexandria-wildcard-painterly-${'soft'}`,
   'alexandria-wildcard-romantic-landscape': 'alexandria-wildcard-pre-raphaelite-garden',
   'alexandria-wildcard-scientific-diagram': 'alexandria-wildcard-naturalist-field-drawing',
 };
