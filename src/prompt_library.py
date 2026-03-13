@@ -529,70 +529,73 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
         "category": "wildcard",
     },
     {
-        "id": "alexandria-wildcard-painterly-storybook",
-        "name": "Painterly Storybook",
-        "style_label": "hand-painted gouache storybook illustration",
+        "id": "alexandria-wildcard-painterly-soft",
+        "name": "Painterly Soft Brushwork",
+        "style_label": "hand-painted gouache and oil illustration",
         "style_description": (
-            "visible gouache and oil brushwork, warm gold to navy palette, luminous atmospheric lighting, "
-            "storybook warmth, softly blended painterly edges"
+            "visible brushwork on every surface, soft blended edges, atmospheric depth, navy and gold palette, "
+            "traditionally hand-painted texture"
         ),
         "prompt_template": (
             "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
             "No border, no frame, no ornamental elements, no medallion, no decorative edges. This "
             "illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and "
             "setting element in this scene must be clearly recognizable and faithful to the source material. "
-            "Rendered as a HAND-PAINTED storybook illustration in gouache and oil painting style — "
-            "MANDATORY visible brushwork texture throughout, soft blended edges with NO hard vector lines, "
-            "NO photorealism, NO 3D rendering, NO digital sharpness. Atmospheric lighting with warm golden "
-            "hour glow blending into cool deep blues. Color palette: deep midnight navy sky (#0a1628), warm "
-            "wheat gold (#c5941a) and burnt amber (#cc7722) for foreground warmth, soft sage green (#6b8e5e) "
-            "and muted olive for foliage, dusty rose (#c08b7a) for skin and warm accents. Clouds must have "
-            "visible painterly brushstrokes with warm-lit edges. Landscape elements (fields, trees, "
-            "buildings) rendered with the soft textural quality of traditional gouache painting — luminous, "
-            "layered, slightly impressionistic depth. Overall mood: the warmth and wonder of a beautifully "
-            "illustrated classic storybook. The mood is {MOOD}. Era reference: {ERA}. Full scene "
-            "composition filling the entire canvas, no circular framing. Square format, high resolution, "
-            "print-ready."
+            "RENDERING TECHNIQUE: HAND-PAINTED illustration in gouache and oil painting style. MANDATORY "
+            "visible brushwork texture on every surface — soft blended edges, NO hard vector lines, NO "
+            "photorealism, NO 3D rendering, NO digital sharpness. Every element must look traditionally "
+            "painted by hand. Atmospheric lighting with warm light sources blending into cool shadow areas. "
+            "Color palette: deep midnight navy (#0a1628) for shadows and dark areas, warm burnished gold "
+            "(#c5941a) and burnt amber (#cc7722) for all highlights and warm light, soft muted greens for "
+            "any organic elements, dusty warm tones (#c08b7a) for skin. All surfaces must show visible "
+            "brushstroke texture — layered pigment, soft dry-brush transitions, atmospheric depth between "
+            "foreground and background. Composition uses cinematic depth: clear foreground subject, "
+            "atmospheric middle ground, soft-focus painted background. The mood is {MOOD}. Era reference: "
+            "{ERA}. Full scene composition filling the entire canvas, no circular framing. Square format, "
+            "high resolution, print-ready."
         ),
         "negative_prompt": (
             "no text, no letters, no words, no numbers, no medallion, no circular frame, no border, "
             "no photorealism, no 3D rendering, no vector art, no digital sharpness, no hard edges"
         ),
-        "notes": "Alexandria wildcard prompt. Hand-painted storybook gouache with warm gold and navy brushwork.",
-        "tags": ["painterly", "storybook", "gouache", "atmospheric"],
+        "notes": "Alexandria wildcard prompt. Soft hand-painted gouache and oil brushwork without scene bias.",
+        "tags": ["painterly", "soft-brushwork", "gouache", "atmospheric"],
         "category": "wildcard",
     },
     {
-        "id": "alexandria-wildcard-painterly-atmospheric",
-        "name": "Painterly Atmospheric",
-        "style_label": "hand-painted atmospheric concept-art illustration",
+        "id": "alexandria-wildcard-painterly-detailed",
+        "name": "Painterly Hyper-Detailed",
+        "style_label": "hyper-detailed digital painting",
         "style_description": (
-            "cinematic concept-art lighting, volumetric atmosphere, visible canvas grain and layered pigment, "
-            "dramatic painterly depth, warm copper and gold against indigo shadows"
+            "meticulous individual rendering, jewel-tone saturation, polished golden-hour lighting, maximalist "
+            "detail density, luminous painterly finish"
         ),
         "prompt_template": (
             "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
             "No border, no frame, no ornamental elements, no medallion, no decorative edges. This "
             "illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and "
             "setting element in this scene must be clearly recognizable and faithful to the source material. "
-            "Rendered as a HAND-PAINTED atmospheric illustration in the style of premium editorial concept art "
-            "— MANDATORY soft painterly brushwork, rich tonal depth, dramatic light-to-shadow transitions, "
-            "NO photorealism, NO 3D rendering, NO vector lines. Warm light sources scatter through volumetric "
-            "atmosphere (clouds, mist, dust motes). Color palette: rich deep indigo night (#1a1a3e) and "
-            "midnight teal (#0d2f4f) for shadows and sky, warm burnished gold (#d4a017) and copper (#b87333) "
-            "for all highlights and light sources, deep forest green (#1a4a1a) and moss (#4a6a3a) for organic "
-            "elements, warm ivory (#f5e6c8) for illuminated surfaces. Every surface must show visible painted "
-            "texture — canvas grain, layered pigment, soft dry-brush details. Composition uses cinematic "
-            "depth with a clear foreground subject, atmospheric middle ground, and painterly soft-focus "
-            "background. The mood is {MOOD}. Era reference: {ERA}. Full scene composition filling the entire "
-            "canvas, no circular framing. Square format, high resolution, print-ready."
+            "RENDERING TECHNIQUE: HAND-PAINTED hyper-detailed digital painting with METICULOUS individual rendering of "
+            "every element — every fabric fold, every architectural detail, every natural texture must be "
+            "individually painted with precision. NO photorealism, NO 3D rendering. Saturated jewel-tone "
+            "color palette with golden-hour "
+            "lighting warmth. Color palette: rich warm gold (#d4a017) and amber (#cc7722) for dominant warm "
+            "light, deep cobalt blue (#0047ab) for sky and shadow areas, saturated emerald (#1a6b3a) for "
+            "organic elements, rich crimson (#8b0000) and burgundy for warm accents, warm ivory (#f5e6c8) "
+            "for illuminated surfaces. Light must glow and scatter — reflections on water, light through "
+            "foliage, warm halos around light sources. Surface quality: highly polished and finished, smooth "
+            "blending with restrained brushwork, NO visible canvas texture, every edge clean and precise. "
+            "Maximalist detail density — "
+            "the image should reward close inspection with ever-finer detail. Vibrant, luminous, jewel-like "
+            "color saturation throughout. The mood is {MOOD}. Era reference: {ERA}. Full scene composition "
+            "filling the entire canvas, no circular framing. Square format, high resolution, print-ready."
         ),
         "negative_prompt": (
             "no text, no letters, no words, no numbers, no medallion, no circular frame, no border, "
-            "no photorealism, no 3D rendering, no vector art, no digital sharpness, no hard edges"
+            "no photorealism, no 3D rendering, no vector art, no rough brushwork, no sketch lines"
         ),
-        "notes": "Alexandria wildcard prompt. Atmospheric painterly concept art with dramatic volumetric light.",
-        "tags": ["painterly", "atmospheric", "concept-art", "cinematic"],
+        "notes": "Alexandria wildcard prompt. Hyper-detailed jewel-tone painting without scene bias.",
+        "tags": ["painterly", "hyper-detailed", "jewel-tone", "maximalist"],
         "category": "wildcard",
     },
     {
@@ -607,6 +610,11 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
         "tags": ["alexandria", "wildcard", "naturalist-field-drawing", "cartographic", "scientific"],
         "category": "wildcard",
     },
+)
+
+ALEXANDRIA_DEPRECATED_PROMPT_IDS: tuple[str, ...] = (
+    "alexandria-wildcard-painterly-storybook",
+    "alexandria-wildcard-painterly-atmospheric",
 )
 
 ALEXANDRIA_PROMPT_SPECS: tuple[dict[str, object], ...] = tuple(
@@ -995,6 +1003,10 @@ class PromptLibrary:
 
     def _ensure_alexandria_prompts(self) -> bool:
         changed = False
+        for deprecated_id in ALEXANDRIA_DEPRECATED_PROMPT_IDS:
+            if self._prompts.pop(deprecated_id, None) is not None:
+                self._versions.pop(deprecated_id, None)
+                changed = True
         existing_by_name = {str(prompt.name).strip().lower(): prompt for prompt in self._prompts.values()}
         for spec in ALEXANDRIA_PROMPT_SPECS:
             prompt_id = str(spec.get("id", "")).strip()

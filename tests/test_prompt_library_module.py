@@ -182,20 +182,20 @@ def test_seeded_alexandria_builtins_are_scene_first(tmp_path: Path, monkeypatch)
         assert "{MOOD}" in template
         assert "{ERA}" in template
 
-    storybook = prompts["alexandria-wildcard-painterly-storybook"]
-    atmospheric = prompts["alexandria-wildcard-painterly-atmospheric"]
+    soft = prompts["alexandria-wildcard-painterly-soft"]
+    detailed = prompts["alexandria-wildcard-painterly-detailed"]
 
-    assert "HAND-PAINTED" in storybook.prompt_template
-    assert "brushwork" in storybook.prompt_template
-    assert "NO photorealism" in storybook.prompt_template
-    assert "NO 3D rendering" in storybook.prompt_template
-    assert "no medallion" in storybook.prompt_template.lower()
+    assert "HAND-PAINTED" in soft.prompt_template
+    assert "brushwork" in soft.prompt_template
+    assert "NO photorealism" in soft.prompt_template
+    assert "NO 3D rendering" in soft.prompt_template
+    assert "no medallion" in soft.prompt_template.lower()
 
-    assert "HAND-PAINTED" in atmospheric.prompt_template
-    assert "brushwork" in atmospheric.prompt_template
-    assert "NO photorealism" in atmospheric.prompt_template
-    assert "NO 3D rendering" in atmospheric.prompt_template
-    assert "no medallion" in atmospheric.prompt_template.lower()
+    assert "METICULOUS individual rendering" in detailed.prompt_template
+    assert "golden-hour lighting warmth" in detailed.prompt_template
+    assert "NO photorealism" in detailed.prompt_template
+    assert "NO 3D rendering" in detailed.prompt_template
+    assert "no medallion" in detailed.prompt_template.lower()
 
 
 def test_seeded_alexandria_base_prompts_use_full_canvas_no_medallion_language(tmp_path: Path, monkeypatch):

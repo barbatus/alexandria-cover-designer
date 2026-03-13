@@ -389,9 +389,9 @@ def test_iterate_expanded_scene_pool_reaches_ten_unique_scenes_for_sparse_books(
 def test_iterate_wildcard_rotation_changes_across_days():
     prompts = [
         {"id": "alexandria-wildcard-illuminated-manuscript", "name": "WILDCARD 3 — Illuminated Manuscript", "tags": ["alexandria", "wildcard"]},
-        {"id": "alexandria-wildcard-painterly-storybook", "name": "Painterly Storybook", "tags": ["painterly", "storybook"]},
+        {"id": "alexandria-wildcard-painterly-soft", "name": "Painterly Soft Brushwork", "tags": ["painterly", "soft-brushwork"]},
         {"id": "alexandria-wildcard-temple-of-knowledge", "name": "WILDCARD 5 — Temple of Knowledge", "tags": ["alexandria", "wildcard"]},
-        {"id": "alexandria-wildcard-painterly-atmospheric", "name": "Painterly Atmospheric", "tags": ["painterly", "atmospheric"]},
+        {"id": "alexandria-wildcard-painterly-detailed", "name": "Painterly Hyper-Detailed", "tags": ["painterly", "hyper-detailed"]},
         {"id": "alexandria-wildcard-klimt-gold-leaf", "name": "WILDCARD 26 — Klimt Gold Leaf", "tags": ["alexandria", "wildcard"]},
     ]
     book = {"title": "The Gospel of Thomas", "author": "Unknown", "genre": "religious"}
@@ -449,9 +449,9 @@ def test_iterate_variant_prompt_plan_falls_back_to_literature_defaults_for_unkno
     assert assignments[0]["promptId"] == "alexandria-base-romantic-realism"
     assert assignments[1]["promptId"] in {
         "alexandria-wildcard-pre-raphaelite-garden",
-        "alexandria-wildcard-painterly-storybook",
+        "alexandria-wildcard-painterly-soft",
         "alexandria-wildcard-romantic-landscape",
-        "alexandria-wildcard-painterly-atmospheric",
+        "alexandria-wildcard-painterly-detailed",
         "alexandria-wildcard-pre-raphaelite-dream",
     }
 
@@ -464,9 +464,9 @@ def test_iterate_variant_prompt_plan_uses_all_five_bases_and_five_wildcards_for_
         {"id": "alexandria-base-esoteric-mysticism", "name": "BASE 5 — Esoteric Mysticism", "tags": ["alexandria", "base"]},
         {"id": "alexandria-base-philosophical-gravitas", "name": "BASE 3 — Philosophical Gravitas", "tags": ["alexandria", "base"]},
         {"id": "alexandria-wildcard-pre-raphaelite-garden", "name": "WILDCARD 2 — Pre-Raphaelite Garden", "tags": ["alexandria", "wildcard"]},
-        {"id": "alexandria-wildcard-painterly-storybook", "name": "Painterly Storybook", "tags": ["painterly", "storybook"]},
+        {"id": "alexandria-wildcard-painterly-soft", "name": "Painterly Soft Brushwork", "tags": ["painterly", "soft-brushwork"]},
         {"id": "alexandria-wildcard-maritime-chart", "name": "WILDCARD 9 — Maritime Chart", "tags": ["alexandria", "wildcard"]},
-        {"id": "alexandria-wildcard-painterly-atmospheric", "name": "Painterly Atmospheric", "tags": ["painterly", "atmospheric"]},
+        {"id": "alexandria-wildcard-painterly-detailed", "name": "Painterly Hyper-Detailed", "tags": ["painterly", "hyper-detailed"]},
         {"id": "alexandria-wildcard-edo-meets-alexandria", "name": "WILDCARD 18 — Edo Meets Alexandria", "tags": ["alexandria", "wildcard"]},
     ]
     assignments = _run_iterate_hook(
@@ -491,9 +491,9 @@ def test_iterate_variant_prompt_plan_uses_all_five_bases_and_five_wildcards_for_
     }.issubset(set(prompt_ids))
     assert {
         "alexandria-wildcard-pre-raphaelite-garden",
-        "alexandria-wildcard-painterly-storybook",
+        "alexandria-wildcard-painterly-soft",
         "alexandria-wildcard-maritime-chart",
-        "alexandria-wildcard-painterly-atmospheric",
+        "alexandria-wildcard-painterly-detailed",
         "alexandria-wildcard-edo-meets-alexandria",
     }.issubset(set(prompt_ids))
 
@@ -574,9 +574,9 @@ def test_iterate_variant_payloads_resolve_legacy_prompt_id_aliases():
 def test_iterate_science_genre_maps_to_scientific_wildcards():
     prompts = [
         {"id": "alexandria-wildcard-scientific-diagram", "name": "Scientific Diagram", "tags": ["alexandria", "wildcard"]},
-        {"id": "alexandria-wildcard-painterly-storybook", "name": "Painterly Storybook", "tags": ["painterly", "storybook"]},
+        {"id": "alexandria-wildcard-painterly-soft", "name": "Painterly Soft Brushwork", "tags": ["painterly", "soft-brushwork"]},
         {"id": "alexandria-wildcard-naturalist-field-drawing", "name": "Naturalist Field Drawing", "tags": ["alexandria", "wildcard"]},
-        {"id": "alexandria-wildcard-painterly-atmospheric", "name": "Painterly Atmospheric", "tags": ["painterly", "atmospheric"]},
+        {"id": "alexandria-wildcard-painterly-detailed", "name": "Painterly Hyper-Detailed", "tags": ["painterly", "hyper-detailed"]},
         {"id": "alexandria-wildcard-antique-map", "name": "Antique Map", "tags": ["alexandria", "wildcard"]},
     ]
     book = {"title": "On the Origin of Species", "author": "Charles Darwin", "genre": "science"}
@@ -636,8 +636,8 @@ def test_iterate_all_genres_include_two_painterly_wildcards_in_ten_variant_rotat
         prompt_ids = [entry["promptId"] for entry in assignments]
 
         assert len(prompt_ids) == 10
-        assert prompt_ids.count("alexandria-wildcard-painterly-storybook") == 1, genre
-        assert prompt_ids.count("alexandria-wildcard-painterly-atmospheric") == 1, genre
+        assert prompt_ids.count("alexandria-wildcard-painterly-soft") == 1, genre
+        assert prompt_ids.count("alexandria-wildcard-painterly-detailed") == 1, genre
 
 
 def test_iterate_short_real_name_is_not_generic():
