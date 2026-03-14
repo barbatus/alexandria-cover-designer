@@ -1150,8 +1150,7 @@ function compactSceneLabel(value, maxLength = 72) {
   const shortened = normalized
     .replace(/^the illustration must depict:\s*/i, '')
     .replace(/\.\s*Depicted prominently:\s*.*$/i, '')
-    .replace(/\.\s*The main character shown is .*$/i, '')
-    .replace(/\.\s*The main characters shown are .*$/i, '')
+    .replace(/\.\s*The\s+main\s+characters?\s+shown\s+(?:is|are)\s+.*$/i, '')
     .trim();
   if (shortened.length <= maxLength) return shortened;
   return `${shortened.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
