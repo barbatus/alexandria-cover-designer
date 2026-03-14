@@ -167,23 +167,23 @@ def test_seeded_alexandria_builtins_are_scene_first(tmp_path: Path, monkeypatch)
         if prompt.id.startswith("alexandria-")
     }
 
-    assert len(prompts) == 35
+    assert len(prompts) == 37
     wildcard_prompts = [
         prompt
         for prompt in prompts.values()
         if "wildcard" in {tag.lower() for tag in prompt.tags}
     ]
-    assert len(wildcard_prompts) == 30
+    assert len(wildcard_prompts) == 32
     for prompt_id, prompt in prompts.items():
         template = prompt.prompt_template
-        assert template.startswith("Book cover illustration only")
+        assert template.startswith("Book cover illustration")
         assert "{SCENE}" in template
         assert template.index("{SCENE}") < 250, prompt_id
         assert "{MOOD}" in template
         assert "{ERA}" in template
 
 
-def test_seeded_alexandria_base_prompts_use_full_canvas_no_medallion_language(tmp_path: Path, monkeypatch):
+def test_seeded_alexandria_base_prompts_use_prompt52_templates(tmp_path: Path, monkeypatch):
     templates_path = tmp_path / "prompt_templates.json"
     templates_path.write_text(json.dumps(_templates_payload()), encoding="utf-8")
     monkeypatch.setattr(pl.config, "PROMPT_TEMPLATES_PATH", templates_path)
@@ -204,19 +204,19 @@ def test_seeded_alexandria_base_prompts_use_full_canvas_no_medallion_language(tm
     }
 
     for prompt in prompts.values():
-        assert "No border, no frame, no ornamental elements, no medallion, no decorative edges." in prompt.prompt_template
         assert "This illustration MUST depict the following specific scene: {SCENE}." in prompt.prompt_template
-        assert "Full scene composition filling the entire canvas, no circular framing." in prompt.prompt_template
+        assert "Full scene composition, high resolution, print-ready." in prompt.prompt_template
         assert "This circular medallion illustration" not in prompt.prompt_template
         assert "Circular vignette composition with soft edges." not in prompt.prompt_template
         assert (
-            "No circular vignette, no medallion composition, no ornamental frame, no decorative border, "
-            "no floral border frame, no scrollwork frame."
+            "text, letters, words, numbers, titles, typography, watermarks, signatures, 3D rendering, CGI, "
+            "photography, digital art sheen, smooth digital gradients, plastic surfaces, AI-generated look, "
+            "vector art, anime, cartoon, blurry, stock photo"
         ) in prompt.negative_prompt
 
-    assert "Art Nouveau Pre-Raphaelite illustration style" in prompts["alexandria-base-classical-devotion"].prompt_template
+    assert "RENDERING TECHNIQUE: Rich oil painting with HYPER-DETAILED botanical precision" in prompts["alexandria-base-classical-devotion"].prompt_template
     assert (
-        "romantic Pre-Raphaelite realism with Art Nouveau influence"
+        "RENDERING TECHNIQUE: Warm romantic landscape painting in the tradition of 19th-century Romanticism"
         in prompts["alexandria-base-romantic-realism"].prompt_template
     )
 

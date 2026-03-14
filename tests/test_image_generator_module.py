@@ -879,20 +879,19 @@ def test_validate_prompt_relevance_uses_variant_scene_anchor_from_enrichment(tmp
 def test_validate_prompt_relevance_preserves_scene_first_prompt_order():
     prompt = ig._validate_prompt_relevance(
         (
-            "Book cover illustration only - no text, no title, no author name, no lettering of any kind. "
-            "No border, no frame, no ornamental elements, no medallion, no decorative edges. "
+            "Book cover illustration — no text, no lettering. "
             "This illustration MUST depict the following specific scene: "
             "Emma Woodhouse and Harriet Smith walk through the gardens of Hartfield at sunset. "
-            "Every figure, object, and setting element in this scene must be clearly recognizable and faithful to the source material. "
-            "Rendered in Romantic Realism style - luminous regency atmosphere. "
+            "Every figure and setting element must be faithful to the source material. "
+            "Rendered in Romantic Realism style — luminous regency atmosphere. "
             "The mood is witty romantic self-discovery. Era reference: Regency England. "
-            "Full scene composition filling the entire canvas, no circular framing. Square format, high resolution, print-ready."
+            "Full scene composition, high resolution, print-ready."
         ),
         book_title="Emma",
         book_author="Jane Austen",
     )
 
-    assert prompt.startswith("Book cover illustration only")
+    assert prompt.startswith("Book cover illustration")
     assert "Book cover illustration for 'Emma'" not in prompt
     assert "CRITICAL SCENE REQUIREMENT" not in prompt
 

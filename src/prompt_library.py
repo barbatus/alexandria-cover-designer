@@ -47,16 +47,20 @@ ALEXANDRIA_BASE_NEGATIVE_PROMPT = (
 )
 
 
-def _scene_first_prompt(style_label: str, style_description: str, *, full_canvas: bool = False) -> str:
+def _scene_first_prompt(
+    style_label: str,
+    style_description: str,
+    *,
+    style_section: str = "",
+    full_canvas: bool = False,
+) -> str:
     del full_canvas
+    rendered_section = style_section.strip() or f"Rendered in {style_label} style — {style_description}."
     return (
-        "Book cover illustration only — no text, no title, no author name, no lettering of any kind. "
-        "No border, no frame, no ornamental elements, no medallion, no decorative edges. "
-        "This illustration MUST depict the following specific scene: {SCENE}. Every figure, object, and "
-        "setting element in this scene must be clearly recognizable and faithful to the source material. "
-        f"Rendered in {style_label} style — {style_description}. "
-        "The mood is {MOOD}. Era reference: {ERA}. Full scene composition filling the entire canvas, "
-        "no circular framing. Square format, high resolution, print-ready."
+        "Book cover illustration — no text, no lettering. This illustration MUST depict the following "
+        "specific scene: {SCENE}. Every figure and setting element must be faithful to the source material. "
+        f"{rendered_section} "
+        "The mood is {MOOD}. Era reference: {ERA}. Full scene composition, high resolution, print-ready."
     )
 
 
@@ -278,6 +282,13 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
             "Titian-warm glazes, luminous skin tones, rich velvet and brocade fabrics, atmospheric sfumato "
             "backgrounds, deep jewel-tone crimson sapphire and gold palette"
         ),
+        "style_section": (
+            "RENDERING TECHNIQUE: Venetian Renaissance painting — warm, glowing colour applied in rich glazes "
+            "over warm underpaint. Soft transitions between light and shadow (sfumato). Lush landscapes recede "
+            "into atmospheric blue distance. Figures have warm, luminous skin painted with multiple translucent "
+            "layers. Palette: warm Venetian red, deep ultramarine blue, rich gold, soft green, rosy flesh tones. "
+            "The paint surface glows with inner warmth. Like Titian or Giorgione."
+        ),
         "notes": "Alexandria wildcard prompt. Venetian Renaissance richness with glowing jewel-tone depth.",
         "tags": ["alexandria", "wildcard", "venetian-renaissance", "classical", "fine-art"],
         "category": "wildcard",
@@ -289,6 +300,13 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
         "style_description": (
             "Rembrandt-like chiaroscuro, intimate domestic lighting, meticulous fabric texture, warm amber and "
             "deep brown palette, candlelit atmosphere with selective highlights"
+        ),
+        "style_section": (
+            "RENDERING TECHNIQUE: Dutch Golden Age painting — intimate domestic scenes lit by soft window light "
+            "from the left side. Extraordinary attention to material textures: reflective metals, translucent "
+            "glass, soft bread, worn leather, starched linen. Rich dark backgrounds with warm pools of light. "
+            "Palette: deep brown, warm gold, cream white, touches of vermillion red and ultramarine blue. Every "
+            "surface texture is rendered with loving precision. Like Vermeer or Rembrandt."
         ),
         "notes": "Alexandria wildcard prompt. Dutch interior drama with intimate candlelit precision.",
         "tags": ["alexandria", "wildcard", "dutch-golden-age", "classical", "fine-art"],
@@ -302,6 +320,14 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
             "visible brushstrokes, dappled natural sunlight, soft focus atmospheric depth, luminous pastel and "
             "sky-blue palette, Monet-like light on water and foliage"
         ),
+        "style_section": (
+            "RENDERING TECHNIQUE: French Impressionist plein air painting — loose visible brushstrokes "
+            "throughout, dappled natural sunlight filtering through foliage creates dancing spots of warm yellow "
+            "and cool blue shadow. Paint applied in thick impasto dabs of pure colour placed side by side "
+            "(NOT blended). Soft atmospheric haze in the distance. Palette: luminous sky blue, lavender, soft "
+            "pink, leaf green, sunshine yellow. The texture of oil paint on canvas is visible in every stroke. "
+            "Like a Monet or Renoir painting."
+        ),
         "notes": "Alexandria wildcard prompt. Sunlit Impressionist atmosphere with airy painterly motion.",
         "tags": ["alexandria", "wildcard", "impressionist-plein-air", "classical", "fine-art"],
         "category": "wildcard",
@@ -314,6 +340,13 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
             "idealized proportions, marble-smooth surfaces, heroic poses, cool grey-blue and warm sandstone "
             "palette, classical architectural framing, David-like precision and grandeur"
         ),
+        "style_section": (
+            "RENDERING TECHNIQUE: Academic Neoclassical painting — precise, refined technique with smooth "
+            "blended brushwork and idealized forms. Figures have classical proportions with noble poses. "
+            "Architecture features columns, arches, and marble. Palette: cool marble white, warm ochre, sky "
+            "blue, laurel green, with skin tones in warm peach and rose. Balanced, symmetrical compositions with "
+            "clear focal hierarchy. Like Jacques-Louis David or Bouguereau."
+        ),
         "notes": "Alexandria wildcard prompt. Neoclassical grandeur with disciplined heroic staging.",
         "tags": ["alexandria", "wildcard", "academic-neoclassical", "classical", "fine-art"],
         "category": "wildcard",
@@ -325,6 +358,14 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
         "style_description": (
             "Caravaggio-intense spotlighting, deep blacks with explosive warm highlights, theatrical gesture and "
             "expression, swirling drapery, rich crimson and gold against darkness"
+        ),
+        "style_section": (
+            "RENDERING TECHNIQUE: Baroque dramatic painting — theatrical lighting with extreme contrast between "
+            "deep shadow and brilliant warm light. Rich, heavy oil paint texture with visible brushwork. Fabric "
+            "rendered with luxurious weight and sheen — velvet, silk, brocade. Dramatic diagonal compositions "
+            "with figures in dynamic poses. Palette: deep Venetian red, burnt gold, warm flesh tones against "
+            "near-black shadow. Warm candlelight or divine light breaks through darkness. Like Caravaggio or "
+            "Rubens."
         ),
         "notes": "Alexandria wildcard prompt. Baroque spotlighting with theatrical emotional force.",
         "tags": ["alexandria", "wildcard", "baroque-dramatic", "classical", "fine-art"],
@@ -350,6 +391,13 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
             "saturated primary colours, high-contrast dramatic lighting, bold expressive faces, painterly gouache "
             "texture, action-forward composition with dynamic diagonals"
         ),
+        "style_section": (
+            "RENDERING TECHNIQUE: Vintage pulp magazine cover painting — bold, saturated colours with dramatic "
+            "action-oriented composition. Thick gouache paint texture with visible brushwork. Strong warm "
+            "spotlight on the main figure against dark or dramatic backgrounds. Palette: bold primary colours — "
+            "vivid red, deep blue, bright yellow — with warm skin tones and dark shadows. Dynamic poses, dramatic "
+            "expressions. The handpainted quality of mid-20th century illustration."
+        ),
         "notes": "Alexandria wildcard prompt. Pulpy action illustration with bold mid-century energy.",
         "tags": ["alexandria", "wildcard", "vintage-pulp-cover", "illustration", "graphic"],
         "category": "wildcard",
@@ -361,6 +409,13 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
         "style_description": (
             "bold black lines on warm cream, hatched shadow textures, simplified dramatic forms, limited "
             "two-tone palette, Dürer-inspired precision with folk art warmth"
+        ),
+        "style_section": (
+            "RENDERING TECHNIQUE: Woodcut relief print illustration — bold black outlines with carved texture "
+            "visible in every line. Cross-hatching and parallel line shading create tonal depth. Limited colour "
+            "palette applied in flat areas between carved lines. Palette: deep black ink, warm parchment, with "
+            "optional touches of muted red, blue, or green. The texture of carved wood grain visible "
+            "throughout. Bold, graphic, with the handmade quality of a physical print."
         ),
         "notes": "Alexandria wildcard prompt. Woodcut austerity with carved graphic punch.",
         "tags": ["alexandria", "wildcard", "woodcut-relief", "illustration", "graphic"],
@@ -374,6 +429,13 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
             "geometric symmetry, sleek metallic gold and silver accents, jade green and midnight black palette, "
             "elongated elegant figures, Chrysler Building-era luxury and angular precision"
         ),
+        "style_section": (
+            "RENDERING TECHNIQUE: Art Deco illustration — sleek geometric elegance with stylized figures and "
+            "architectural forms. Clean, precise lines with areas of rich flat colour. Metallic gold and silver "
+            "accents. Palette: black, gold, silver, deep teal, cream white, coral. Figures are elongated and "
+            "elegant. Geometric sunburst and zigzag patterns in backgrounds. Painted with precision and glamour. "
+            "Like Erte or Tamara de Lempicka."
+        ),
         "notes": "Alexandria wildcard prompt. Art Deco luxury with angular metropolitan polish.",
         "tags": ["alexandria", "wildcard", "art-deco-glamour", "illustration", "graphic"],
         "category": "wildcard",
@@ -385,6 +447,13 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
         "style_description": (
             "bold angular composition, red black cream and steel grey palette, photomontage-inspired layering, "
             "diagonal dynamic energy, heroic monumental scale"
+        ),
+        "style_section": (
+            "RENDERING TECHNIQUE: Soviet Constructivist poster painting — bold geometric shapes, strong diagonal "
+            "compositions, dynamic angular figures in heroic poses. Flat colour areas with sharp edges and "
+            "limited palette. Palette: revolutionary red, deep black, warm cream/gold, industrial grey. Bold "
+            "graphic shapes layered with photomontage-inspired depth. Heavy, powerful brushwork with visible "
+            "texture. Like El Lissitzky or Alexander Rodchenko."
         ),
         "notes": "Alexandria wildcard prompt. Constructivist urgency with bold political poster force.",
         "tags": ["alexandria", "wildcard", "soviet-constructivist", "illustration", "graphic"],
@@ -446,6 +515,14 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
             "high-contrast black and white with selective warm amber highlights, venetian blind shadow patterns, "
             "rain-slicked surfaces, cigarette-smoke atmosphere, dramatic low-angle perspective"
         ),
+        "style_section": (
+            "RENDERING TECHNIQUE: Film noir painting — extreme high-contrast with deep shadows occupying most of "
+            "the canvas. Sharp-edged shadows and dramatic angular light from venetian blinds, street lamps, or "
+            "doorways. Figures are partially obscured by shadow, creating mystery and tension. Palette: "
+            "near-black shadows, cool blue-grey mid-tones, sharp white highlights, occasional warm amber from a "
+            "single light source. Painted with bold confident strokes. Like a painted movie poster from the "
+            "1940s."
+        ),
         "notes": "Alexandria wildcard prompt. Noir contrast with smoky urban menace.",
         "tags": ["alexandria", "wildcard", "film-noir-shadows", "atmospheric", "moody"],
         "category": "wildcard",
@@ -470,6 +547,13 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
             "dreamlike twilight atmosphere, deep purple and midnight blue palette with phosphorescent accents, "
             "enigmatic figure poses, Redon-inspired otherworldly luminescence, mythology blended with nature"
         ),
+        "style_section": (
+            "RENDERING TECHNIQUE: Symbolist painting — dreamlike soft-focus atmosphere where forms dissolve at "
+            "their edges into mist and shadow. Twilight lighting with the sky transitioning from deep blue to "
+            "pale gold at the horizon. Figures emerge from shadow as if materializing from a dream. Palette: "
+            "deep twilight blue, soft violet, pale gold, muted rose, silvery grey. Smooth, luminous brushwork "
+            "with a mysterious inner glow. Like Odilon Redon or Fernand Khnopff."
+        ),
         "notes": "Alexandria wildcard prompt. Symbolist twilight with strange luminous mood.",
         "tags": ["alexandria", "wildcard", "twilight-symbolism", "atmospheric", "moody"],
         "category": "wildcard",
@@ -481,6 +565,13 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
         "style_description": (
             "Van Eyck meticulous detail, cool silvery light through leaded glass windows, rich textile patterns, "
             "precise botanical accuracy, intimate domestic scale with symbolic objects"
+        ),
+        "style_section": (
+            "RENDERING TECHNIQUE: Northern Renaissance painting — extraordinary microscopic detail in every "
+            "surface. Every hair, every thread, every wood grain, every reflection in glass or metal is "
+            "individually rendered with a fine-pointed brush. Crystal-clear focus from foreground to background. "
+            "Rich jewel-tone colours with luminous depth from oil glazes. Palette: deep blue, ruby red, emerald "
+            "green, warm gold, all with gem-like luminosity. Like Jan van Eyck or Albrecht Dürer."
         ),
         "notes": "Alexandria wildcard prompt. Northern Renaissance precision with intimate symbolic detail.",
         "tags": ["alexandria", "wildcard", "northern-renaissance", "atmospheric", "moody"],
@@ -570,6 +661,58 @@ ALEXANDRIA_PROMPT_CATALOG: tuple[dict[str, object], ...] = (
         "tags": ["alexandria", "wildcard", "naturalist-field-drawing", "cartographic", "scientific"],
         "category": "wildcard",
     },
+    {
+        "id": "alexandria-wildcard-painterly-soft",
+        "name": "Painterly Soft Brushwork",
+        "style_label": "hand-painted gouache and oil illustration",
+        "style_description": (
+            "visible brushwork texture on every surface, soft blended edges, atmospheric depth, warm light "
+            "sources against cool shadows, layered pigment with soft dry-brush transitions"
+        ),
+        "style_section": (
+            "RENDERING TECHNIQUE: HAND-PAINTED illustration in gouache and oil painting style. MANDATORY "
+            "visible brushwork texture on every surface — soft blended edges, NO hard vector lines, NO "
+            "photorealism, NO 3D rendering, NO digital sharpness. Every element must look traditionally painted "
+            "by hand. Atmospheric lighting with warm light sources blending into cool shadow areas. Color "
+            "palette: deep midnight navy (#0a1628) for shadows and dark areas, warm burnished gold (#c5941a) "
+            "and burnt amber (#cc7722) for all highlights and warm light, soft muted greens for any organic "
+            "elements, dusty warm tones (#c08b7a) for skin. All surfaces must show visible brushstroke texture "
+            "— layered pigment, soft dry-brush transitions, atmospheric depth between foreground and background. "
+            "Composition uses cinematic depth: clear foreground subject, atmospheric middle ground, soft-focus "
+            "painted background."
+        ),
+        "notes": "Alexandria wildcard prompt. Soft hand-painted gouache and oil brushwork with atmospheric depth.",
+        "tags": ["alexandria", "wildcard", "painterly", "soft-brushwork", "gouache", "atmospheric"],
+        "category": "wildcard",
+    },
+    {
+        "id": "alexandria-wildcard-painterly-detailed",
+        "name": "Painterly Hyper-Detailed",
+        "style_label": "hand-painted hyper-detailed illustration",
+        "style_description": (
+            "meticulous individual rendering, saturated jewel-tone palette, golden-hour warmth, luminous light "
+            "scatter, maximalist detail density with polished painterly finish"
+        ),
+        "style_section": (
+            "RENDERING TECHNIQUE: HAND-PAINTED hyper-detailed digital painting with meticulously controlled "
+            "painterly brushwork and METICULOUS individual rendering of every element — every fabric fold, every "
+            "architectural detail, every natural texture must be individually painted with precision. Saturated "
+            "jewel-tone color palette with golden-hour lighting warmth, NO photorealism, NO 3D rendering. Color "
+            "palette: rich warm gold (#d4a017) and amber (#cc7722) for dominant warm light, deep cobalt blue "
+            "(#0047ab) for sky and shadow areas, saturated emerald (#1a6b3a) for organic elements, rich crimson "
+            "(#8b0000) and burgundy for warm accents, warm ivory (#f5e6c8) for illuminated surfaces. Light must "
+            "glow and scatter — reflections on water, light through foliage, warm halos around light sources. "
+            "Surface quality: highly polished and finished, smooth blending, NO visible canvas texture, every "
+            "edge clean and precise. Maximalist detail density — the image should reward close inspection with "
+            "ever-finer detail. Vibrant, luminous, jewel-like color saturation throughout."
+        ),
+        "notes": (
+            "Alexandria wildcard prompt. Hyper-detailed painterly rendering with jewel-tone saturation and "
+            "luminous finish."
+        ),
+        "tags": ["alexandria", "wildcard", "painterly", "hyper-detailed", "jewel-tone", "maximalist"],
+        "category": "wildcard",
+    },
 )
 
 ALEXANDRIA_PROMPT_SPECS: tuple[dict[str, object], ...] = tuple(
@@ -579,6 +722,7 @@ ALEXANDRIA_PROMPT_SPECS: tuple[dict[str, object], ...] = tuple(
         "prompt_template": str(spec.get("prompt_template") or _scene_first_prompt(
             str(spec["style_label"]),
             str(spec["style_description"]),
+            style_section=str(spec.get("style_section", "")),
             full_canvas=bool(spec.get("full_canvas")),
         )),
         "negative_prompt": str(spec.get("negative_prompt") or ALEXANDRIA_BASE_NEGATIVE_PROMPT),
