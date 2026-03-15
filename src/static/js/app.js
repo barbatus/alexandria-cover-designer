@@ -410,7 +410,7 @@ window.JobQueue = {
             await new Promise((resolve) => setTimeout(resolve, Math.min((attempts + 1) * 5000, 30000)));
             continue;
           }
-          const transient = /timed out|timeout|missing image payload|polling failed: http 5\d\d|temporarily unavailable/i.test(message);
+          const transient = /failed to fetch|networkerror|timed out|timeout|missing image payload|generation request failed:\s*5\d\d|polling failed: http 5\d\d|temporarily unavailable|backend\.max_conn reached|service unavailable/i.test(message);
           if (transient && attempts < this.MAX_RETRIES + 1) {
             const nextModel = this._nextRetryModel(job);
             if (nextModel) {
