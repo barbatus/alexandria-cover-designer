@@ -3,7 +3,7 @@
 End-to-end pipeline:
   1. Read Im0 XObject geometry from the PDF template to derive art placement.
   2. Prepare AI art as RGBA PNG with feathered circular alpha edges.
-  3. Extract the foreground layer (background + text + gold frame) from the
+  3. Extract the foreground layer (background + text + golden ring area) from the
      PDF's full-page image XObject with its SMask as the alpha channel.
   4. Composite prepared art behind the foreground via PIL alpha blend.
 
@@ -104,11 +104,6 @@ def _find_im0_dimensions(page: fitz.Page) -> tuple[int, int]:
             return (int(w), int(h))
 
     raise ValueError("No image XObject with SMask found (expected /Im0)")
-
-
-# ---------------------------------------------------------------------------
-# PIL-based compositing
-# ---------------------------------------------------------------------------
 
 
 def _art_placement_from_pdf(
