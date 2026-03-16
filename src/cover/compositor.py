@@ -1,13 +1,8 @@
-"""Simplified cover compositor — PDF-native art insertion.
+"""Batch cover compositor — orchestrates single and multi-variant compositing.
 
-Approach:
-  1. Prepare AI art as RGBA PNG with feathered alpha edges
-  2. Insert that PNG into the cover template PDF (under the frame layer)
-  3. Render the result to JPG at 300 DPI
-
-The gold scrollwork frame is never extracted, reconstructed, or touched.
-It stays pixel-perfect because the art is inserted underneath it in the PDF,
-and the existing /SMask transparency handles the circular reveal.
+Delegates the actual compositing to pil_composite.pil_composite() and adds
+batch orchestration: catalog lookup, variant collection, deduplication, and
+validation report generation.
 """
 
 from __future__ import annotations
@@ -17,20 +12,13 @@ from pathlib import Path
 from typing import Any
 
 from src import config, safe_json
-from src.cover.art_prep import prepare_art_png
-from src.cover.pdf_insert import extract_im0_transform, insert_art_into_pdf
+from src.cover.pil_composite import pil_composite
 from src.logger import get_logger
 
 logger = get_logger(__name__)
 
 EXPECTED_COVER_SIZE = (3784, 2777)
 EXPECTED_DPI = 300
-
-# Art sizing: the Im0 image in the PDF defines the full art area.
-# Margin and feather control how much the edges fade.
-ART_MARGIN_PX = 80
-ART_FEATHER_PX = 35
-BORDER_TRIM_RATIO = 0.05
 
 
 def composite_single(
@@ -39,59 +27,17 @@ def composite_single(
     ai_art_path: Path,
     output_jpg_path: Path,
     shape: str = "circle",
-    margin_px: int = ART_MARGIN_PX,
-    feather_px: int = ART_FEATHER_PX,
-    border_trim_ratio: float = BORDER_TRIM_RATIO,
 ) -> dict[str, Any]:
-    """Composite one AI illustration into a cover template.
-
-    Returns a dict with output paths and metadata.
-    """
-    source_pdf_path = Path(source_pdf_path)
-    ai_art_path = Path(ai_art_path)
-    output_jpg_path = Path(output_jpg_path)
-
-    output_pdf_path = output_jpg_path.with_suffix(".pdf")
-    art_png_path = output_jpg_path.with_name(output_jpg_path.stem + "_art_prepared.png")
-
-    # Step 1: Read Im0 dimensions from the PDF to know the target art size.
-    transform = extract_im0_transform(source_pdf_path)
-    target_w = transform["im0_w"]
-    target_h = transform["im0_h"]
-
-    # Step 2: Prepare art as RGBA PNG with feathered edges.
-    prepare_art_png(
-        ai_art_path,
-        art_png_path,
-        target_width=target_w,
-        target_height=target_h,
-        shape=shape,
-        margin_px=margin_px,
-        feather_px=feather_px,
-        border_trim_ratio=border_trim_ratio,
-    )
-
-    # Step 3: Insert into PDF and render to JPG.
-    result = insert_art_into_pdf(
+    pil_composite(
         source_pdf_path=source_pdf_path,
-        art_png_path=art_png_path,
-        output_pdf_path=output_pdf_path,
+        ai_art_path=ai_art_path,
         output_jpg_path=output_jpg_path,
-        expected_output_size=EXPECTED_COVER_SIZE,
+        shape=shape,
     )
-
-    # Clean up intermediate PNG (the PDF and JPG are the deliverables).
-    try:
-        art_png_path.unlink()
-    except OSError:
-        pass
 
     return {
         "success": True,
         "output_jpg": str(output_jpg_path),
-        "output_pdf": str(output_pdf_path),
-        "im0_size": (target_w, target_h),
-        **result,
     }
 
 
@@ -138,7 +84,7 @@ def composite_all_variants(
                 "output_path": str(out_jpg),
                 "valid": True,
                 "issues": [],
-                "mode": "pdf_insert",
+                "mode": "pil_composite",
                 "variant": variant,
                 "model": model,
             }
