@@ -164,7 +164,6 @@ def llm_composite(
     center: tuple[int, int],
     width: int,
     height: int,
-    api_key: str = "",
     model: str = "google/gemini-3-pro-image-preview",
     ring_pad_px: int = RING_PAD_PX,
 ) -> Image.Image:
@@ -210,8 +209,7 @@ def llm_composite(
     )
 
     # Call LLM via OpenRouter.
-    key = api_key or cfg.OPENROUTER_API_KEY
-    edited = _call_openrouter(cropped, art_resized, api_key=key, model=model)
+    edited = _call_openrouter(cropped, art_resized, api_key=cfg.OPENROUTER_API_KEY, model=model)
 
     # Resize LLM output to match the original crop size and paste back.
     edited = edited.resize((x1 - x0, y1 - y0), Image.LANCZOS)

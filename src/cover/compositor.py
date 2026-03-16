@@ -1,8 +1,9 @@
 """Batch cover compositor — orchestrates single and multi-variant compositing.
 
-Delegates the actual compositing to pil_composite.pil_composite() and adds
-batch orchestration: catalog lookup, variant collection, deduplication, and
-validation report generation.
+Supports two compositing modes:
+  - "pil": deterministic PIL alpha-blend using PDF template SMask (default).
+  - "llm": LLM-based blending  for art replacement.
+
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from src import config, safe_json
+from src.cover.llm_composite import llm_composite
 from src.cover.pil_composite import pil_composite
 from src.logger import get_logger
 
@@ -27,17 +29,34 @@ def composite_single(
     ai_art_path: Path,
     output_jpg_path: Path,
     shape: str = "circle",
+    mode: str = "pil",
+    center: tuple[int, int] | None = None,
+    width: int = 0,
+    height: int = 0,
 ) -> dict[str, Any]:
-    pil_composite(
-        source_pdf_path=source_pdf_path,
-        ai_art_path=ai_art_path,
-        output_jpg_path=output_jpg_path,
-        shape=shape,
-    )
+    if mode == "llm":
+        if center is None:
+            raise ValueError("center is required for llm mode")
+        llm_composite(
+            source_pdf_path=source_pdf_path,
+            ai_art_path=ai_art_path,
+            output_jpg_path=output_jpg_path,
+            center=center,
+            width=width,
+            height=height,
+        )
+    else:
+        pil_composite(
+            source_pdf_path=source_pdf_path,
+            ai_art_path=ai_art_path,
+            output_jpg_path=output_jpg_path,
+            shape=shape,
+        )
 
     return {
         "success": True,
         "output_jpg": str(output_jpg_path),
+        "mode": mode,
     }
 
 
