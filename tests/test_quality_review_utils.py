@@ -408,6 +408,7 @@ def test_job_worker_enqueue_normalizes_payload():
         provider="ALL",
         idempotency_key="idem-x",
         dry_run=False,
+        metadata={"compose_prompt": False, "preserve_prompt_text": True},
     )
     assert created is True
     payload = captured["payload"]
@@ -417,6 +418,8 @@ def test_job_worker_enqueue_normalizes_payload():
     assert payload["provider"] == "all"
     assert payload["cover_source"] == "catalog"
     assert payload["selected_cover_id"] == ""
+    assert payload["compose_prompt"] is False
+    assert payload["preserve_prompt_text"] is True
 
 
 def test_job_worker_enqueue_propagates_idempotency_conflict():

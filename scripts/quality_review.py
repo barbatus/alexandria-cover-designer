@@ -10360,6 +10360,7 @@ def serve_review_webapp(
                         metadata={
                             "prompt_source": prompt_source,
                             "template_id": template_id,
+                            "compose_prompt": compose_prompt,
                             **({"preserve_prompt_text": True} if preserve_prompt_text else {}),
                             "variant": requested_variant,
                             "scene_description": scene_description,
@@ -12234,6 +12235,7 @@ def serve_review_webapp(
                             metadata={
                                 "prompt_source": prompt_source,
                                 "template_id": template_id,
+                                "compose_prompt": compose_prompt,
                                 **({"preserve_prompt_text": True} if preserve_prompt_text else {}),
                                 "variant": requested_variant,
                                 "scene_description": scene_description,
