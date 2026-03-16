@@ -2475,12 +2475,12 @@ def _execute_generation_payload(
                 if isinstance(variant_row, dict):
                     default_prompt = str(variant_row.get("prompt", "")).strip()
             base_prompt_for_composer = (
-                default_prompt
-                or (
-                    f"Cinematic narrative scene for {book_row.get('title', f'Book {book}')}, "
-                    "single dominant focal subject, vivid painterly color, no text, no logos, no borders or frames"
+                    default_prompt
+                    or (
+                        f"Cinematic narrative scene for {book_row.get('title', f'Book {book}')}, "
+                        "single dominant focal subject, vivid painterly color, no text, no logos"
+                    )
                 )
-            )
         composed_prompt_payload = _compose_prompt_for_book(
             runtime=runtime,
             book=book_row,
@@ -4559,7 +4559,7 @@ def write_iterate_books_data(*, runtime: config.Config | None = None, prompts_pa
                 default_prompt
                 or (
                     f'Cinematic narrative scene for "{title}" by {author}, '
-                    "single dominant focal subject, scene artwork only, no text, no logos, no borders or frames."
+                    "single dominant focal subject, scene artwork only, no text, no logos."
                 )
             ),
             template_id=default_template_id,
@@ -4701,7 +4701,7 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
                 default_prompt
                 or (
                     f'Cinematic narrative scene for "{title}" by {author}, '
-                    "single dominant focal subject, scene artwork only, no text, no logos, no borders or frames."
+                    "single dominant focal subject, scene artwork only, no text, no logos."
                 )
             ),
             template_id=default_template_id,
@@ -6721,7 +6721,7 @@ def _seed_builtin_prompts(*, runtime: config.Config, actor: str = "tim", overwri
         joined = f"{template} {negative}".lower()
         if "no text" not in joined:
             return True
-        if "no border" not in joined and "no frame" not in joined:
+        if "single dominant focal subject" not in joined and "centered focal subject" not in joined:
             return True
         return False
 
@@ -10304,7 +10304,7 @@ def serve_review_webapp(
                                 or default_prompt
                                 or (
                                     f"Cinematic narrative scene for {book_row.get('title', f'Book {book}')}, "
-                                    "single dominant focal subject, vivid painterly color, no text, no logos, no borders or frames"
+                                    "single dominant focal subject, vivid painterly color, no text, no logos"
                                 )
                             ),
                             template_id=template_id,
@@ -12148,7 +12148,7 @@ def serve_review_webapp(
                                 or default_prompt
                                 or (
                                     f"Cinematic narrative scene for {book_row.get('title', f'Book {book}')}, "
-                                    "single dominant focal subject, vivid painterly color, no text, no logos, no borders or frames"
+                                    "single dominant focal subject, vivid painterly color, no text, no logos"
                                 )
                             )
                             .strip(),

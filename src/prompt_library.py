@@ -36,8 +36,7 @@ ALEXANDRIA_SYSTEM_NEGATIVE_PROMPT = (
     "no 3D rendering, no digital art aesthetic, no gradients on background, no neon colours, no sans-serif fonts, "
     "no minimalist design, no stock photo look, no cartoonish style, no anime influence, no spelling mistakes, "
     "no blurry illustration, no off-centre composition, no white or light backgrounds. "
-    "No ornamental borders, no frames, no scrollwork, no filigree, no decorative edges, no corner ornaments, "
-    "no dividers."
+    "No dividers."
 )
 
 ALEXANDRIA_BASE_NEGATIVE_PROMPT = (

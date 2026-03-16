@@ -67,7 +67,7 @@ MODEL_STYLE_PROFILES: list[dict[str, str]] = [
         "style": "narrative chromatic realism",
         "detail": "painterly texture with grounded environment detail and scene-first storytelling",
         "palette": "vibrant sapphire, teal, amber, and luminous brass highlights",
-        "composition": "edge-to-edge narrative scene with natural perspective and no medallion-like framing",
+        "composition": "narrative scene with natural perspective and a centered focal subject",
     },
     {
         "style": "bold graphic poster",
@@ -107,25 +107,23 @@ MODEL_PROVIDER_HINTS: tuple[tuple[str, str], ...] = (
     ("gpt-image", "Use precise scene layout instructions and clear object placement relationships."),
     ("openai", "Use precise scene layout instructions and clear object placement relationships."),
     ("flux", "Prioritize tactile lighting realism and material texture fidelity."),
-    ("gemini", "Prioritize grounded narrative scenes with natural perspective; avoid emblematic or circular compositions."),
+    ("gemini", "Prioritize grounded narrative scenes with natural perspective and one clear focal subject."),
     ("stable-diffusion", "Include technical style keywords and painterly medium guidance."),
     ("sdxl", "Include technical style keywords and painterly medium guidance."),
 )
 
+MODEL_PROMPT_CHAR_LIMIT = 1000
 STRICT_SCENE_GUARDRAIL = (
-    "Mandatory output rules: produce only the scene artwork. "
-    "No text, no letters, no numbers, no words, no logos, no title design, no labels, "
-    "no ribbons, no banners, no plaques, no inscriptions, no calligraphy, no medallion ring, "
-    "no frame, no border, no decorative edge, no seal, no coin, no emblem."
+    "No text, no letters, no words, no numbers, no logos, no title design, no labels, "
+    "no inscriptions, no calligraphy."
 )
-NO_ORNAMENT_GUARDRAIL = (
-    "No filigree, no scrollwork, no arabesques, no ornamental curls, no decorative flourishes, "
-    "no black ornamental silhouettes, no lace-like cutout motifs."
-)
+NO_ORNAMENT_GUARDRAIL = ""
 VIVID_COLOR_GUARDRAIL = (
-    "Color direction: vivid, high-saturation painterly palette with rich contrast and luminous highlights."
+    "Vivid painterly palette with strong contrast and luminous highlights."
 )
-GENERATION_GUARDRAIL = f"{STRICT_SCENE_GUARDRAIL} {NO_ORNAMENT_GUARDRAIL} {VIVID_COLOR_GUARDRAIL}"
+GENERATION_GUARDRAIL = " ".join(
+    part for part in (STRICT_SCENE_GUARDRAIL, VIVID_COLOR_GUARDRAIL) if part
+)
 GENERIC_SCENE_PATTERN = re.compile(
     r'A pivotal dramatic moment from the literary work\s+"[^"]*"'
     r'(?:\s+by\s+[^,."]+)?'
@@ -160,11 +158,7 @@ TEXT_ARTIFACT_ORNAMENT_BAND_MIN = 0.075
 TEXT_ARTIFACT_ORNAMENT_BAND_MAX = 0.155
 TEXT_ARTIFACT_ORNAMENT_TINY_MIN = 0.017
 ARTIFACT_RETRY_LIMIT = 3
-ARTIFACT_RETRY_APPEND = (
-    "Retry instruction: scene artwork only. Absolutely no words, letters, numbers, logos, labels, ribbons, "
-    "banners, plaques, medallion rings, circular frames, ornamental borders, decorative edges, "
-    "filigree, scrollwork, arabesques, ornamental curls, black ornamental silhouettes, or lace-like cutout motifs."
-)
+ARTIFACT_RETRY_APPEND = "Focus on one clear subject. No text or lettering. Vivid painterly palette."
 _ENRICHED_BOOK_LOOKUP_CACHE: dict[str, Any] = {"path": "", "mtime": -1.0, "lookup": {}}
 _ENRICHED_BOOK_LOOKUP_LOCK = threading.Lock()
 ALEXANDRIA_NEGATIVE_PROMPT = (
@@ -348,12 +342,80 @@ def _sanitize_prompt_text(prompt: str) -> str:
     return text.strip(" ,")
 
 
+_SCENE_TRUNCATION_PATTERN = re.compile(
+    r"(?P<prefix>.*?(?:This illustration MUST depict the following specific scene:|"
+    r"CRITICAL SCENE REQUIREMENT — the illustration must specifically depict:|"
+    r"The illustration must depict:|Scene:)\s*)"
+    r"(?P<scene>.*?)"
+    r"(?P<tail>(?:\s+(?:Mood:|Era reference:|Era:|Style direction:|Color direction:|"
+    r"Composition direction:|Visual treatment:).*)?)$",
+    re.IGNORECASE,
+)
+
+
+def _ellipsis_trim(text: str, max_chars: int) -> str:
+    token = " ".join(str(text or "").split()).strip()
+    if max_chars <= 0:
+        return ""
+    if len(token) <= max_chars:
+        return token
+    if max_chars <= 3:
+        return "." * max_chars
+    return f"{token[: max_chars - 3].rstrip(' ,.;:!?')}..."
+
+
+def _truncate_scene_description(prompt: str, max_chars: int) -> str:
+    text = " ".join(str(prompt or "").split()).strip()
+    if len(text) <= max_chars:
+        return text
+    match = _SCENE_TRUNCATION_PATTERN.match(text)
+    if not match:
+        return _ellipsis_trim(text, max_chars)
+
+    prefix = " ".join(str(match.group("prefix") or "").split()).strip()
+    scene = " ".join(str(match.group("scene") or "").split()).strip()
+    tail = " ".join(str(match.group("tail") or "").split()).strip()
+    fixed_parts = [part for part in (prefix, tail) if part]
+    fixed_len = sum(len(part) for part in fixed_parts)
+    separator_count = (1 if prefix and scene else 0) + (1 if scene and tail else 0) + (1 if prefix and not scene and tail else 0)
+    available_for_scene = max_chars - fixed_len - separator_count
+    if available_for_scene <= 0:
+        return _ellipsis_trim(text, max_chars)
+    truncated_scene = _ellipsis_trim(scene, available_for_scene)
+    composed = " ".join(part for part in (prefix, truncated_scene, tail) if part).strip()
+    if len(composed) <= max_chars:
+        return composed
+    return _ellipsis_trim(composed, max_chars)
+
+
+def _fit_prompt_to_model_limit(prompt: str, *, suffix: str = "") -> str:
+    base = " ".join(str(prompt or "").split()).strip()
+    retry_suffix = " ".join(str(suffix or "").split()).strip()
+    max_body_chars = max(1, MODEL_PROMPT_CHAR_LIMIT - len(ALEXANDRIA_RENDERING_PREFIX))
+    if retry_suffix:
+        reserved = len(retry_suffix) + (1 if base else 0)
+        allowed_for_base = max(0, max_body_chars - reserved)
+        base = _truncate_scene_description(base, allowed_for_base)
+        fitted = " ".join(part for part in (base, retry_suffix) if part).strip()
+    else:
+        fitted = _truncate_scene_description(base, max_body_chars)
+    if len(fitted) > max_body_chars:
+        fitted = _ellipsis_trim(fitted, max_body_chars)
+    return fitted
+
+
 def _guardrailed_prompt(prompt: str) -> str:
     base = _sanitize_prompt_text(prompt)
     if not base:
-        return GENERATION_GUARDRAIL
-    text = f"{GENERATION_GUARDRAIL} {base}".strip()
-    return " ".join(text.split())
+        return _fit_prompt_to_model_limit(GENERATION_GUARDRAIL)
+    lowered = base.lower()
+    prefixes: list[str] = []
+    if not all(marker in lowered for marker in ("no text", "no letters", "no words")):
+        prefixes.append(STRICT_SCENE_GUARDRAIL)
+    if "vivid painterly palette" not in lowered and "vivid, high-saturation painterly palette" not in lowered:
+        prefixes.append(VIVID_COLOR_GUARDRAIL)
+    text = " ".join(part for part in [*prefixes, base] if part).strip()
+    return _fit_prompt_to_model_limit(text)
 
 
 def _apply_rendering_prefix(prompt: str) -> str:
@@ -449,11 +511,8 @@ def _is_artifact_generation_error(message: str) -> bool:
 
 
 def _artifact_retry_prompt(*, prompt: str, retry_index: int) -> str:
-    hardened = (
-        f"{prompt} {ARTIFACT_RETRY_APPEND} "
-        f"Retry #{int(retry_index)}: increase color contrast and keep only one clear focal subject."
-    ).strip()
-    return _guardrailed_prompt(hardened)
+    del retry_index
+    return _fit_prompt_to_model_limit(_sanitize_prompt_text(prompt), suffix=ARTIFACT_RETRY_APPEND)
 
 
 def _is_high_confidence_text_artifact(*, content_score: float, metrics: dict[str, float]) -> bool:
@@ -2087,16 +2146,10 @@ def _diversify_prompt_for_model_variant(
         f"Visual treatment: {profile['detail']}.",
         "Ensure this result is intentionally different from other models in the same run.",
     ]
-    if STRICT_SCENE_GUARDRAIL not in diversified:
-        directive_parts.append(STRICT_SCENE_GUARDRAIL)
-    if VIVID_COLOR_GUARDRAIL not in diversified:
-        directive_parts.append(VIVID_COLOR_GUARDRAIL)
     if provider_hint:
         directive_parts.append(provider_hint)
     merged = f"{' '.join(directive_parts)} {diversified}".strip()
-    # Keep explicit anti-text / anti-frame directives verbatim for provider calls.
-    # Re-running constraint sanitization here can strip key "no ..." terms and create malformed lists.
-    return " ".join(merged.split())
+    return _fit_prompt_to_model_limit(merged)
 
 
 def _variant_seed(*, rng: random.Random | random.SystemRandom, book_number: int, model: str, variant: int) -> int:
@@ -2463,7 +2516,8 @@ def _generate_one(
     runtime = config.get_config()
     catalog_id = getattr(runtime, "catalog_id", None)
     original_prompt = str(prompt)
-    last_effective_prompt = _apply_rendering_prefix(original_prompt)
+    working_prompt = _fit_prompt_to_model_limit(original_prompt)
+    last_effective_prompt = _apply_rendering_prefix(working_prompt)
 
     def _result_prompt(current_prompt: str) -> str:
         if preserve_prompt_text:
@@ -2516,7 +2570,6 @@ def _generate_one(
     attempt = 0
     max_attempts = max(1, runtime.max_retries) * max(1, len(provider_chain))
     artifact_retry_count = 0
-    working_prompt = original_prompt
     while attempt < max_attempts:
         # Skip providers that are currently in cooldown.
         provider_advanced = False
@@ -2676,7 +2729,7 @@ def _generate_one(
             )
             if _is_artifact_generation_error(last_error) and artifact_retry_count < ARTIFACT_RETRY_LIMIT:
                 artifact_retry_count += 1
-                working_prompt = _artifact_retry_prompt(prompt=working_prompt, retry_index=artifact_retry_count)
+                working_prompt = _artifact_retry_prompt(prompt=original_prompt, retry_index=artifact_retry_count)
                 logger.warning(
                     "Artifact guardrail retry for book %s model %s variant %s (%d/%d): %s",
                     book_number,

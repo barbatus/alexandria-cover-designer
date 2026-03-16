@@ -198,7 +198,8 @@ def test_negative_prompt_merge_and_nano_alias_resolution(tmp_path: Path, monkeyp
     merged = ig._merge_negative_prompt("custom negative")
     assert "custom negative" in merged
     assert ig.ALEXANDRIA_NEGATIVE_PROMPT in merged
-    assert "No circular vignette, no medallion composition" in merged
+    assert "No text, no letters, no words" in merged
+    assert "No circular vignette, no medallion composition" not in merged
     assert ig._resolve_provider_model_name("openrouter", "nano-banana-pro") == "google/gemini-3-pro-image-preview"
     assert ig._resolve_provider_model_name("openrouter", "nano-banana-2") == "google/gemini-2.5-flash-image"
 
@@ -284,9 +285,9 @@ def test_guardrailed_prompt_strips_text_and_frame_directions():
     assert "circular vignette composition" in guarded
     assert "circular medallion illustration" not in guarded
     assert "ribbon banner" not in guarded
-    assert "mandatory output rules" in guarded
+    assert "mandatory output rules" not in guarded
     assert "no text" in guarded
-    assert "vivid, high-saturation painterly palette" in guarded
+    assert "vivid painterly palette" in guarded
 
 
 def test_content_guardrail_score_flags_rings_text_and_dullness():
@@ -1254,9 +1255,11 @@ def test_generate_one_artifact_error_retries_with_hardened_prompt(tmp_path: Path
     assert result.success is True
     assert result.attempts == 2
     assert len(seen_prompts) == 2
-    assert "Retry instruction" in seen_prompts[1]
-    assert "Retry #1" in seen_prompts[1]
-    assert "Retry instruction" in result.prompt
+    assert ig.ARTIFACT_RETRY_APPEND in seen_prompts[1]
+    assert "Mandatory output rules" not in seen_prompts[1]
+    assert "no frame" not in seen_prompts[1].lower()
+    assert len(ig._apply_rendering_prefix(seen_prompts[1])) <= ig.MODEL_PROMPT_CHAR_LIMIT
+    assert ig.ARTIFACT_RETRY_APPEND in result.prompt
 
 
 def test_generate_one_preserve_prompt_text_keeps_saved_prompt_on_artifact_retry(tmp_path: Path, monkeypatch):
@@ -1302,8 +1305,26 @@ def test_generate_one_preserve_prompt_text_keeps_saved_prompt_on_artifact_retry(
     assert result.success is True
     assert result.attempts == 2
     assert len(seen_prompts) == 2
-    assert "Retry instruction" in seen_prompts[1]
+    assert ig.ARTIFACT_RETRY_APPEND in seen_prompts[1]
     assert result.prompt == original_prompt
+
+
+def test_artifact_retry_prompt_uses_original_text_and_caps_total_length():
+    base_prompt = (
+        "Book cover illustration only — no text. This illustration MUST depict the following specific scene: "
+        + ("Ahab standing at the prow of the Pequod as the sea crashes around him. " * 30)
+        + "Mood: obsessive, storm-driven intensity. Era reference: 19th-century whaling voyage."
+    )
+    retry_prompt_1 = ig._artifact_retry_prompt(prompt=base_prompt, retry_index=1)
+    retry_prompt_2 = ig._artifact_retry_prompt(prompt=base_prompt, retry_index=2)
+
+    assert retry_prompt_1 == retry_prompt_2
+    assert ig.ARTIFACT_RETRY_APPEND in retry_prompt_1
+    assert "Mandatory output rules" not in retry_prompt_1
+    assert "no medallion ring" not in retry_prompt_1.lower()
+    assert "no frame" not in retry_prompt_1.lower()
+    assert "no filigree" not in retry_prompt_1.lower()
+    assert len(ig._apply_rendering_prefix(retry_prompt_1)) <= ig.MODEL_PROMPT_CHAR_LIMIT
 
 
 def test_retry_failures_and_plan_helpers(tmp_path: Path, monkeypatch):

@@ -28,16 +28,13 @@ REQUIRED_PHRASE_COMPOSITION = "centered focal subject"
 REQUIRED_PHRASE_TEXT = (
     "no text, no letters, no words, no typography"
 )
-REQUIRED_PHRASE_NO_FRAME = "no decorative edge"
+REQUIRED_PHRASE_NO_FRAME = ""
 REQUIRED_PHRASE_VIVID = "vivid, high-saturation painterly color palette, colorful, richly colored, rich contrast"
 REQUIRED_PHRASE_NO_EMPTY = "no empty space, no plain backgrounds"
 REQUIRED_PHRASE_CANVAS = "medallion-compatible narrative composition"
 REQUIRED_PHRASE_NO_FRAME_RUNTIME = ""
 REQUIRED_PHRASE_CANVAS_RUNTIME = ""
-REQUIRED_PHRASE_NO_ORNAMENT_RUNTIME = (
-    "no filigree, no scrollwork, no arabesques, no ornamental curls, "
-    "no decorative flourishes, no black ornamental silhouettes, no lace-like cutout motifs"
-)
+REQUIRED_PHRASE_NO_ORNAMENT_RUNTIME = ""
 
 REQUIRED_NEGATIVE_BORDER_TERMS: tuple[str, ...] = (
     "circular border",
@@ -424,12 +421,14 @@ def _remove_conflicting_directions(prompt: str) -> str:
 def _prepend_missing_runtime_constraints(prompt: str) -> str:
     low = str(prompt or "").lower()
     missing: list[str] = []
+    if REQUIRED_PHRASE_COMPOSITION and REQUIRED_PHRASE_COMPOSITION not in low:
+        missing.append(REQUIRED_PHRASE_COMPOSITION)
     if "no text" not in low:
-        missing.append("no text, no letters, no words, no typography")
-    if "no filigree" not in low:
-        missing.append("no filigree")
-    if "no scrollwork" not in low:
-        missing.append("no scrollwork")
+        missing.append(REQUIRED_PHRASE_TEXT)
+    if REQUIRED_PHRASE_VIVID and REQUIRED_PHRASE_VIVID not in low:
+        missing.append(REQUIRED_PHRASE_VIVID)
+    if REQUIRED_PHRASE_NO_EMPTY and REQUIRED_PHRASE_NO_EMPTY not in low:
+        missing.append(REQUIRED_PHRASE_NO_EMPTY)
     if not missing:
         return str(prompt or "").strip(" ,")
     return f"{', '.join(missing)}, {prompt}".strip(" ,")
@@ -444,8 +443,6 @@ def _ensure_prompt_constraints(prompt: str) -> str:
         required_prefix.append(REQUIRED_PHRASE_COMPOSITION)
     if REQUIRED_PHRASE_TEXT not in low:
         required_prefix.append(REQUIRED_PHRASE_TEXT)
-    if "no filigree" not in low or "no scrollwork" not in low:
-        required_prefix.append(REQUIRED_PHRASE_NO_ORNAMENT_RUNTIME)
     if REQUIRED_PHRASE_VIVID not in low:
         required_prefix.append(REQUIRED_PHRASE_VIVID)
     if REQUIRED_PHRASE_NO_EMPTY not in low:

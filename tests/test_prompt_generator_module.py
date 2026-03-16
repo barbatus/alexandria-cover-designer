@@ -64,8 +64,8 @@ def test_text_helpers():
 def test_ensure_prompt_constraints_enforces_length_and_phrases():
     prompt = pg._ensure_prompt_constraints("short prompt")
     low = prompt.lower()
-    assert "full-bleed narrative scene" in low
-    assert "no text, no letters, no words, no typography" in low
+    assert pg.REQUIRED_PHRASE_COMPOSITION in low
+    assert pg.REQUIRED_PHRASE_TEXT in low
     assert "vivid, high-saturation painterly color palette" in low
     assert 44 <= len(prompt.split()) <= 92
 
@@ -89,8 +89,8 @@ def test_generate_prompts_for_book_shape():
     assert len({row["variant_id"] for row in as_dicts}) == 5
     for row in as_dicts:
         assert 44 <= row["word_count"] <= 92
-        assert "full-bleed narrative scene" in row["prompt"].lower()
-        assert "no text, no letters, no words, no typography" in row["prompt"].lower()
+        assert pg.REQUIRED_PHRASE_COMPOSITION in row["prompt"].lower()
+        assert pg.REQUIRED_PHRASE_TEXT in row["prompt"].lower()
 
 
 def test_prompt_constraints_strip_typography_and_frame_directions():
@@ -99,9 +99,9 @@ def test_prompt_constraints_strip_typography_and_frame_directions():
     assert "typography-led" not in constrained
     assert "gilt ornament language" not in constrained
     assert "circular vignette composition" not in constrained
-    assert "filigree" in constrained
-    assert "scrollwork" in constrained
-    assert "full-bleed narrative scene" in constrained
+    assert "filigree" not in constrained
+    assert "scrollwork" not in constrained
+    assert pg.REQUIRED_PHRASE_COMPOSITION in constrained
 
 
 def test_generate_all_prompts_and_save(tmp_path: Path):
@@ -285,7 +285,7 @@ def test_build_diversified_prompt_applies_scene_only_constraints():
     assert "herman melville" in prompt
     assert "sevastopol / dramatic conflict" in prompt
     assert "no text" in prompt
-    assert "no frame" in prompt
+    assert pg.REQUIRED_PHRASE_COMPOSITION in prompt
 
 
 def test_build_diversified_prompt_accepts_named_book_arguments_and_includes_title_anchor():
@@ -316,8 +316,8 @@ def test_diversify_prompt_strips_ornamental_style_instructions(monkeypatch):
     )
     diversified = pg.diversify_prompt(base, 1).lower()
     assert "ornamental arches" not in diversified
-    assert "filigree" in diversified
-    assert "scrollwork" in diversified
-    assert "arabesque" in diversified
-    assert "no border" in diversified
-    assert "no frame" in diversified
+    assert "filigree" not in diversified
+    assert "scrollwork" not in diversified
+    assert "arabesque" not in diversified
+    assert pg.REQUIRED_PHRASE_TEXT in diversified
+    assert pg.REQUIRED_PHRASE_COMPOSITION in diversified
