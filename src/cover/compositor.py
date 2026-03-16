@@ -38,7 +38,7 @@ def composite_single(
         if center is None:
             raise ValueError("center is required for llm mode")
         llm_composite(
-            source_pdf_path=source_pdf_path,
+            book_cover_pdf_path=source_pdf_path,
             ai_art_path=ai_art_path,
             output_jpg_path=output_jpg_path,
             center=center,

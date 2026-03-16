@@ -157,7 +157,7 @@ def _render_pdf(pdf_path: Path, dpi: int = RENDER_DPI) -> Image.Image:
 
 
 def llm_composite(
-    source_pdf_path: Path,
+    book_cover_pdf_path: Path,
     ai_art_path: Path,
     output_jpg_path: Path,
     *,
@@ -174,7 +174,7 @@ def llm_composite(
     3. Send cropped region + new art to the LLM via OpenRouter.
     4. Paste the LLM result back and save as JPG.
     """
-    source_pdf_path = Path(source_pdf_path)
+    book_cover_pdf_path = Path(book_cover_pdf_path)
     ai_art_path = Path(ai_art_path)
     output_jpg_path = Path(output_jpg_path)
 
@@ -182,7 +182,7 @@ def llm_composite(
     half_w = width // 2
     half_h = height // 2
 
-    cover = _render_pdf(source_pdf_path)
+    cover = _render_pdf(book_cover_pdf_path)
     new_art = Image.open(ai_art_path).convert("RGBA")
 
     # Crop the medallion rectangle (art area + ring padding).
