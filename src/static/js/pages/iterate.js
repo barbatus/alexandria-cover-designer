@@ -802,6 +802,38 @@ function _normalizePromptText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function _extractProtagonistName(text) {
+  if (!text) return '';
+
+  const dashSplit = text.split(/\s*[—–]\s*|\s+-\s+/);
+  if (dashSplit.length > 1) {
+    const name = dashSplit[0].trim();
+    if (name.length >= 2) return name;
+  }
+
+  const commaDescMatch = text.match(/^([^,]+),\s*(?:a |an |the |who |with |wearing )/i);
+  if (commaDescMatch) {
+    const name = commaDescMatch[1].trim();
+    if (name.length >= 2) return name;
+  }
+
+  if (text.length > 60) {
+    const words = text.split(/\s+/);
+    const descStarters = ['a', 'an', 'the', 'who', 'with', 'wearing', 'in', 'of', 'known', 'described'];
+    let nameEnd = words.length;
+    for (let i = 1; i < words.length; i += 1) {
+      const token = words[i].toLowerCase().replace(/[,;]$/, '');
+      if (descStarters.includes(token)) {
+        nameEnd = i;
+        break;
+      }
+    }
+    return words.slice(0, Math.min(nameEnd, 4)).join(' ').replace(/[,;:]+$/, '').trim();
+  }
+
+  return text;
+}
+
 function _isGenericContent(value) {
   const text = _normalizePromptText(value);
   if (text.length < 4) return !/^[A-Z][a-z]{1,3}(?:\s+[A-Z][a-z]{1,3})*$/.test(text);
@@ -848,7 +880,7 @@ function defaultProtagonistForBook(book) {
     const text = _normalizePromptText(value);
     return text && !_isGenericContent(text);
   });
-  return _normalizePromptText(first);
+  return _extractProtagonistName(_normalizePromptText(first));
 }
 
 function buildScenePool(book) {
@@ -892,9 +924,10 @@ function buildExpandedScenePool(book, minimumCount = 1) {
     ..._splitSpecificFragments(enrichment.setting_primary),
     ..._splitSpecificFragments(enrichment.setting_details),
   ]);
-  const characterFragments = _dedupeNonGeneric([
-    ...(Array.isArray(enrichment.key_characters) ? enrichment.key_characters : []),
-  ]).filter((item) => item.toLowerCase() !== protagonist.toLowerCase());
+  const characterFragments = _dedupeNonGeneric(
+    (Array.isArray(enrichment.key_characters) ? enrichment.key_characters : [])
+      .map((char) => _extractProtagonistName(_normalizePromptText(char))),
+  ).filter((item) => item && item.toLowerCase() !== protagonist.toLowerCase());
   const symbolFragments = _dedupeNonGeneric(Array.isArray(enrichment.symbolic_elements) ? enrichment.symbolic_elements : []);
   const mood = defaultMoodForBook(book);
   const out = [...basePool];
