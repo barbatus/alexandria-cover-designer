@@ -111,12 +111,12 @@ window.CoverCache = {
 
 window.JobQueue = {
   MAX_CONCURRENT: 4,
-  GENERATION_TIMEOUT: 480000,
+  GENERATION_TIMEOUT: 600000,
   COVER_TIMEOUT: 20000,
   COMPOSITE_TIMEOUT: 15000,
   RETRY_THRESHOLD: 0.35,
   MAX_RETRIES: 2,
-  DEAD_JOB_TIMEOUT: 480000,
+  DEAD_JOB_TIMEOUT: 600000,
 
   queue: [],
   running: new Map(),
@@ -276,6 +276,12 @@ window.JobQueue = {
         const backendStatus = String(entry.job._backendStatus || '').trim().toLowerCase();
         const backendStillActive = backendStatus === 'running' || backendStatus === 'retrying';
         if (backendStillActive) {
+          DB.dbPut('jobs', entry.job);
+          continue;
+        }
+        if ((!backendStatus || backendStatus === 'queued') && !entry.job._deadTimeoutGraceGranted) {
+          entry.job._deadTimeoutGraceGranted = true;
+          entry.job._subStatus = 'Retrying connection to backend...';
           DB.dbPut('jobs', entry.job);
           continue;
         }

@@ -2572,21 +2572,43 @@ window.Pages.iterate = {
       generateBtn.textContent = 'Generating…';
     }
 
-    const waitForTerminalJobs = (jobIds) => new Promise((resolve) => {
+    const waitForTerminalJobs = (jobIds, timeoutMs = 600000) => new Promise((resolve) => {
       const isTerminal = () => jobIds.every((jobId) => {
         const row = DB.dbGet('jobs', jobId);
         return row && ['completed', 'failed', 'cancelled'].includes(String(row.status || ''));
       });
-      if (isTerminal()) {
+      let done = false;
+      let timer = null;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        if (timer) clearTimeout(timer);
         resolve();
+      };
+      if (isTerminal()) {
+        finish();
         return;
       }
       const unsubscribe = JobQueue.onChange(() => {
         if (isTerminal()) {
           unsubscribe();
-          resolve();
+          finish();
         }
       });
+      timer = setTimeout(() => {
+        unsubscribe();
+        jobIds.forEach((jobId) => {
+          const job = DB.dbGet('jobs', jobId);
+          if (job && !['completed', 'failed', 'cancelled'].includes(String(job.status || ''))) {
+            job.status = 'failed';
+            job.error = 'Batch timeout.';
+            job.completed_at = new Date().toISOString();
+            DB.dbPut('jobs', job);
+          }
+        });
+        JobQueue.notify();
+        finish();
+      }, timeoutMs);
     });
 
     const batches = Array.from({ length: Math.ceil(jobs.length / SEQUENTIAL_BATCH_SIZE) }, (_, index) => (
