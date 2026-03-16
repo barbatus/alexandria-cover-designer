@@ -1923,6 +1923,7 @@ def _serialize_generation_results(
                 "model": row.model,
                 "provider": row.provider,
                 "prompt": row.prompt,
+                "effective_prompt": row.effective_prompt,
                 "image_path": image_rel,
                 "raw_art_path": persisted_raw_path,
                 "composited_path": persisted_composite_path or composed,
@@ -2829,7 +2830,7 @@ def _execute_generation_payload(
         _clear_job_model_cancellations(job_id=job_id, catalog_id=runtime.catalog_id)
     effective_prompt = ""
     if len(serialized) == 1 and isinstance(serialized[0], dict):
-        effective_prompt = str(serialized[0].get("prompt", "")).strip()
+        effective_prompt = str(serialized[0].get("effective_prompt") or serialized[0].get("prompt") or "").strip()
     return {
         "catalog": runtime.catalog_id,
         "book": book,

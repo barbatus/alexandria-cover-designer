@@ -355,6 +355,10 @@ def _guardrailed_prompt(prompt: str) -> str:
     return " ".join(text.split())
 
 
+def _apply_rendering_prefix(prompt: str) -> str:
+    return f"{ALEXANDRIA_RENDERING_PREFIX}{str(prompt or '')}"
+
+
 def _prompt_reference_tokens(value: str) -> list[str]:
     tokens = re.findall(r"[a-z0-9]+", str(value or "").lower())
     return [token for token in tokens if len(token) >= 4]
@@ -504,6 +508,7 @@ class GenerationResult:
     similar_to_book: int | None = None
     distinctiveness_score: float | None = None
     failure_meta: dict[str, Any] | None = None
+    effective_prompt: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -1724,7 +1729,7 @@ def generate_image(
     runtime = config.get_config()
 
     negative_prompt = _merge_negative_prompt(negative_prompt)
-    prompt = f"{ALEXANDRIA_RENDERING_PREFIX}{prompt}"
+    prompt = _apply_rendering_prefix(prompt)
     requested_provider = str(params.get("provider", "") or "").strip().lower()
     model_prefix = _model_provider_prefix(runtime, model)
     provider_candidates = _model_provider_chain(
@@ -2457,6 +2462,7 @@ def _generate_one(
     runtime = config.get_config()
     catalog_id = getattr(runtime, "catalog_id", None)
     original_prompt = str(prompt)
+    last_effective_prompt = _apply_rendering_prefix(original_prompt)
 
     def _result_prompt(current_prompt: str) -> str:
         if preserve_prompt_text:
@@ -2537,6 +2543,7 @@ def _generate_one(
 
         attempt += 1
         try:
+            last_effective_prompt = _apply_rendering_prefix(working_prompt)
             image_bytes = generate_image(
                 prompt=working_prompt,
                 negative_prompt=negative_prompt,
@@ -2598,6 +2605,7 @@ def _generate_one(
                 similarity_warning=post_warning,
                 similar_to_book=similar_to_book,
                 distinctiveness_score=distinctiveness_score,
+                effective_prompt=last_effective_prompt,
             )
         except RetryableGenerationError as exc:
             last_error = str(exc)
@@ -2765,6 +2773,7 @@ def _generate_one(
         provider=active_provider,
         attempts=attempt,
         failure_meta=last_failure_meta,
+        effective_prompt=last_effective_prompt,
     )
 
 
