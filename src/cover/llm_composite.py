@@ -13,17 +13,19 @@ import base64
 import io
 import logging
 import textwrap
+import time as _time
 from pathlib import Path
 from typing import Any
 
 import fitz
+import numpy as np
 import requests
 from PIL import Image
 
 from src import config as cfg
 
 logger = logging.getLogger(__name__)
-import numpy as np
+
 
 JPEG_QUALITY = 100
 RENDER_DPI = 300
@@ -230,9 +232,11 @@ def llm_composite(
         art = _auto_trim(Image.open(art_path).convert("RGBA"))
         max_dim = max(width, height)
         art.thumbnail((max_dim, max_dim), Image.LANCZOS)
+        t0 = _time.monotonic()
         edited = _call_openrouter(
             cropped, art, api_key=cfg.OPENROUTER_API_KEY, model=model
         )
+        logger.info("LLM composite API call done in %.1fs", _time.monotonic() - t0)
 
         # Resize LLM output to match the original crop size and paste back.
         edited = edited.resize((x1 - x0, y1 - y0), Image.LANCZOS)

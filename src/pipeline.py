@@ -5,12 +5,17 @@ from __future__ import annotations
 import argparse
 import copy
 import json
-import logging
-import signal
 import shutil
+import signal
 import threading
 import time
-from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, as_completed, wait
+from concurrent.futures import (
+    FIRST_COMPLETED,
+    Future,
+    ThreadPoolExecutor,
+    as_completed,
+    wait,
+)
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -19,18 +24,19 @@ from typing import Any
 import requests
 
 try:
-    from src import book_enricher
-    from src import config
-    from src import cover_analyzer
-    from src import cover_compositor
-    from src import pdf_compositor
-    from src import gdrive_sync
-    from src import image_generator
-    from src import intelligent_prompter
-    from src import output_exporter
-    from src import prompt_generator
-    from src import quality_gate
-    from src import safe_json
+    from src import (
+        book_enricher,
+        config,
+        cover_analyzer,
+        gdrive_sync,
+        image_generator,
+        intelligent_prompter,
+        output_exporter,
+        prompt_generator,
+        quality_gate,
+        safe_json,
+    )
+    from src.cover import compositor as cover_compositor_v2
     from src.logger import get_logger
     from src.notifications import BatchNotifier
     from src.prompt_library import PromptLibrary
@@ -38,8 +44,6 @@ except ModuleNotFoundError:  # pragma: no cover
     import book_enricher  # type: ignore
     import config  # type: ignore
     import cover_analyzer  # type: ignore
-    import cover_compositor  # type: ignore
-    import pdf_compositor  # type: ignore
     import gdrive_sync  # type: ignore
     import image_generator  # type: ignore
     import intelligent_prompter  # type: ignore
@@ -47,6 +51,7 @@ except ModuleNotFoundError:  # pragma: no cover
     import prompt_generator  # type: ignore
     import quality_gate  # type: ignore
     import safe_json  # type: ignore
+    from cover import compositor as cover_compositor_v2  # type: ignore
     from logger import get_logger  # type: ignore
     from notifications import BatchNotifier  # type: ignore
     from prompt_library import PromptLibrary  # type: ignore
@@ -64,19 +69,25 @@ _QUALITY_GATE_LOCK = threading.Lock()
 def _pipeline_state_path(runtime: config.Config | None = None) -> Path:
     if runtime is None:
         return PIPELINE_STATE_PATH
-    return config.pipeline_state_path(catalog_id=getattr(runtime, "catalog_id", None), data_dir=runtime.data_dir)
+    return config.pipeline_state_path(
+        catalog_id=getattr(runtime, "catalog_id", None), data_dir=runtime.data_dir
+    )
 
 
 def _pipeline_summary_path(runtime: config.Config | None = None) -> Path:
     if runtime is None:
         return PIPELINE_SUMMARY_PATH
-    return config.pipeline_summary_path(catalog_id=getattr(runtime, "catalog_id", None), data_dir=runtime.data_dir)
+    return config.pipeline_summary_path(
+        catalog_id=getattr(runtime, "catalog_id", None), data_dir=runtime.data_dir
+    )
 
 
 def _pipeline_summary_markdown_path(runtime: config.Config | None = None) -> Path:
     if runtime is None:
         return PIPELINE_SUMMARY_MD_PATH
-    return config.pipeline_summary_markdown_path(catalog_id=getattr(runtime, "catalog_id", None), data_dir=runtime.data_dir)
+    return config.pipeline_summary_markdown_path(
+        catalog_id=getattr(runtime, "catalog_id", None), data_dir=runtime.data_dir
+    )
 
 
 @dataclass(slots=True)
@@ -140,14 +151,20 @@ def run_pipeline(
     global _SHUTDOWN_REQUESTED
     _SHUTDOWN_REQUESTED = False
     runtime = config.get_config(catalog_id)
-    prompts_path_override = _prepare_prompt_source(runtime=runtime, config_overrides=config_overrides)
-    _ensure_prerequisites(input_dir=input_dir, runtime=runtime, prompts_path=prompts_path_override)
+    prompts_path_override = _prepare_prompt_source(
+        runtime=runtime, config_overrides=config_overrides
+    )
+    _ensure_prerequisites(
+        input_dir=input_dir, runtime=runtime, prompts_path=prompts_path_override
+    )
     state = _load_pipeline_state(runtime=runtime)
 
     books = (
         book_numbers[:]
         if book_numbers
-        else config.get_initial_scope_book_numbers(limit=20, catalog_id=runtime.catalog_id)
+        else config.get_initial_scope_book_numbers(
+            limit=20, catalog_id=runtime.catalog_id
+        )
     )
     books = sorted(set(books))
     if not books:
@@ -169,9 +186,13 @@ def run_pipeline(
 
     model_list = _resolve_models(config_overrides, runtime)
     workers = max(1, int(config_overrides.get("workers", 1) or 1))
-    priority_order = str(config_overrides.get("priority", "high,medium,low") or "high,medium,low")
+    priority_order = str(
+        config_overrides.get("priority", "high,medium,low") or "high,medium,low"
+    )
     prompt_variant_ids = list(config_overrides.get("prompt_variant_ids") or [])
-    variation_count = int(config_overrides.get("variation_count", runtime.variants_per_cover))
+    variation_count = int(
+        config_overrides.get("variation_count", runtime.variants_per_cover)
+    )
     no_resume = bool(config_overrides.get("no_resume", False))
 
     result_rows: list[BookRunResult] = []
@@ -189,7 +210,9 @@ def run_pipeline(
         state=state,
     )
 
-    notifier = BatchNotifier(runtime=runtime, enabled=bool(config_overrides.get("notify", False)))
+    notifier = BatchNotifier(
+        runtime=runtime, enabled=bool(config_overrides.get("notify", False))
+    )
     batch_id = f"batch_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
 
     generation_state = {
@@ -213,12 +236,25 @@ def run_pipeline(
         catalog_id=runtime.catalog_id,
         total_books=len(ordered_books),
         workers=workers,
-        models=(model_list or ([*runtime.all_models] if bool(config_overrides.get("all_models", False)) else [runtime.ai_model])),
+        models=(
+            model_list
+            or (
+                [*runtime.all_models]
+                if bool(config_overrides.get("all_models", False))
+                else [runtime.ai_model]
+            )
+        ),
     )
 
     queue: list[int] = []
     for book_number in ordered_books:
-        if resume and (not no_resume) and _book_is_complete(book_number, output_dir, state, runtime.book_catalog_path):
+        if (
+            resume
+            and (not no_resume)
+            and _book_is_complete(
+                book_number, output_dir, state, runtime.book_catalog_path
+            )
+        ):
             skipped_count += 1
             row = BookRunResult(
                 book_number=book_number,
@@ -292,14 +328,18 @@ def run_pipeline(
         _save_generation_state(runtime=runtime, state=generation_state)
         _save_pipeline_state(state, runtime=runtime)
 
-        completed_total = len(generation_state["completed_books"]) + len(generation_state["failed_books"])
+        completed_total = len(generation_state["completed_books"]) + len(
+            generation_state["failed_books"]
+        )
         if completed_total > 0 and (completed_total % 100 == 0):
             notifier.milestone(
                 batch_id=batch_id,
                 catalog_id=runtime.catalog_id,
                 completed_books=completed_total,
                 total_books=len(ordered_books),
-                avg_cost_per_book=float(generation_state.get("avg_cost_per_book", 0.0) or 0.0),
+                avg_cost_per_book=float(
+                    generation_state.get("avg_cost_per_book", 0.0) or 0.0
+                ),
                 estimated_completion=generation_state.get("estimated_completion"),
             )
 
@@ -362,12 +402,17 @@ def run_pipeline(
                     book_number = pending.pop(0)
                     generation_state["in_progress"].append(book_number)
                     _save_generation_state(runtime=runtime, state=generation_state)
-                    future = executor.submit(_run_single_book, book_number=book_number, **run_kwargs)
+                    future = executor.submit(
+                        _run_single_book, book_number=book_number, **run_kwargs
+                    )
                     active[future] = book_number
 
                 if _SHUTDOWN_REQUESTED and pending:
                     interrupted = True
-                    logger.warning("Shutdown requested; not scheduling remaining %d books.", len(pending))
+                    logger.warning(
+                        "Shutdown requested; not scheduling remaining %d books.",
+                        len(pending),
+                    )
 
                 if not active:
                     break
@@ -381,7 +426,9 @@ def run_pipeline(
                     try:
                         row = future.result()
                     except Exception as exc:  # pragma: no cover - defensive
-                        logger.error("Pipeline book failure for %s: %s", book_number, exc)
+                        logger.error(
+                            "Pipeline book failure for %s: %s", book_number, exc
+                        )
                         row = BookRunResult(
                             book_number=book_number,
                             status="failed",
@@ -433,14 +480,20 @@ def run_pipeline(
     return summary.to_dict()
 
 
-def get_pipeline_status(output_dir: Path, *, catalog_id: str | None = None) -> dict[str, Any]:
+def get_pipeline_status(
+    output_dir: Path, *, catalog_id: str | None = None
+) -> dict[str, Any]:
     """Get pipeline progress overview."""
     runtime = config.get_config(catalog_id)
     state = _load_pipeline_state(runtime=runtime)
     completed = len(state.get("completed_books", {}))
     failed = len(state.get("failed_books", {}))
 
-    book_dirs = [path for path in output_dir.iterdir() if path.is_dir()] if output_dir.exists() else []
+    book_dirs = (
+        [path for path in output_dir.iterdir() if path.is_dir()]
+        if output_dir.exists()
+        else []
+    )
     exported_books = len([path for path in book_dirs if path.name != "Archive"])
     exported_files = len(list(output_dir.rglob("*.*"))) if output_dir.exists() else 0
 
@@ -471,10 +524,16 @@ def test_api_keys(
     for idx, provider in enumerate(chosen):
         key = runtime.get_api_key(provider).strip()
         if not key:
-            rows[idx] = {"provider": provider, "status": "KEY_MISSING", "detail": "No key configured."}
+            rows[idx] = {
+                "provider": provider,
+                "status": "KEY_MISSING",
+                "detail": "No key configured.",
+            }
             continue
         assert executor is not None
-        future = executor.submit(_probe_provider_key, provider=provider, api_key=key, timeout=timeout)
+        future = executor.submit(
+            _probe_provider_key, provider=provider, api_key=key, timeout=timeout
+        )
         probe_futures[future] = (idx, provider)
 
     try:
@@ -522,7 +581,9 @@ def _run_single_book(
     generated_dir = runtime.tmp_dir / "generated"
     composited_dir = runtime.tmp_dir / "composited"
 
-    active_models = model_list or ([*runtime.all_models] if all_models else [runtime.ai_model])
+    active_models = model_list or (
+        [*runtime.all_models] if all_models else [runtime.ai_model]
+    )
 
     prompts_path = prompts_path_override or runtime.prompts_path
     prompts_payload = safe_json.load_json(prompts_path, {"books": []})
@@ -536,7 +597,9 @@ def _run_single_book(
     if use_library or prompt_id or style_anchors:
         library = PromptLibrary(runtime.prompt_library_path)
         if prompt_id:
-            prompt_match = next((item for item in library.get_prompts() if item.id == prompt_id), None)
+            prompt_match = next(
+                (item for item in library.get_prompts() if item.id == prompt_id), None
+            )
             if not prompt_match:
                 raise KeyError(f"Prompt id '{prompt_id}' not found in prompt library")
             prompt_text = prompt_match.prompt_template.format(title=book_entry["title"])
@@ -554,7 +617,9 @@ def _run_single_book(
                 negative_prompt = best[0].negative_prompt
 
     overrides = _load_model_prompt_overrides(runtime.model_prompt_overrides_path)
-    explicit_prompt_requested = bool(prompt_override or prompt_id or style_anchors or use_library)
+    explicit_prompt_requested = bool(
+        prompt_override or prompt_id or style_anchors or use_library
+    )
 
     generation_results: list[image_generator.GenerationResult] = []
 
@@ -650,32 +715,13 @@ def _run_single_book(
     book_scores = [row for row in all_scores if row.book_number == book_number]
     passed_scores = [row for row in book_scores if row.passed]
 
-    # Prefer PDF compositor (preserves original frame/ornaments via SMask);
-    # fall back to raster cover compositor if no source PDF is available.
-    source_pdf = pdf_compositor.find_source_pdf_for_book(
-        input_dir=input_dir,
+    composited_paths = cover_compositor_v2.composite_all_variants(
         book_number=book_number,
+        input_dir=input_dir,
+        generated_dir=generated_dir,
+        output_dir=composited_dir,
         catalog_path=runtime.book_catalog_path,
     )
-    if source_pdf is not None:
-        composited_paths = pdf_compositor.composite_all_variants(
-            book_number=book_number,
-            input_dir=input_dir,
-            generated_dir=generated_dir,
-            output_dir=composited_dir,
-            catalog_path=runtime.book_catalog_path,
-        )
-    else:
-        composited_paths = cover_compositor.composite_all_variants(
-            book_number=book_number,
-            input_dir=input_dir,
-            generated_dir=generated_dir,
-            output_dir=composited_dir,
-            regions=json.loads(
-                config.cover_regions_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir).read_text(encoding="utf-8")
-            ),
-            catalog_path=runtime.book_catalog_path,
-        )
 
     exported_paths = output_exporter.export_book_variants(
         book_number=book_number,
@@ -745,7 +791,9 @@ def _generate_with_model_prompts(
             overrides=overrides,
             explicit_prompt_requested=explicit_prompt_requested,
         )
-        prompt_by_model[model] = prompt_generator.enforce_prompt_constraints(str(resolved or base_prompt))
+        prompt_by_model[model] = prompt_generator.enforce_prompt_constraints(
+            str(resolved or base_prompt)
+        )
 
     unique_prompts = {value for value in prompt_by_model.values()}
     if len(unique_prompts) == 1:
@@ -816,7 +864,9 @@ def _resolve_model_prompt(
         return template
 
 
-def _probe_provider_key(*, provider: str, api_key: str, timeout: float) -> tuple[bool, str]:
+def _probe_provider_key(
+    *, provider: str, api_key: str, timeout: float
+) -> tuple[bool, str]:
     provider = provider.strip().lower()
     try:
         if provider == "openrouter":
@@ -863,15 +913,21 @@ def _probe_provider_key(*, provider: str, api_key: str, timeout: float) -> tuple
     return False, f"HTTP {response.status_code}: {body or 'empty response'}"
 
 
-def _prepare_prompt_source(*, runtime: config.Config, config_overrides: dict[str, Any]) -> Path | None:
+def _prepare_prompt_source(
+    *, runtime: config.Config, config_overrides: dict[str, Any]
+) -> Path | None:
     intelligent_prompts = bool(config_overrides.get("intelligent_prompts", False))
     legacy_prompts = bool(config_overrides.get("legacy_prompts", False))
     enrich_first = bool(config_overrides.get("enrich_first", False))
     if (not intelligent_prompts) or legacy_prompts:
         return None
 
-    enriched_catalog_path = config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
-    intelligent_prompts_path = config.intelligent_prompts_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
+    enriched_catalog_path = config.enriched_catalog_path(
+        catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+    )
+    intelligent_prompts_path = config.intelligent_prompts_path(
+        catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+    )
 
     if enrich_first or (not enriched_catalog_path.exists()):
         try:
@@ -880,9 +936,15 @@ def _prepare_prompt_source(*, runtime: config.Config, config_overrides: dict[str
                 output_path=enriched_catalog_path,
             )
         except Exception as exc:  # pragma: no cover - defensive
-            logger.warning("Book enrichment step failed, falling back to existing catalog: %s", exc)
+            logger.warning(
+                "Book enrichment step failed, falling back to existing catalog: %s", exc
+            )
 
-    source_catalog = enriched_catalog_path if enriched_catalog_path.exists() else runtime.book_catalog_path
+    source_catalog = (
+        enriched_catalog_path
+        if enriched_catalog_path.exists()
+        else runtime.book_catalog_path
+    )
     try:
         intelligent_prompter.generate_prompts(
             catalog_path=source_catalog,
@@ -893,15 +955,22 @@ def _prepare_prompt_source(*, runtime: config.Config, config_overrides: dict[str
         )
         return intelligent_prompts_path
     except Exception as exc:  # pragma: no cover - defensive
-        logger.warning("Intelligent prompt generation failed, using legacy prompts: %s", exc)
+        logger.warning(
+            "Intelligent prompt generation failed, using legacy prompts: %s", exc
+        )
         return None
 
 
-def _ensure_prerequisites(*, input_dir: Path, runtime: config.Config, prompts_path: Path | None = None) -> None:
-
-    regions_path = config.cover_regions_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
+def _ensure_prerequisites(
+    *, input_dir: Path, runtime: config.Config, prompts_path: Path | None = None
+) -> None:
+    regions_path = config.cover_regions_path(
+        catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+    )
     if not regions_path.exists():
-        cover_analyzer.analyze_all_covers(input_dir, template_id=runtime.cover_style, regions_path=regions_path)
+        cover_analyzer.analyze_all_covers(
+            input_dir, template_id=runtime.cover_style, regions_path=regions_path
+        )
 
     target_prompts_path = prompts_path or runtime.prompts_path
     if not target_prompts_path.exists():
@@ -929,7 +998,9 @@ def _normalize_providers(providers: list[str] | None) -> list[str]:
     return selected
 
 
-def _find_book_entry(prompts_payload: dict[str, Any], book_number: int) -> dict[str, Any]:
+def _find_book_entry(
+    prompts_payload: dict[str, Any], book_number: int
+) -> dict[str, Any]:
     for row in prompts_payload.get("books", []):
         if int(row.get("number", 0)) == int(book_number):
             return row
@@ -946,7 +1017,9 @@ def _find_variant_entry(book_entry: dict[str, Any], variant_id: int) -> dict[str
     raise KeyError(f"No variants in book entry: {book_entry.get('number')}")
 
 
-def _resolve_models(config_overrides: dict[str, Any], runtime: config.Config) -> list[str] | None:
+def _resolve_models(
+    config_overrides: dict[str, Any], runtime: config.Config
+) -> list[str] | None:
     if config_overrides.get("all_models"):
         return [*runtime.all_models]
     models_raw = config_overrides.get("models")
@@ -960,11 +1033,22 @@ def _resolve_models(config_overrides: dict[str, Any], runtime: config.Config) ->
 
 def _load_pipeline_state(*, runtime: config.Config) -> dict[str, Any]:
     state_path = _pipeline_state_path(runtime)
-    payload = safe_json.load_json(state_path, {"catalog": runtime.catalog_id, "completed_books": {}, "failed_books": {}})
+    payload = safe_json.load_json(
+        state_path,
+        {"catalog": runtime.catalog_id, "completed_books": {}, "failed_books": {}},
+    )
     if not isinstance(payload, dict):
-        return {"catalog": runtime.catalog_id, "completed_books": {}, "failed_books": {}}
+        return {
+            "catalog": runtime.catalog_id,
+            "completed_books": {},
+            "failed_books": {},
+        }
     if str(payload.get("catalog", runtime.catalog_id)) != runtime.catalog_id:
-        return {"catalog": runtime.catalog_id, "completed_books": {}, "failed_books": {}}
+        return {
+            "catalog": runtime.catalog_id,
+            "completed_books": {},
+            "failed_books": {},
+        }
     if not isinstance(payload.get("completed_books"), dict):
         payload["completed_books"] = {}
     if not isinstance(payload.get("failed_books"), dict):
@@ -980,14 +1064,18 @@ def _save_pipeline_state(state: dict[str, Any], *, runtime: config.Config) -> No
     safe_json.atomic_write_json(state_path, state)
 
 
-def _book_is_complete(book_number: int, output_dir: Path, state: dict[str, Any], catalog_path: Path) -> bool:
+def _book_is_complete(
+    book_number: int, output_dir: Path, state: dict[str, Any], catalog_path: Path
+) -> bool:
     if str(book_number) not in state.get("completed_books", {}):
         return False
 
     catalog = safe_json.load_json(catalog_path, [])
     if not isinstance(catalog, list):
         return False
-    match = next((row for row in catalog if int(row.get("number", 0)) == int(book_number)), None)
+    match = next(
+        (row for row in catalog if int(row.get("number", 0)) == int(book_number)), None
+    )
     if not match:
         return False
 
@@ -999,7 +1087,9 @@ def _book_is_complete(book_number: int, output_dir: Path, state: dict[str, Any],
     return book_dir.exists() and len(list(book_dir.rglob("*.*"))) >= 15
 
 
-def _write_summary(summary: PipelineResult, *, runtime: config.Config | None = None) -> None:
+def _write_summary(
+    summary: PipelineResult, *, runtime: config.Config | None = None
+) -> None:
     payload = summary.to_dict()
     summary_path = _pipeline_summary_path(runtime)
     summary_md_path = _pipeline_summary_markdown_path(runtime)
@@ -1032,11 +1122,18 @@ def _write_summary(summary: PipelineResult, *, runtime: config.Config | None = N
     summary_md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _log_progress(*, processed: int, total: int, state: dict[str, Any], output_dir: Path) -> None:
+def _log_progress(
+    *, processed: int, total: int, state: dict[str, Any], output_dir: Path
+) -> None:
     completed = len(state.get("completed_books", {}))
     exported_images = len(list(output_dir.rglob("*.jpg"))) if output_dir.exists() else 0
     shown_complete = min(total, max(completed, processed))
-    logger.info("Progress: [%d/%d books complete, %d exported jpgs]", shown_complete, total, exported_images)
+    logger.info(
+        "Progress: [%d/%d books complete, %d exported jpgs]",
+        shown_complete,
+        total,
+        exported_images,
+    )
 
 
 def _save_generation_state(*, runtime: config.Config, state: dict[str, Any]) -> None:
@@ -1058,7 +1155,9 @@ def _refresh_generation_state_estimate(
         avg_cost = 0.0
 
     total = int(generation_state.get("total_books", 0) or 0)
-    completed = len(generation_state.get("completed_books", [])) + len(generation_state.get("failed_books", []))
+    completed = len(generation_state.get("completed_books", [])) + len(
+        generation_state.get("failed_books", [])
+    )
     remaining = max(0, total - completed)
 
     generation_state["avg_time_per_book"] = round(avg_time, 3)
@@ -1066,13 +1165,19 @@ def _refresh_generation_state_estimate(
 
     if avg_time > 0 and remaining > 0:
         remaining_seconds = (remaining * avg_time) / max(1, workers)
-        generation_state["estimated_completion"] = (datetime.now(timezone.utc) + timedelta(seconds=remaining_seconds)).isoformat()
+        generation_state["estimated_completion"] = (
+            datetime.now(timezone.utc) + timedelta(seconds=remaining_seconds)
+        ).isoformat()
     else:
         generation_state["estimated_completion"] = None
 
 
-def _books_below_quality_threshold(*, runtime: config.Config, threshold: float) -> set[int]:
-    quality_path = config.quality_scores_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+def _books_below_quality_threshold(
+    *, runtime: config.Config, threshold: float
+) -> set[int]:
+    quality_path = config.quality_scores_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
     payload = safe_json.load_json(quality_path, {})
     rows = payload.get("scores", []) if isinstance(payload, dict) else []
     if not isinstance(rows, list):
@@ -1102,8 +1207,12 @@ def _prioritize_books(
     priority_order: str,
     state: dict[str, Any],
 ) -> list[int]:
-    failed = {int(key) for key in state.get("failed_books", {}).keys() if str(key).isdigit()}
-    low_quality = _books_below_quality_threshold(runtime=runtime, threshold=runtime.min_quality_score)
+    failed = {
+        int(key) for key in state.get("failed_books", {}).keys() if str(key).isdigit()
+    }
+    low_quality = _books_below_quality_threshold(
+        runtime=runtime, threshold=runtime.min_quality_score
+    )
 
     high: set[int] = set()
     medium: set[int] = set()
@@ -1118,7 +1227,9 @@ def _prioritize_books(
             medium.add(book)
 
     buckets = {"high": sorted(high), "medium": sorted(medium), "low": sorted(low)}
-    ordered_levels = [token.strip().lower() for token in priority_order.split(",") if token.strip()]
+    ordered_levels = [
+        token.strip().lower() for token in priority_order.split(",") if token.strip()
+    ]
     if not ordered_levels:
         ordered_levels = ["high", "medium", "low"]
 
@@ -1151,11 +1262,17 @@ def estimate_batch(
     total_cost = per_book_cost * max(0, len(books))
 
     avg_seconds = 45.0
-    history_path = config.generation_history_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    history_path = config.generation_history_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
     payload = safe_json.load_json(history_path, {})
     rows = payload.get("items", []) if isinstance(payload, dict) else []
     try:
-        durations = [float(row.get("generation_time", 0.0) or 0.0) for row in rows if isinstance(row, dict)]
+        durations = [
+            float(row.get("generation_time", 0.0) or 0.0)
+            for row in rows
+            if isinstance(row, dict)
+        ]
         durations = [value for value in durations if value > 0]
         if durations:
             avg_seconds = max(10.0, sum(durations) / len(durations))
@@ -1186,7 +1303,9 @@ def _parse_books(raw: str | None) -> list[int] | None:
             continue
         if "-" in token:
             start, end = token.split("-", 1)
-            for value in range(min(int(start), int(end)), max(int(start), int(end)) + 1):
+            for value in range(
+                min(int(start), int(end)), max(int(start), int(end)) + 1
+            ):
                 values.add(value)
         else:
             values.add(int(token))
@@ -1210,7 +1329,9 @@ def _format_api_key_report(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _resolve_variant_options(variants_arg: str | None, variant_arg: int | None, runtime: config.Config) -> tuple[int, list[int]]:
+def _resolve_variant_options(
+    variants_arg: str | None, variant_arg: int | None, runtime: config.Config
+) -> tuple[int, list[int]]:
     if variant_arg is not None:
         return 1, [int(variant_arg)]
 
@@ -1242,7 +1363,9 @@ def _resolve_credentials_path(runtime: config.Config) -> Path:
     return runtime.config_dir / "credentials.json"
 
 
-def _collect_passed_sync_paths(output_dir: Path, books: list[int], scores_path: Path, catalog_path: Path) -> list[str]:
+def _collect_passed_sync_paths(
+    output_dir: Path, books: list[int], scores_path: Path, catalog_path: Path
+) -> list[str]:
     payload = safe_json.load_json(scores_path, {})
 
     rows = payload.get("scores", []) if isinstance(payload, dict) else []
@@ -1295,7 +1418,9 @@ def _collect_passed_sync_paths(output_dir: Path, books: list[int], scores_path: 
     return selected
 
 
-def _sync_output_to_drive(*, output_dir: Path, books: list[int], runtime: config.Config) -> dict[str, Any]:
+def _sync_output_to_drive(
+    *, output_dir: Path, books: list[int], runtime: config.Config
+) -> dict[str, Any]:
     drive_folder_id = runtime.gdrive_output_folder_id.strip()
     if not drive_folder_id:
         raise ValueError("GDRIVE_OUTPUT_FOLDER_ID is empty.")
@@ -1310,7 +1435,9 @@ def _sync_output_to_drive(*, output_dir: Path, books: list[int], runtime: config
     selected_paths = _collect_passed_sync_paths(
         output_dir=output_dir,
         books=books,
-        scores_path=config.quality_scores_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir),
+        scores_path=config.quality_scores_path(
+            catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+        ),
         catalog_path=runtime.book_catalog_path,
     )
 
@@ -1337,7 +1464,12 @@ def _sync_output_to_drive(*, output_dir: Path, books: list[int], runtime: config
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Prompt 4A pipeline orchestrator")
-    parser.add_argument("--catalog", type=str, default=config.DEFAULT_CATALOG_ID, help="Catalog id from config/catalogs.json")
+    parser.add_argument(
+        "--catalog",
+        type=str,
+        default=config.DEFAULT_CATALOG_ID,
+        help="Catalog id from config/catalogs.json",
+    )
     parser.add_argument("--input-dir", type=Path, default=None)
     parser.add_argument("--output-dir", type=Path, default=None)
 
@@ -1356,22 +1488,48 @@ def main() -> int:
     parser.add_argument("--use-library", action="store_true")
     parser.add_argument("--prompt-id", type=str, default=None)
     parser.add_argument("--style-anchors", type=str, default=None)
-    parser.add_argument("--intelligent-prompts", action="store_true", help="Use LLM-generated intelligent prompts")
-    parser.add_argument("--enrich-first", action="store_true", help="Run enrichment before intelligent prompt generation")
-    parser.add_argument("--legacy-prompts", action="store_true", help="Force template-based prompt generator")
+    parser.add_argument(
+        "--intelligent-prompts",
+        action="store_true",
+        help="Use LLM-generated intelligent prompts",
+    )
+    parser.add_argument(
+        "--enrich-first",
+        action="store_true",
+        help="Run enrichment before intelligent prompt generation",
+    )
+    parser.add_argument(
+        "--legacy-prompts",
+        action="store_true",
+        help="Force template-based prompt generator",
+    )
 
     parser.add_argument("--batch-size", type=int, default=20)
     parser.add_argument("--workers", type=int, default=4, help="Parallel book workers")
-    parser.add_argument("--priority", type=str, default="high,medium,low", help="Priority queue order")
+    parser.add_argument(
+        "--priority", type=str, default="high,medium,low", help="Priority queue order"
+    )
     parser.add_argument("--resume", action="store_true", default=True)
     parser.add_argument("--no-resume", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
-    parser.add_argument("--sync", action="store_true", help="Upload quality-passed outputs to Google Drive after generation")
-    parser.add_argument("--estimate", action="store_true", help="Estimate cost/time only")
-    parser.add_argument("--notify", action="store_true", help="Send webhook notifications")
+    parser.add_argument(
+        "--sync",
+        action="store_true",
+        help="Upload quality-passed outputs to Google Drive after generation",
+    )
+    parser.add_argument(
+        "--estimate", action="store_true", help="Estimate cost/time only"
+    )
+    parser.add_argument(
+        "--notify", action="store_true", help="Send webhook notifications"
+    )
     parser.add_argument("--status", action="store_true")
     parser.add_argument("--test-api-keys", action="store_true")
-    parser.add_argument("--retry-failures", action="store_true", help="Retry only failed generations from data/generation_failures.json")
+    parser.add_argument(
+        "--retry-failures",
+        action="store_true",
+        help="Retry only failed generations from data/generation_failures.json",
+    )
 
     args = parser.parse_args()
     runtime = config.get_config(args.catalog)
@@ -1380,7 +1538,13 @@ def main() -> int:
     output_dir = args.output_dir or runtime.output_dir
 
     if args.status:
-        logger.info("Pipeline status: %s", json.dumps(get_pipeline_status(output_dir, catalog_id=runtime.catalog_id), ensure_ascii=False))
+        logger.info(
+            "Pipeline status: %s",
+            json.dumps(
+                get_pipeline_status(output_dir, catalog_id=runtime.catalog_id),
+                ensure_ascii=False,
+            ),
+        )
         return 0
 
     if args.test_api_keys:
@@ -1412,9 +1576,13 @@ def main() -> int:
     if args.book is not None:
         books = [args.book]
     else:
-        books = _parse_books(args.books) or config.get_initial_scope_book_numbers(limit=20, catalog_id=runtime.catalog_id)
+        books = _parse_books(args.books) or config.get_initial_scope_book_numbers(
+            limit=20, catalog_id=runtime.catalog_id
+        )
 
-    variation_count, prompt_variant_ids = _resolve_variant_options(args.variants, args.variant, runtime)
+    variation_count, prompt_variant_ids = _resolve_variant_options(
+        args.variants, args.variant, runtime
+    )
     model_list = _resolve_models(
         {
             "model": args.model,
@@ -1451,7 +1619,11 @@ def main() -> int:
         "prompt_override": args.prompt_override,
         "use_library": args.use_library,
         "prompt_id": args.prompt_id,
-        "style_anchors": [token.strip() for token in (args.style_anchors or "").split(",") if token.strip()],
+        "style_anchors": [
+            token.strip()
+            for token in (args.style_anchors or "").split(",")
+            if token.strip()
+        ],
         "batch_size": args.batch_size,
         "workers": args.workers,
         "priority": args.priority,
@@ -1477,7 +1649,9 @@ def main() -> int:
     sync_failed = False
     if args.sync and not args.dry_run:
         try:
-            sync_summary = _sync_output_to_drive(output_dir=output_dir, books=books, runtime=runtime)
+            sync_summary = _sync_output_to_drive(
+                output_dir=output_dir, books=books, runtime=runtime
+            )
             logger.info("Drive sync summary: %s", sync_summary)
         except Exception as exc:  # pragma: no cover - external boundary
             sync_failed = True

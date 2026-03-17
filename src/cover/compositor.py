@@ -15,6 +15,7 @@ from typing import Any, Literal
 from src import config, safe_json
 from src.cover.llm_composite import llm_composite
 from src.cover.pil_composite import pil_composite
+from src.cover.region import Region, region_from_pdf
 from src.logger import get_logger
 
 logger = get_logger(__name__)
@@ -30,20 +31,20 @@ def composite(
     output_jpg_paths: list[Path],
     shape: str = "circle",
     mode: Literal["pil" | "llm"] = "pil",
-    center: tuple[int, int] | None = None,
-    width: int = 0,
-    height: int = 0,
+    region: Region | None = None,
 ) -> dict[str, Any]:
+    if region is None:
+        region = region_from_pdf(source_pdf_path)
+
     if mode == "llm":
-        if center is None:
-            raise ValueError("center is required for llm mode")
+        diameter = region["art_radius"] * 2
         llm_composite(
             book_cover_pdf_path=source_pdf_path,
             ai_art_paths=ai_art_paths,
             output_jpg_paths=output_jpg_paths,
-            center=center,
-            width=width,
-            height=height,
+            center=region["center"],
+            width=diameter,
+            height=diameter,
         )
     else:
         pil_composite(
@@ -68,6 +69,7 @@ def composite_all_variants(
     output_dir: Path,
     catalog_path: Path = config.BOOK_CATALOG_PATH,
     shape: str = "circle",
+    mode: Literal["pil", "llm"] = "llm",
 ) -> list[Path]:
     """Composite all generated variants for one book."""
     source_pdf = _find_source_pdf_for_book(input_dir, book_number, catalog_path)
@@ -98,7 +100,7 @@ def composite_all_variants(
                 "output_path": str(out_jpg),
                 "valid": True,
                 "issues": [],
-                "mode": "pil_composite",
+                "mode": mode,
                 "variant": variant,
                 "model": model,
             }
@@ -109,6 +111,7 @@ def composite_all_variants(
         ai_art_paths=art_paths,
         output_jpg_paths=outputs,
         shape=shape,
+        mode=mode,
     )
 
     report = {

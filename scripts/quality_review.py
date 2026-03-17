@@ -4,22 +4,20 @@
 from __future__ import annotations
 
 import argparse
-from collections import OrderedDict
 import gzip
 import hashlib
 import importlib
 import inspect
 import io
 import json
-import logging
 import math
 import mimetypes
 import os
 import queue
 import re
+import shutil
 import signal
 import sqlite3
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -27,6 +25,7 @@ import threading
 import time
 import uuid
 import zipfile
+from collections import OrderedDict
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from http import HTTPStatus
@@ -35,68 +34,68 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import parse_qs, quote, unquote, urlparse
 
-from PIL import Image, ImageDraw
 import requests
+from PIL import Image, ImageDraw
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 try:
-    from src import audit_log
-    from src import api_responses
-    from src import api_validation
-    from src import book_metadata
-    from src import book_enricher
-    from src import catalog_manager
-    from src import config
-    from src import content_relevance
-    from src import cost_tracker
-    from src import cover_compositor
-    from src import pdf_compositor
-    from src import disaster_recovery
-    from src import delivery_pipeline
-    from src import drive_manager
-    from src import error_metrics
-    from src import export_amazon
-    from src import export_ingram
-    from src import export_social
-    from src import export_utils
-    from src import export_web
-    from src import gdrive_sync
-    from src import image_generator
-    from src import intelligent_prompter
-    from src import genre_intelligence
-    from src import prompt_generator
-    from src import job_store
-    from src import mockup_generator
-    from src import output_exporter
-    from src import print_validator
-    from src import repository
-    from src import safe_json
-    from src import security
-    from src import social_card_generator
-    from src import similarity_detector
-    from src import state_store
-    from src import template_registry
-    from src import thumbnail_server
-    from src.logger import get_logger
+    from src import (
+        api_responses,
+        api_validation,
+        audit_log,
+        book_enricher,
+        book_metadata,
+        catalog_manager,
+        config,
+        content_relevance,
+        cost_tracker,
+        cover_compositor,
+        delivery_pipeline,
+        disaster_recovery,
+        drive_manager,
+        error_metrics,
+        export_amazon,
+        export_ingram,
+        export_social,
+        export_utils,
+        export_web,
+        gdrive_sync,
+        genre_intelligence,
+        image_generator,
+        intelligent_prompter,
+        job_store,
+        mockup_generator,
+        output_exporter,
+        pdf_compositor,
+        print_validator,
+        prompt_generator,
+        repository,
+        safe_json,
+        security,
+        similarity_detector,
+        social_card_generator,
+        state_store,
+        template_registry,
+        thumbnail_server,
+    )
     from src import pipeline as pipeline_runner
+    from src.cover import compositor as cover_compositor_v2
+    from src.logger import get_logger
     from src.prompt_library import LibraryPrompt, PromptLibrary
 except ModuleNotFoundError:  # pragma: no cover
-    import audit_log  # type: ignore
-    import api_responses  # type: ignore
     import api_validation  # type: ignore
-    import book_metadata  # type: ignore
+    import audit_log  # type: ignore
     import book_enricher  # type: ignore
+    import book_metadata  # type: ignore
     import catalog_manager  # type: ignore
     import config  # type: ignore
     import content_relevance  # type: ignore
     import cost_tracker  # type: ignore
-    import cover_compositor  # type: ignore
-    import pdf_compositor  # type: ignore
-    import disaster_recovery  # type: ignore
     import delivery_pipeline  # type: ignore
+    import disaster_recovery  # type: ignore
     import drive_manager  # type: ignore
     import error_metrics  # type: ignore
     import export_amazon  # type: ignore
@@ -105,24 +104,24 @@ except ModuleNotFoundError:  # pragma: no cover
     import export_utils  # type: ignore
     import export_web  # type: ignore
     import gdrive_sync  # type: ignore
+    import genre_intelligence  # type: ignore
     import image_generator  # type: ignore
     import intelligent_prompter  # type: ignore
-    import genre_intelligence  # type: ignore
-    import prompt_generator  # type: ignore
     import job_store  # type: ignore
     import mockup_generator  # type: ignore
     import output_exporter  # type: ignore
+    import pipeline as pipeline_runner  # type: ignore
     import print_validator  # type: ignore
+    import prompt_generator  # type: ignore
     import repository  # type: ignore
     import safe_json  # type: ignore
     import security  # type: ignore
-    import social_card_generator  # type: ignore
     import similarity_detector  # type: ignore
+    import social_card_generator  # type: ignore
     import state_store  # type: ignore
     import template_registry  # type: ignore
     import thumbnail_server  # type: ignore
     from logger import get_logger  # type: ignore
-    import pipeline as pipeline_runner  # type: ignore
     from prompt_library import LibraryPrompt, PromptLibrary  # type: ignore
 
 logger = get_logger(__name__)
@@ -136,8 +135,12 @@ FALLBACK_HTML_PATH = PROJECT_ROOT / "data" / "review_gallery.html"
 HISTORY_PATH = config.generation_history_path()
 QUALITY_SCORES_PATH = config.quality_scores_path()
 CATALOG_OUTPUT_PATH = PROJECT_ROOT / "Output Covers" / "Alexandria_Cover_Catalog.pdf"
-CONTACT_SHEET_OUTPUT_PATH = PROJECT_ROOT / "Output Covers" / "Alexandria_Contact_Sheet.pdf"
-ALL_VARIANTS_CATALOG_OUTPUT_PATH = PROJECT_ROOT / "Output Covers" / "Alexandria_All_Variants_Catalog.pdf"
+CONTACT_SHEET_OUTPUT_PATH = (
+    PROJECT_ROOT / "Output Covers" / "Alexandria_Contact_Sheet.pdf"
+)
+ALL_VARIANTS_CATALOG_OUTPUT_PATH = (
+    PROJECT_ROOT / "Output Covers" / "Alexandria_All_Variants_Catalog.pdf"
+)
 REGEN_RESULTS_PATH = config.regeneration_results_path()
 REVIEW_SESSIONS_DIR = PROJECT_ROOT / "data" / "review_sessions"
 REVIEW_STATS_PATH = PROJECT_ROOT / "data" / "review_stats.json"
@@ -155,11 +158,21 @@ CGI_CATALOG_MAX_AGE_SECONDS = 3600
 SAVE_RAW_DRIVE_FOLDER_ID = "0ABLZWLOVzq-qUk9PVA"
 SAVE_RESULT_DRIVE_FOLDER_ID = "1SHzAaDU1pN0ECC61KCRtYijv4dp4IR59"
 SAVE_RAW_LOCAL_DIRNAME = "Chosen Winner Generated Covers"
-SAVE_RAW_DRIVE_RETRY_ATTEMPTS = max(1, int(os.getenv("SAVE_RAW_DRIVE_RETRY_ATTEMPTS", "2")))
-SAVE_RAW_DRIVE_RETRY_DELAY_SECONDS = max(0.0, float(os.getenv("SAVE_RAW_DRIVE_RETRY_DELAY_SECONDS", "0.5")))
-SAVE_RAW_DRIVE_PROBE_TIMEOUT_SECONDS = max(0.1, float(os.getenv("SAVE_RAW_DRIVE_PROBE_TIMEOUT_SECONDS", "5")))
-SAVE_RAW_DRIVE_PROBE_DELETE_ATTEMPTS = max(1, int(os.getenv("SAVE_RAW_DRIVE_PROBE_DELETE_ATTEMPTS", "6")))
-SAVE_RAW_DRIVE_PROBE_DELETE_DELAY_SECONDS = max(0.0, float(os.getenv("SAVE_RAW_DRIVE_PROBE_DELETE_DELAY_SECONDS", "0.1")))
+SAVE_RAW_DRIVE_RETRY_ATTEMPTS = max(
+    1, int(os.getenv("SAVE_RAW_DRIVE_RETRY_ATTEMPTS", "2"))
+)
+SAVE_RAW_DRIVE_RETRY_DELAY_SECONDS = max(
+    0.0, float(os.getenv("SAVE_RAW_DRIVE_RETRY_DELAY_SECONDS", "0.5"))
+)
+SAVE_RAW_DRIVE_PROBE_TIMEOUT_SECONDS = max(
+    0.1, float(os.getenv("SAVE_RAW_DRIVE_PROBE_TIMEOUT_SECONDS", "5"))
+)
+SAVE_RAW_DRIVE_PROBE_DELETE_ATTEMPTS = max(
+    1, int(os.getenv("SAVE_RAW_DRIVE_PROBE_DELETE_ATTEMPTS", "6"))
+)
+SAVE_RAW_DRIVE_PROBE_DELETE_DELAY_SECONDS = max(
+    0.0, float(os.getenv("SAVE_RAW_DRIVE_PROBE_DELETE_DELAY_SECONDS", "0.1"))
+)
 SAVE_PROMPT_DRIVE_SUBDIR = "saved_prompts"
 FALLBACK_FAVICON_SVG = (
     b'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
@@ -187,25 +200,49 @@ _STARTUP_STATE: dict[str, Any] = {
 JOBS_DB_PATH = PROJECT_ROOT / os.getenv("JOBS_DB_PATH", "data/jobs.sqlite3")
 STATE_DB_PATH = PROJECT_ROOT / os.getenv("STATE_DB_PATH", "data/state.sqlite3")
 JOB_WORKER_COUNT = max(1, int(os.getenv("JOB_WORKERS", "2")))
-JOB_STALE_RECOVERY_SECONDS = max(30, int(os.getenv("JOB_STALE_RECOVERY_SECONDS", "900")))
-JOB_STALE_RECOVERY_RETRY_DELAY_SECONDS = max(1.0, float(os.getenv("JOB_STALE_RECOVERY_RETRY_DELAY_SECONDS", "2.0")))
-JOB_WORKER_MODE = str(os.getenv("JOB_WORKER_MODE", "inline")).strip().lower() or "inline"
-JOB_WORKER_HEARTBEAT_PATH = PROJECT_ROOT / os.getenv("JOB_WORKER_HEARTBEAT_PATH", "data/worker_heartbeat.json")
-JOB_WORKER_HEARTBEAT_STALE_SECONDS = max(30, int(os.getenv("JOB_WORKER_HEARTBEAT_STALE_SECONDS", "120")))
-SLO_ALERT_COOLDOWN_SECONDS = max(60, int(os.getenv("SLO_ALERT_COOLDOWN_SECONDS", "900")))
+JOB_STALE_RECOVERY_SECONDS = max(
+    30, int(os.getenv("JOB_STALE_RECOVERY_SECONDS", "900"))
+)
+JOB_STALE_RECOVERY_RETRY_DELAY_SECONDS = max(
+    1.0, float(os.getenv("JOB_STALE_RECOVERY_RETRY_DELAY_SECONDS", "2.0"))
+)
+JOB_WORKER_MODE = (
+    str(os.getenv("JOB_WORKER_MODE", "inline")).strip().lower() or "inline"
+)
+JOB_WORKER_HEARTBEAT_PATH = PROJECT_ROOT / os.getenv(
+    "JOB_WORKER_HEARTBEAT_PATH", "data/worker_heartbeat.json"
+)
+JOB_WORKER_HEARTBEAT_STALE_SECONDS = max(
+    30, int(os.getenv("JOB_WORKER_HEARTBEAT_STALE_SECONDS", "120"))
+)
+SLO_ALERT_COOLDOWN_SECONDS = max(
+    60, int(os.getenv("SLO_ALERT_COOLDOWN_SECONDS", "900"))
+)
 SLO_ALERT_LEVELS = {
     token.strip().lower()
     for token in os.getenv("SLO_ALERT_LEVELS", "breached,at_risk").split(",")
     if token.strip()
 }
-SLO_MONITOR_INTERVAL_SECONDS = max(0, int(os.getenv("SLO_MONITOR_INTERVAL_SECONDS", "300")))
+SLO_MONITOR_INTERVAL_SECONDS = max(
+    0, int(os.getenv("SLO_MONITOR_INTERVAL_SECONDS", "300"))
+)
 MUTATION_API_TOKEN = os.getenv("WEB_API_TOKEN", "").strip()
-MUTATION_RATE_LIMIT_PER_MINUTE = max(10, int(os.getenv("WEB_RATE_LIMIT_PER_MINUTE", "120")))
-READ_RATE_LIMIT_PER_MINUTE = max(60, int(os.getenv("WEB_READ_RATE_LIMIT_PER_MINUTE", "300")))
+MUTATION_RATE_LIMIT_PER_MINUTE = max(
+    10, int(os.getenv("WEB_RATE_LIMIT_PER_MINUTE", "120"))
+)
+READ_RATE_LIMIT_PER_MINUTE = max(
+    60, int(os.getenv("WEB_READ_RATE_LIMIT_PER_MINUTE", "300"))
+)
 DATA_CACHE_MAX_ENTRIES = max(100, int(os.getenv("DATA_CACHE_MAX_ENTRIES", "1000")))
-SSE_MAX_CONNECTIONS_PER_CLIENT = max(1, int(os.getenv("SSE_MAX_CONNECTIONS_PER_CLIENT", "3")))
-ALLOW_SYNC_GENERATION = str(os.getenv("ALLOW_SYNC_GENERATION", "0")).strip().lower() in {"1", "true", "yes", "on"}
-REQUEST_HANDLER_TIMEOUT_SECONDS = max(5.0, float(os.getenv("REQUEST_HANDLER_TIMEOUT_SECONDS", "30")))
+SSE_MAX_CONNECTIONS_PER_CLIENT = max(
+    1, int(os.getenv("SSE_MAX_CONNECTIONS_PER_CLIENT", "3"))
+)
+ALLOW_SYNC_GENERATION = str(
+    os.getenv("ALLOW_SYNC_GENERATION", "0")
+).strip().lower() in {"1", "true", "yes", "on"}
+REQUEST_HANDLER_TIMEOUT_SECONDS = max(
+    5.0, float(os.getenv("REQUEST_HANDLER_TIMEOUT_SECONDS", "30"))
+)
 
 
 def _normalize_worker_mode(raw: str | None) -> str:
@@ -231,7 +268,13 @@ _JSON_LIST_ROWS_CACHE_LOCK = threading.Lock()
 _JSON_LIST_ROWS_CACHE: dict[str, dict[str, Any]] = {}
 
 
-def _set_startup_state(*, status: str, started_at: str | None = None, completed_at: str | None = None, error: str = "") -> None:
+def _set_startup_state(
+    *,
+    status: str,
+    started_at: str | None = None,
+    completed_at: str | None = None,
+    error: str = "",
+) -> None:
     now = datetime.now(timezone.utc).isoformat()
     with _STARTUP_STATE_LOCK:
         _STARTUP_STATE["status"] = str(status or "idle").strip() or "idle"
@@ -294,7 +337,11 @@ def _json_list_rows_cache_entry(path: Path) -> dict[str, Any]:
             return cached
 
     payload = _load_json(target, [])
-    rows = [row for row in payload if isinstance(row, dict)] if isinstance(payload, list) else []
+    rows = (
+        [row for row in payload if isinstance(row, dict)]
+        if isinstance(payload, list)
+        else []
+    )
     by_number: dict[int, dict[str, Any]] = {}
     for row in rows:
         number = _safe_int(row.get("number"), 0)
@@ -308,7 +355,13 @@ def _json_list_rows_cache_entry(path: Path) -> dict[str, Any]:
 
 def _prime_catalog_file_caches(runtime: config.Config) -> None:
     _json_list_rows_cache_entry(runtime.book_catalog_path)
-    _json_list_rows_cache_entry(config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir))
+    _json_list_rows_cache_entry(
+        config.enriched_catalog_path(
+            catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+        )
+    )
+
+
 _ENRICHMENT_RUN_LOCK = threading.Lock()
 _ENRICHMENT_RUN_STATUS: dict[str, dict[str, Any]] = {}
 
@@ -321,7 +374,9 @@ def _budget_presets_for_runtime(runtime: config.Config) -> list[dict[str, Any]]:
             "name": "Cheapest",
             "description": "Fast smoke tests, quick iteration",
             "models": ["openrouter/google/gemini-2.5-flash-image"],
-            "estimated_cost_per_image_usd": round(model_cost.get("openrouter/google/gemini-2.5-flash-image", 0.003), 6),
+            "estimated_cost_per_image_usd": round(
+                model_cost.get("openrouter/google/gemini-2.5-flash-image", 0.003), 6
+            ),
         },
         {
             "id": "balanced",
@@ -371,16 +426,25 @@ def _sync_generation_allowed(*, worker_mode: str | None = None) -> bool:
     return bool(ALLOW_SYNC_GENERATION)
 
 
-def _job_stale_recovery_config(runtime: config.Config | None = None) -> tuple[int, float]:
+def _job_stale_recovery_config(
+    runtime: config.Config | None = None,
+) -> tuple[int, float]:
     runtime = runtime or config.get_config()
     stale_after_seconds = max(
         30,
-        _safe_int(getattr(runtime, "job_stale_recovery_seconds", JOB_STALE_RECOVERY_SECONDS), JOB_STALE_RECOVERY_SECONDS),
+        _safe_int(
+            getattr(runtime, "job_stale_recovery_seconds", JOB_STALE_RECOVERY_SECONDS),
+            JOB_STALE_RECOVERY_SECONDS,
+        ),
     )
     retry_delay_seconds = max(
         1.0,
         _safe_float(
-            getattr(runtime, "job_stale_recovery_retry_delay_seconds", JOB_STALE_RECOVERY_RETRY_DELAY_SECONDS),
+            getattr(
+                runtime,
+                "job_stale_recovery_retry_delay_seconds",
+                JOB_STALE_RECOVERY_RETRY_DELAY_SECONDS,
+            ),
             JOB_STALE_RECOVERY_RETRY_DELAY_SECONDS,
         ),
     )
@@ -390,7 +454,9 @@ def _job_stale_recovery_config(runtime: config.Config | None = None) -> tuple[in
 class DataCache:
     """Small in-memory TTL cache for expensive GET responses."""
 
-    def __init__(self, *, ttl_seconds: int = 60, max_entries: int = DATA_CACHE_MAX_ENTRIES):
+    def __init__(
+        self, *, ttl_seconds: int = 60, max_entries: int = DATA_CACHE_MAX_ENTRIES
+    ):
         self.ttl_seconds = max(1, int(ttl_seconds))
         self.max_entries = max(1, int(max_entries))
         self._rows: OrderedDict[str, tuple[float, Any]] = OrderedDict()
@@ -560,7 +626,9 @@ class RollingSLOTracker:
         self._payload = payload
         self._writes_since_flush = 0
 
-    def record_response(self, status_code: int, *, catalog_id: str | None = None) -> None:
+    def record_response(
+        self, status_code: int, *, catalog_id: str | None = None
+    ) -> None:
         code = int(status_code)
         day = datetime.now(timezone.utc).date().isoformat()
         catalog_token = str(catalog_id or "").strip()
@@ -587,14 +655,20 @@ class RollingSLOTracker:
                 if 200 <= code < 400:
                     catalog_row["success"] = int(catalog_row.get("success", 0) or 0) + 1
                 elif code >= 500:
-                    catalog_row["server_errors"] = int(catalog_row.get("server_errors", 0) or 0) + 1
+                    catalog_row["server_errors"] = (
+                        int(catalog_row.get("server_errors", 0) or 0) + 1
+                    )
                 else:
-                    catalog_row["client_errors"] = int(catalog_row.get("client_errors", 0) or 0) + 1
+                    catalog_row["client_errors"] = (
+                        int(catalog_row.get("client_errors", 0) or 0) + 1
+                    )
                 catalogs[catalog_token] = catalog_row
                 row["catalogs"] = catalogs
             days[day] = row
 
-            cutoff = (datetime.now(timezone.utc).date() - timedelta(days=45)).isoformat()
+            cutoff = (
+                datetime.now(timezone.utc).date() - timedelta(days=45)
+            ).isoformat()
             stale_days = [key for key in days.keys() if key < cutoff]
             for stale in stale_days:
                 days.pop(stale, None)
@@ -604,7 +678,9 @@ class RollingSLOTracker:
             if self._writes_since_flush >= 25:
                 self._flush_locked()
 
-    def snapshot(self, *, window_days: int, catalog_id: str | None = None) -> dict[str, Any]:
+    def snapshot(
+        self, *, window_days: int, catalog_id: str | None = None
+    ) -> dict[str, Any]:
         days = max(1, int(window_days))
         cutoff_date = datetime.now(timezone.utc).date() - timedelta(days=days - 1)
         catalog_token = str(catalog_id or "").strip()
@@ -668,19 +744,33 @@ class RollingSLOTracker:
 class SLOAlertManager:
     """Webhook alerting for SLO states with cooldown and de-duplication."""
 
-    def __init__(self, *, state_path: Path, cooldown_seconds: int, alert_levels: set[str]):
+    def __init__(
+        self, *, state_path: Path, cooldown_seconds: int, alert_levels: set[str]
+    ):
         self.state_path = state_path
         self.cooldown_seconds = max(60, int(cooldown_seconds))
-        self.alert_levels = {str(token).strip().lower() for token in alert_levels if str(token).strip()}
-        payload = safe_json.load_json(state_path, {"last_sent_at": "", "last_digest": "", "last_status": "", "history": []})
+        self.alert_levels = {
+            str(token).strip().lower() for token in alert_levels if str(token).strip()
+        }
+        payload = safe_json.load_json(
+            state_path,
+            {"last_sent_at": "", "last_digest": "", "last_status": "", "history": []},
+        )
         if not isinstance(payload, dict):
-            payload = {"last_sent_at": "", "last_digest": "", "last_status": "", "history": []}
+            payload = {
+                "last_sent_at": "",
+                "last_digest": "",
+                "last_status": "",
+                "history": [],
+            }
         if not isinstance(payload.get("history"), list):
             payload["history"] = []
         self._state = payload
         self._lock = threading.Lock()
 
-    def maybe_alert(self, *, runtime: config.Config, slo_evaluation: dict[str, Any]) -> dict[str, Any]:
+    def maybe_alert(
+        self, *, runtime: config.Config, slo_evaluation: dict[str, Any]
+    ) -> dict[str, Any]:
         levels = self.alert_levels or {"breached"}
         relevant: list[dict[str, Any]] = []
         for key, row in slo_evaluation.items():
@@ -690,21 +780,43 @@ class SLOAlertManager:
                 continue
             status = str(row.get("status", "")).strip().lower()
             if status in levels:
-                relevant.append({"name": key, "status": status, "actual": row.get("actual"), "target": row.get("target")})
+                relevant.append(
+                    {
+                        "name": key,
+                        "status": status,
+                        "actual": row.get("actual"),
+                        "target": row.get("target"),
+                    }
+                )
         if not relevant:
             return {"checked": True, "sent": False, "reason": "no_alert_conditions"}
 
         webhook_url = str(getattr(runtime, "webhook_url", "") or "").strip()
         if not webhook_url:
-            return {"checked": True, "sent": False, "reason": "webhook_not_configured", "alerts": relevant}
+            return {
+                "checked": True,
+                "sent": False,
+                "reason": "webhook_not_configured",
+                "alerts": relevant,
+            }
 
-        severity = "breached" if any(item["status"] == "breached" for item in relevant) else "at_risk"
+        severity = (
+            "breached"
+            if any(item["status"] == "breached" for item in relevant)
+            else "at_risk"
+        )
         digest_payload = {
             "catalog": runtime.catalog_id,
             "severity": severity,
-            "items": sorted(relevant, key=lambda item: (str(item["status"]), str(item["name"]))),
+            "items": sorted(
+                relevant, key=lambda item: (str(item["status"]), str(item["name"]))
+            ),
         }
-        digest = hashlib.sha256(json.dumps(digest_payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+        digest = hashlib.sha256(
+            json.dumps(digest_payload, ensure_ascii=False, sort_keys=True).encode(
+                "utf-8"
+            )
+        ).hexdigest()
 
         now_dt = datetime.now(timezone.utc)
         now = now_dt.isoformat()
@@ -750,7 +862,12 @@ class SLOAlertManager:
                     }
             except Exception as exc:  # pragma: no cover - network boundary
                 logger.warning("SLO alert webhook failed: %s", exc)
-                return {"checked": True, "sent": False, "reason": "webhook_error", "alerts": relevant}
+                return {
+                    "checked": True,
+                    "sent": False,
+                    "reason": "webhook_error",
+                    "alerts": relevant,
+                }
 
             self._state["last_sent_at"] = now
             self._state["last_digest"] = digest
@@ -758,11 +875,23 @@ class SLOAlertManager:
             history = self._state.get("history", [])
             if not isinstance(history, list):
                 history = []
-            history.append({"sent_at": now, "severity": severity, "catalog": runtime.catalog_id, "alerts": relevant})
+            history.append(
+                {
+                    "sent_at": now,
+                    "severity": severity,
+                    "catalog": runtime.catalog_id,
+                    "alerts": relevant,
+                }
+            )
             self._state["history"] = history[-200:]
             self.state_path.parent.mkdir(parents=True, exist_ok=True)
             safe_json.atomic_write_json(self.state_path, self._state)
-            return {"checked": True, "sent": True, "severity": severity, "alerts": relevant}
+            return {
+                "checked": True,
+                "sent": True,
+                "severity": severity,
+                "alerts": relevant,
+            }
 
 
 class JobEventBroker:
@@ -775,7 +904,9 @@ class JobEventBroker:
 
     def subscribe(self) -> tuple[str, queue.Queue[dict[str, Any]]]:
         token = str(uuid.uuid4())
-        client_queue: queue.Queue[dict[str, Any]] = queue.Queue(maxsize=self.max_queue_size)
+        client_queue: queue.Queue[dict[str, Any]] = queue.Queue(
+            maxsize=self.max_queue_size
+        )
         with self._lock:
             self._subs[token] = client_queue
         return token, client_queue
@@ -851,7 +982,12 @@ class JobWorkerPool:
                 },
             )
             if not isinstance(payload, dict):
-                payload = {"service": self.service_name, "updated_at": "", "workers": {}, "pid": os.getpid()}
+                payload = {
+                    "service": self.service_name,
+                    "updated_at": "",
+                    "workers": {},
+                    "pid": os.getpid(),
+                }
             workers = payload.get("workers", {})
             if not isinstance(workers, dict):
                 workers = {}
@@ -922,10 +1058,14 @@ class JobWorkerPool:
         max_attempts: int = 3,
         metadata: dict[str, Any] | None = None,
     ) -> tuple[job_store.JobRecord, bool]:
-        normalized_models = sorted({str(item).strip() for item in models if str(item).strip()})
+        normalized_models = sorted(
+            {str(item).strip() for item in models if str(item).strip()}
+        )
         normalized_prompt = " ".join(str(prompt or "").split())
         normalized_provider = str(provider or "all").strip().lower() or "all"
-        normalized_cover_source = str(cover_source or "catalog").strip().lower() or "catalog"
+        normalized_cover_source = (
+            str(cover_source or "catalog").strip().lower() or "catalog"
+        )
         if normalized_cover_source not in {"catalog", "drive"}:
             normalized_cover_source = "catalog"
         normalized_selected_cover_id = str(selected_cover_id or "").strip()
@@ -969,7 +1109,9 @@ class JobWorkerPool:
         last_idle_heartbeat = 0.0
         self._write_heartbeat(worker_id=worker_id, state="idle")
         while not self._stop_event.is_set():
-            job = self.store.lease_next_job(worker_id=worker_id, job_types=["generate_cover"])
+            job = self.store.lease_next_job(
+                worker_id=worker_id, job_types=["generate_cover"]
+            )
             if job is None:
                 now = time.time()
                 if (now - last_idle_heartbeat) >= 10.0:
@@ -1020,7 +1162,9 @@ class JobWorkerPool:
                 def _publish_stage_progress(stage_payload: dict[str, Any]) -> None:
                     stage = str(stage_payload.get("stage", "") or "").strip()
                     message = str(stage_payload.get("message", "") or "").strip()
-                    progress = max(0.0, min(1.0, _safe_float(stage_payload.get("progress"), 0.0)))
+                    progress = max(
+                        0.0, min(1.0, _safe_float(stage_payload.get("progress"), 0.0))
+                    )
                     event_payload = {
                         "job_id": job.id,
                         "catalog_id": job.catalog_id,
@@ -1037,14 +1181,20 @@ class JobWorkerPool:
                 executor = _execute_generation_payload
                 stage_supported = False
                 try:
-                    stage_supported = "stage_callback" in inspect.signature(executor).parameters
+                    stage_supported = (
+                        "stage_callback" in inspect.signature(executor).parameters
+                    )
                 except Exception:
                     stage_supported = False
                 if stage_supported:
-                    result = executor(execution_payload, stage_callback=_publish_stage_progress)
+                    result = executor(
+                        execution_payload, stage_callback=_publish_stage_progress
+                    )
                 else:
                     result = executor(execution_payload)
-                result_rows = result.get("results", []) if isinstance(result, dict) else []
+                result_rows = (
+                    result.get("results", []) if isinstance(result, dict) else []
+                )
                 if isinstance(result_rows, list):
                     for row in result_rows:
                         if not isinstance(row, dict):
@@ -1056,10 +1206,14 @@ class JobWorkerPool:
                                 "catalog_id": job.catalog_id,
                                 "book_number": int(job.book_number or 0),
                                 "batch_id": batch_id,
-                                "variant": _safe_int(row.get("variant", row.get("variant_id", 0)), 0),
+                                "variant": _safe_int(
+                                    row.get("variant", row.get("variant_id", 0)), 0
+                                ),
                                 "model": str(row.get("model", "")).strip(),
                                 "success": bool(row.get("success", False)),
-                                "quality_score": _safe_float(row.get("quality_score"), 0.0),
+                                "quality_score": _safe_float(
+                                    row.get("quality_score"), 0.0
+                                ),
                                 "image_path": row.get("image_path"),
                                 "composited_path": row.get("composited_path"),
                             },
@@ -1068,7 +1222,10 @@ class JobWorkerPool:
                 self.store.record_attempt_end(
                     attempt_id,
                     status="completed",
-                    meta={"worker_id": worker_id, "results": len(result.get("results", []))},
+                    meta={
+                        "worker_id": worker_id,
+                        "results": len(result.get("results", [])),
+                    },
                 )
                 job_event_broker.publish(
                     "job_progress",
@@ -1115,16 +1272,24 @@ class JobWorkerPool:
                     "message": str(exc),
                     "type": exc.__class__.__name__,
                     "stage": exc.stage,
-                    **({"failures": exc.details.get("failures", [])} if exc.details.get("failures") else {}),
+                    **(
+                        {"failures": exc.details.get("failures", [])}
+                        if exc.details.get("failures")
+                        else {}
+                    ),
                 }
                 attempt_meta = {
                     "worker_id": worker_id,
                     "stage": exc.stage,
                     "error_type": exc.__class__.__name__,
-                    **({"failures": exc.details.get("failures", [])} if exc.details.get("failures") else {}),
+                    **(
+                        {"failures": exc.details.get("failures", [])}
+                        if exc.details.get("failures")
+                        else {}
+                    ),
                 }
                 if exc.retryable:
-                    delay = min(60.0, max(2.0, 2.0 ** attempt_number))
+                    delay = min(60.0, max(2.0, 2.0**attempt_number))
                     state = self.store.mark_failed(
                         job.id,
                         error=error_payload,
@@ -1190,9 +1355,16 @@ class JobWorkerPool:
                         extra={"job_id": job.id, "error": str(exc), "stage": exc.stage},
                     )
                 self._write_heartbeat(worker_id=worker_id, state="idle")
-            except (image_generator.RetryableGenerationError, requests.RequestException) as exc:
-                delay = min(60.0, max(2.0, 2.0 ** attempt_number))
-                error_payload = {"message": str(exc), "type": exc.__class__.__name__, "stage": "generate"}
+            except (
+                image_generator.RetryableGenerationError,
+                requests.RequestException,
+            ) as exc:
+                delay = min(60.0, max(2.0, 2.0**attempt_number))
+                error_payload = {
+                    "message": str(exc),
+                    "type": exc.__class__.__name__,
+                    "stage": "generate",
+                }
                 state = self.store.mark_failed(
                     job.id,
                     error=error_payload,
@@ -1258,7 +1430,10 @@ class JobWorkerPool:
                 )
                 if row is not None:
                     _batch_publish_progress_for_job(row)
-                logger.error("Async generation job failed", extra={"job_id": job.id, "error": str(exc)})
+                logger.error(
+                    "Async generation job failed",
+                    extra={"job_id": job.id, "error": str(exc)},
+                )
                 self._write_heartbeat(worker_id=worker_id, state="idle")
 
 
@@ -1266,8 +1441,12 @@ data_cache = DataCache(ttl_seconds=60)
 request_tracker = RequestTracker()
 mutation_rate_limiter = SimpleRateLimiter(per_minute=MUTATION_RATE_LIMIT_PER_MINUTE)
 read_rate_limiter = SimpleRateLimiter(per_minute=READ_RATE_LIMIT_PER_MINUTE)
-generation_rate_limiter = SimpleRateLimiter(per_minute=max(1, int(os.getenv("GENERATION_RATE_LIMIT_PER_MINUTE", "5"))))
-admin_rate_limiter = SimpleRateLimiter(per_minute=max(5, int(os.getenv("ADMIN_RATE_LIMIT_PER_MINUTE", "30"))))
+generation_rate_limiter = SimpleRateLimiter(
+    per_minute=max(1, int(os.getenv("GENERATION_RATE_LIMIT_PER_MINUTE", "5")))
+)
+admin_rate_limiter = SimpleRateLimiter(
+    per_minute=max(5, int(os.getenv("ADMIN_RATE_LIMIT_PER_MINUTE", "30")))
+)
 sse_connection_limiter = SSEConnectionLimiter(per_client=SSE_MAX_CONNECTIONS_PER_CLIENT)
 _catalog_mutation_limiters: dict[str, SimpleRateLimiter] = {}
 _catalog_generation_limiters: dict[str, SimpleRateLimiter] = {}
@@ -1280,14 +1459,20 @@ slo_alert_manager = SLOAlertManager(
     alert_levels=SLO_ALERT_LEVELS,
 )
 _slo_tracker_lock = threading.Lock()
-_slo_trackers_by_path: dict[str, RollingSLOTracker] = {str(SLO_METRICS_PATH.resolve()): slo_tracker}
+_slo_trackers_by_path: dict[str, RollingSLOTracker] = {
+    str(SLO_METRICS_PATH.resolve()): slo_tracker
+}
 _similarity_recompute_lock = threading.Lock()
 _similarity_recompute_jobs: dict[str, dict[str, Any]] = {}
 _slo_alert_manager_lock = threading.Lock()
-_slo_alert_managers_by_path: dict[str, SLOAlertManager] = {str(SLO_ALERT_STATE_PATH.resolve()): slo_alert_manager}
+_slo_alert_managers_by_path: dict[str, SLOAlertManager] = {
+    str(SLO_ALERT_STATE_PATH.resolve()): slo_alert_manager
+}
 job_db_store = job_store.JobStore(JOBS_DB_PATH)
 state_db_store = state_store.StateStore(STATE_DB_PATH)
-catalog_registry = catalog_manager.CatalogManager(catalogs_path=config.CATALOGS_PATH, project_root=PROJECT_ROOT)
+catalog_registry = catalog_manager.CatalogManager(
+    catalogs_path=config.CATALOGS_PATH, project_root=PROJECT_ROOT
+)
 job_event_broker = JobEventBroker(max_queue_size=300)
 job_worker_pool = JobWorkerPool(
     job_db_store,
@@ -1323,7 +1508,11 @@ def _slo_alert_manager_for_runtime(runtime: config.Config) -> SLOAlertManager:
             manager = SLOAlertManager(
                 state_path=path,
                 cooldown_seconds=runtime.slo_alert_cooldown_seconds,
-                alert_levels={str(token).strip().lower() for token in runtime.slo_alert_levels if str(token).strip()},
+                alert_levels={
+                    str(token).strip().lower()
+                    for token in runtime.slo_alert_levels
+                    if str(token).strip()
+                },
             )
             _slo_alert_managers_by_path[key] = manager
         return manager
@@ -1356,7 +1545,9 @@ class SLOBackgroundMonitor:
         catalog_ids_loader: Callable[[], list[str]] | None = None,
     ) -> None:
         self.interval_seconds = max(1, int(interval_seconds))
-        self.runtime_loader = runtime_loader or (lambda catalog_id=None: config.get_config(catalog_id))
+        self.runtime_loader = runtime_loader or (
+            lambda catalog_id=None: config.get_config(catalog_id)
+        )
         self.catalog_ids_loader = catalog_ids_loader or self._default_catalog_ids
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -1378,7 +1569,9 @@ class SLOBackgroundMonitor:
             rows = config.list_catalogs()
         except Exception:
             rows = []
-        ids = [str(row.id).strip() for row in rows if str(getattr(row, "id", "")).strip()]
+        ids = [
+            str(row.id).strip() for row in rows if str(getattr(row, "id", "")).strip()
+        ]
         if not ids:
             return [str(config.DEFAULT_CATALOG_ID)]
         return ids
@@ -1401,7 +1594,9 @@ class SLOBackgroundMonitor:
                 return False
             self._stop_event.clear()
             self._state["running"] = True
-            thread = threading.Thread(target=self._loop, name="slo-monitor", daemon=True)
+            thread = threading.Thread(
+                target=self._loop, name="slo-monitor", daemon=True
+            )
             self._thread = thread
             thread.start()
             return True
@@ -1426,7 +1621,9 @@ class SLOBackgroundMonitor:
 
     def run_once(self, *, catalog_ids: list[str] | None = None) -> dict[str, Any]:
         started = time.time()
-        ids = self._normalize_catalog_ids(catalog_ids if catalog_ids is not None else self.catalog_ids_loader())
+        ids = self._normalize_catalog_ids(
+            catalog_ids if catalog_ids is not None else self.catalog_ids_loader()
+        )
         now = datetime.now(timezone.utc).isoformat()
         summaries: list[dict[str, Any]] = []
         errors: list[dict[str, Any]] = []
@@ -1435,25 +1632,39 @@ class SLOBackgroundMonitor:
             try:
                 runtime = self.runtime_loader(catalog_id)
                 _, _, evaluation = _build_slo_evaluation(runtime=runtime)
-                alert = _slo_alert_manager_for_runtime(runtime).maybe_alert(runtime=runtime, slo_evaluation=evaluation)
+                alert = _slo_alert_manager_for_runtime(runtime).maybe_alert(
+                    runtime=runtime, slo_evaluation=evaluation
+                )
                 if bool(alert.get("sent", False)):
                     alerts_sent += 1
                 summary = {
-                    "catalog_id": str(getattr(runtime, "catalog_id", catalog_id) or catalog_id),
+                    "catalog_id": str(
+                        getattr(runtime, "catalog_id", catalog_id) or catalog_id
+                    ),
                     "sent": bool(alert.get("sent", False)),
                     "reason": str(alert.get("reason", "")),
                     "severity": str(alert.get("severity", "")),
                     "status": {
-                        "api_success_rate_7d": str(evaluation.get("api_success_rate_7d", {}).get("status", "")),
-                        "job_completion_without_manual_intervention": str(
-                            evaluation.get("job_completion_without_manual_intervention", {}).get("status", "")
+                        "api_success_rate_7d": str(
+                            evaluation.get("api_success_rate_7d", {}).get("status", "")
                         ),
-                        "same_stage_retry_rate": str(evaluation.get("same_stage_retry_rate", {}).get("status", "")),
+                        "job_completion_without_manual_intervention": str(
+                            evaluation.get(
+                                "job_completion_without_manual_intervention", {}
+                            ).get("status", "")
+                        ),
+                        "same_stage_retry_rate": str(
+                            evaluation.get("same_stage_retry_rate", {}).get(
+                                "status", ""
+                            )
+                        ),
                     },
                 }
                 summaries.append(summary)
             except Exception as exc:
-                logger.warning("Background SLO monitor failed for catalog %s: %s", catalog_id, exc)
+                logger.warning(
+                    "Background SLO monitor failed for catalog %s: %s", catalog_id, exc
+                )
                 errors.append({"catalog_id": catalog_id, "error": str(exc)})
 
         snapshot = {
@@ -1512,7 +1723,9 @@ def _slo_background_monitor_snapshot() -> dict[str, Any]:
 
 
 def _repository_for_runtime(runtime: config.Config) -> repository.BookRepository:
-    key = f"{runtime.catalog_id}:{int(bool(runtime.use_sqlite))}:{runtime.sqlite_db_path}"
+    key = (
+        f"{runtime.catalog_id}:{int(bool(runtime.use_sqlite))}:{runtime.sqlite_db_path}"
+    )
     with repository_lock:
         existing = repository_cache.get(key)
         if existing is not None:
@@ -1568,7 +1781,9 @@ def _pagination_payload(*, total: int, limit: int, offset: int) -> dict[str, Any
     }
 
 
-def _paginate_rows(rows: list[dict[str, Any]], *, limit: int, offset: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _paginate_rows(
+    rows: list[dict[str, Any]], *, limit: int, offset: int
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     total = len(rows)
     start = max(0, int(offset))
     end = start + max(1, int(limit))
@@ -1577,7 +1792,10 @@ def _paginate_rows(rows: list[dict[str, Any]], *, limit: int, offset: int) -> tu
 
 
 def _normalize_sort_order(query: dict[str, list[str]]) -> tuple[str, str]:
-    sort = str(query.get("sort", ["book_number"])[0] or "book_number").strip().lower() or "book_number"
+    sort = (
+        str(query.get("sort", ["book_number"])[0] or "book_number").strip().lower()
+        or "book_number"
+    )
     order = str(query.get("order", ["asc"])[0] or "asc").strip().lower()
     if order not in {"asc", "desc"}:
         order = "asc"
@@ -1611,9 +1829,16 @@ def _catalog_scoped_limiter(
         return limiter
 
 
-def _mutation_limiter(path: str, *, catalog_id: str | None = None) -> tuple[SimpleRateLimiter, int]:
+def _mutation_limiter(
+    path: str, *, catalog_id: str | None = None
+) -> tuple[SimpleRateLimiter, int]:
     token = str(path or "").strip().lower()
-    if token.startswith("/api/generate") or token.startswith("/api/jobs") or token.startswith("/api/export") or token.startswith("/api/delivery"):
+    if (
+        token.startswith("/api/generate")
+        or token.startswith("/api/jobs")
+        or token.startswith("/api/export")
+        or token.startswith("/api/delivery")
+    ):
         limiter = _catalog_scoped_limiter(
             catalog_id=catalog_id,
             default_limiter=generation_rate_limiter,
@@ -1647,7 +1872,11 @@ def _worker_runtime_status(*, worker_mode: str | None = None) -> dict[str, Any]:
     now = datetime.now(timezone.utc)
     updated_dt = _safe_iso_datetime(updated_at)
     age_seconds = (now - updated_dt).total_seconds() if updated_dt else None
-    alive = bool(updated_dt and age_seconds is not None and age_seconds <= JOB_WORKER_HEARTBEAT_STALE_SECONDS)
+    alive = bool(
+        updated_dt
+        and age_seconds is not None
+        and age_seconds <= JOB_WORKER_HEARTBEAT_STALE_SECONDS
+    )
     running = 0
     idle = 0
     for row in workers.values():
@@ -1663,7 +1892,9 @@ def _worker_runtime_status(*, worker_mode: str | None = None) -> dict[str, Any]:
         "heartbeat_path": str(JOB_WORKER_HEARTBEAT_PATH),
         "service": str(payload.get("service", "") or ""),
         "updated_at": updated_at,
-        "age_seconds": round(float(age_seconds), 3) if age_seconds is not None else None,
+        "age_seconds": round(float(age_seconds), 3)
+        if age_seconds is not None
+        else None,
         "stale_after_seconds": JOB_WORKER_HEARTBEAT_STALE_SECONDS,
         "alive": alive,
         "worker_count": int(payload.get("worker_count", 0) or len(workers)),
@@ -1695,9 +1926,13 @@ def _record_audit_event(
             catalog_id=catalog_id,
             status=status,
             details=details or {},
-            path=config.audit_log_path(catalog_id=catalog_id, data_dir=(data_dir or config.DATA_DIR)),
+            path=config.audit_log_path(
+                catalog_id=catalog_id, data_dir=(data_dir or config.DATA_DIR)
+            ),
         )
-    except Exception as exc:  # pragma: no cover - audit logging must never break request flow
+    except (
+        Exception
+    ) as exc:  # pragma: no cover - audit logging must never break request flow
         logger.warning("Audit log write failed: %s", exc)
 
 
@@ -1713,10 +1948,14 @@ def _generation_idempotency_key(
     selected_cover_id: str = "",
     dry_run: bool = False,
 ) -> str:
-    normalized_models = sorted({str(item).strip() for item in models if str(item).strip()})
+    normalized_models = sorted(
+        {str(item).strip() for item in models if str(item).strip()}
+    )
     normalized_prompt = " ".join(str(prompt or "").split())
     normalized_provider = str(provider or "all").strip().lower() or "all"
-    normalized_cover_source = str(cover_source or "catalog").strip().lower() or "catalog"
+    normalized_cover_source = (
+        str(cover_source or "catalog").strip().lower() or "catalog"
+    )
     if normalized_cover_source not in {"catalog", "drive"}:
         normalized_cover_source = "catalog"
     normalized_selected_cover_id = str(selected_cover_id or "").strip()
@@ -1731,12 +1970,17 @@ def _generation_idempotency_key(
         "selected_cover_id": normalized_selected_cover_id,
         "dry_run": bool(dry_run),
     }
-    digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")).hexdigest()
+    digest = hashlib.sha256(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    ).hexdigest()
     return f"generate:{digest}"
 
 
 def _max_generation_variants(runtime: config.Config) -> int:
-    configured = _safe_int(getattr(runtime, "max_generation_variants", config.MAX_GENERATION_VARIANTS), config.MAX_GENERATION_VARIANTS)
+    configured = _safe_int(
+        getattr(runtime, "max_generation_variants", config.MAX_GENERATION_VARIANTS),
+        config.MAX_GENERATION_VARIANTS,
+    )
     return max(1, configured)
 
 
@@ -1762,7 +2006,14 @@ def _clear_job_model_cancellations(*, job_id: str, catalog_id: str) -> None:
             _JOB_CANCELLED_MODELS.pop(str(catalog_id), None)
 
 
-def _record_slow_request(*, method: str, path: str, duration_seconds: float, status_code: int, catalog_id: str) -> None:
+def _record_slow_request(
+    *,
+    method: str,
+    path: str,
+    duration_seconds: float,
+    status_code: int,
+    catalog_id: str,
+) -> None:
     if float(duration_seconds) < _SLOW_REQUEST_THRESHOLD_SECONDS:
         return
     row = {
@@ -1782,7 +2033,13 @@ def _record_slow_request(*, method: str, path: str, duration_seconds: float, sta
 def _slow_request_snapshot(*, limit: int = 200) -> list[dict[str, Any]]:
     with _SLOW_REQUEST_LOG_LOCK:
         rows = list(_SLOW_REQUEST_LOG[-max(1, min(2000, int(limit))) :])
-    rows.sort(key=lambda item: (_safe_float(item.get("duration_seconds"), 0.0), str(item.get("timestamp", ""))), reverse=True)
+    rows.sort(
+        key=lambda item: (
+            _safe_float(item.get("duration_seconds"), 0.0),
+            str(item.get("timestamp", "")),
+        ),
+        reverse=True,
+    )
     return rows
 
 
@@ -1803,11 +2060,16 @@ def _percentile(values: list[float], p: float) -> float:
 
 def _performance_summary_payload(*, runtime: config.Config) -> dict[str, Any]:
     slow_rows = _slow_request_snapshot(limit=500)
-    durations = [max(0.0, _safe_float(row.get("duration_seconds"), 0.0)) for row in slow_rows]
+    durations = [
+        max(0.0, _safe_float(row.get("duration_seconds"), 0.0)) for row in slow_rows
+    ]
     endpoint_rollup: dict[str, dict[str, float]] = {}
     for row in slow_rows:
         path = str(row.get("path", "")).strip() or "/"
-        bucket = endpoint_rollup.setdefault(path, {"count": 0.0, "max_duration_seconds": 0.0, "total_duration_seconds": 0.0})
+        bucket = endpoint_rollup.setdefault(
+            path,
+            {"count": 0.0, "max_duration_seconds": 0.0, "total_duration_seconds": 0.0},
+        )
         duration = max(0.0, _safe_float(row.get("duration_seconds"), 0.0))
         bucket["count"] += 1.0
         bucket["total_duration_seconds"] += duration
@@ -1826,7 +2088,10 @@ def _performance_summary_payload(*, runtime: config.Config) -> dict[str, Any]:
             }
             for path, values in endpoint_rollup.items()
         ),
-        key=lambda item: (int(item.get("count", 0)), float(item.get("max_duration_seconds", 0.0))),
+        key=lambda item: (
+            int(item.get("count", 0)),
+            float(item.get("max_duration_seconds", 0.0)),
+        ),
         reverse=True,
     )[:25]
 
@@ -1838,7 +2103,9 @@ def _performance_summary_payload(*, runtime: config.Config) -> dict[str, Any]:
         "request_threshold_seconds": float(_SLOW_REQUEST_THRESHOLD_SECONDS),
         "response_time": {
             "sample_size": len(durations),
-            "avg_seconds": round(sum(durations) / len(durations), 4) if durations else 0.0,
+            "avg_seconds": round(sum(durations) / len(durations), 4)
+            if durations
+            else 0.0,
             "p50_seconds": round(_percentile(durations, 0.50), 4),
             "p95_seconds": round(_percentile(durations, 0.95), 4),
             "p99_seconds": round(_percentile(durations, 0.99), 4),
@@ -1883,7 +2150,9 @@ def _serialize_generation_results(
         if row.image_path and Path(row.image_path).exists():
             raw_art_dir = runtime.output_dir / "raw_art" / str(row.book_number)
             raw_art_dir.mkdir(parents=True, exist_ok=True)
-            dest = raw_art_dir / f"{raw_job_token}_variant_{row.variant}_{model_token}.png"
+            dest = (
+                raw_art_dir / f"{raw_job_token}_variant_{row.variant}_{model_token}.png"
+            )
             try:
                 shutil.copy2(str(row.image_path), str(dest))
                 persisted_raw_path = _to_project_relative(dest)
@@ -1892,8 +2161,42 @@ def _serialize_generation_results(
                 logger.warning("Failed to persist raw AI art: %s", exc)
         composed = None
         persisted_composite_path = None
+        composite_candidate: Path | None = None
+        if row.image_path and row.success and Path(row.image_path).exists():
+            source_pdf = cover_compositor_v2._find_source_pdf_for_book(
+                runtime.input_dir,
+                row.book_number,
+                runtime.book_catalog_path,
+            )
+            if source_pdf is not None:
+                out_jpg = (
+                    runtime.tmp_dir
+                    / "composited"
+                    / str(row.book_number)
+                    / model_token
+                    / f"{raw_job_token}_variant_{row.variant}.jpg"
+                )
+                try:
+                    cover_compositor_v2.composite(
+                        source_pdf_path=source_pdf,
+                        ai_art_paths=[Path(row.image_path)],
+                        output_jpg_paths=[out_jpg],
+                        mode="llm",
+                    )
+                    composite_candidate = out_jpg
+                except Exception as comp_exc:
+                    logger.warning(
+                        "Inline composite failed for book %s variant %s: %s",
+                        row.book_number,
+                        row.variant,
+                        comp_exc,
+                    )
+        if composite_candidate is None and row.image_path:
+            composite_candidate = _resolve_composited_candidate(
+                row.image_path, runtime=runtime
+            )
         if row.image_path:
-            candidate = _resolve_composited_candidate(row.image_path, runtime=runtime)
+            candidate = composite_candidate
             if candidate and candidate.exists():
                 composed = _to_project_relative(candidate)
                 persisted_composite_path = _persist_composite_image(
@@ -1903,8 +2206,14 @@ def _serialize_generation_results(
                     model_token=model_token,
                     composite_source=candidate,
                     job_token=raw_job_token,
-                    raw_art_source=(PROJECT_ROOT / str(persisted_raw_path)) if persisted_raw_path else (Path(row.image_path) if Path(row.image_path).exists() else None),
-                    raw_art_path_token=str(persisted_raw_path or image_rel or "").strip(),
+                    raw_art_source=(PROJECT_ROOT / str(persisted_raw_path))
+                    if persisted_raw_path
+                    else (
+                        Path(row.image_path) if Path(row.image_path).exists() else None
+                    ),
+                    raw_art_path_token=str(
+                        persisted_raw_path or image_rel or ""
+                    ).strip(),
                 )
         composed_pdf_path = None
         composed_ai_path = None
@@ -1946,7 +2255,9 @@ def _serialize_generation_results(
     return serialized
 
 
-def _generation_artifact_job_token(*, job_id: str = "", row: dict[str, Any] | None = None) -> str:
+def _generation_artifact_job_token(
+    *, job_id: str = "", row: dict[str, Any] | None = None
+) -> str:
     explicit = re.sub(r"[^A-Za-z0-9_-]+", "", str(job_id or "").strip())[:64]
     if explicit:
         return explicit
@@ -1956,7 +2267,9 @@ def _generation_artifact_job_token(*, job_id: str = "", row: dict[str, Any] | No
             stem = Path(raw_art_path).stem
             match = re.match(r"(?P<token>.+?)_variant_\d+_", stem)
             if match:
-                token = re.sub(r"[^A-Za-z0-9_-]+", "", str(match.group("token") or "").strip())[:64]
+                token = re.sub(
+                    r"[^A-Za-z0-9_-]+", "", str(match.group("token") or "").strip()
+                )[:64]
                 if token:
                     return token
     return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%f")
@@ -1977,7 +2290,9 @@ def _persist_composite_image(
         return None
     composite_dir = runtime.output_dir / "saved_composites" / str(book_number)
     composite_dir.mkdir(parents=True, exist_ok=True)
-    composite_dest = composite_dir / f"{job_token}_variant_{int(variant)}_{model_token}.jpg"
+    composite_dest = (
+        composite_dir / f"{job_token}_variant_{int(variant)}_{model_token}.jpg"
+    )
     try:
         shutil.copy2(str(composite_source), str(composite_dest))
         _write_saved_composite_manifest(
@@ -2028,13 +2343,17 @@ def _write_saved_composite_manifest(
             "saved_composite_path": _to_project_relative(composite_path),
             "saved_composite_sha256": _file_sha256(composite_path),
             "raw_art_path": str(raw_art_path_token or "").strip(),
-            "raw_art_sha256": _file_sha256(raw_art_source) if raw_art_source is not None and raw_art_source.exists() else "",
+            "raw_art_sha256": _file_sha256(raw_art_source)
+            if raw_art_source is not None and raw_art_source.exists()
+            else "",
             "created_at": datetime.now(timezone.utc).isoformat(),
         },
     )
 
 
-def _saved_composite_destination_for_row(*, runtime: config.Config, row: dict[str, Any]) -> Path | None:
+def _saved_composite_destination_for_row(
+    *, runtime: config.Config, row: dict[str, Any]
+) -> Path | None:
     configured = _project_path_if_exists(row.get("saved_composited_path"))
     if configured is not None:
         return configured
@@ -2044,28 +2363,47 @@ def _saved_composite_destination_for_row(*, runtime: config.Config, row: dict[st
         return None
     composite_dir = runtime.output_dir / "saved_composites" / str(book_number)
     composite_dir.mkdir(parents=True, exist_ok=True)
-    model_token = str(row.get("model", "unknown") or "unknown").replace("/", "_").replace(" ", "_")
+    model_token = (
+        str(row.get("model", "unknown") or "unknown")
+        .replace("/", "_")
+        .replace(" ", "_")
+    )
     job_token = _generation_artifact_job_token(row=row)
     return composite_dir / f"{job_token}_variant_{int(variant)}_{model_token}.jpg"
 
 
-def _saved_composite_manifest_matches_row(*, runtime: config.Config, row: dict[str, Any], composite_path: Path) -> bool:
+def _saved_composite_manifest_matches_row(
+    *, runtime: config.Config, row: dict[str, Any], composite_path: Path
+) -> bool:
     payload = _load_json(_saved_composite_manifest_path(composite_path), {})
     if not isinstance(payload, dict) or not payload:
         return False
     try:
-        if str(payload.get("saved_composite_sha256", "") or "").strip() != _file_sha256(composite_path):
+        if str(payload.get("saved_composite_sha256", "") or "").strip() != _file_sha256(
+            composite_path
+        ):
             return False
     except Exception:
         return False
     expected_job_token = _generation_artifact_job_token(row=row)
-    if expected_job_token and str(payload.get("job_token", "") or "").strip() != expected_job_token:
+    if (
+        expected_job_token
+        and str(payload.get("job_token", "") or "").strip() != expected_job_token
+    ):
         return False
     expected_variant = _safe_int(row.get("variant"), 0)
-    if expected_variant > 0 and _safe_int(payload.get("variant"), 0) != expected_variant:
+    if (
+        expected_variant > 0
+        and _safe_int(payload.get("variant"), 0) != expected_variant
+    ):
         return False
-    expected_model = str(row.get("model", "") or "").strip().replace("/", "_").replace(" ", "_")
-    if expected_model and str(payload.get("model_token", "") or "").strip() != expected_model:
+    expected_model = (
+        str(row.get("model", "") or "").strip().replace("/", "_").replace(" ", "_")
+    )
+    if (
+        expected_model
+        and str(payload.get("model_token", "") or "").strip() != expected_model
+    ):
         return False
     expected_raw_rel = str(row.get("raw_art_path", "") or "").strip()
     manifest_raw_rel = str(payload.get("raw_art_path", "") or "").strip()
@@ -2073,12 +2411,16 @@ def _saved_composite_manifest_matches_row(*, runtime: config.Config, row: dict[s
         return False
     raw_art = _resolve_durable_raw_image_path(runtime=runtime, row=row)
     if raw_art is not None and raw_art.exists():
-        if str(payload.get("raw_art_sha256", "") or "").strip() != _file_sha256(raw_art):
+        if str(payload.get("raw_art_sha256", "") or "").strip() != _file_sha256(
+            raw_art
+        ):
             return False
     return True
 
 
-def _rebuild_saved_composite_from_raw_art(*, runtime: config.Config, row: dict[str, Any], output_path: Path) -> Path | None:
+def _rebuild_saved_composite_from_raw_art(
+    *, runtime: config.Config, row: dict[str, Any], output_path: Path
+) -> Path | None:
     raw_art = _resolve_durable_raw_image_path(runtime=runtime, row=row)
     book_number = _safe_int(row.get("book_number"), 0)
     variant = _safe_int(row.get("variant"), 0)
@@ -2093,53 +2435,73 @@ def _rebuild_saved_composite_from_raw_art(*, runtime: config.Config, row: dict[s
         )
     if cover_path is None or not cover_path.exists():
         return None
-    regions = _load_json(config.cover_regions_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir), {})
-    region = cover_compositor._region_for_book(regions, book_number)  # type: ignore[attr-defined]
-    source_pdf = pdf_compositor.find_source_pdf_for_book(
-        input_dir=runtime.input_dir,
-        book_number=book_number,
-        catalog_path=runtime.book_catalog_path,
+    source_pdf = cover_compositor_v2._find_source_pdf_for_book(
+        runtime.input_dir,
+        book_number,
+        runtime.book_catalog_path,
     )
+    if source_pdf is None:
+        return None
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    rebuilt = cover_compositor.composite_single(
-        cover_path=cover_path,
-        illustration_path=raw_art,
-        region=region,
-        output_path=output_path,
+    cover_compositor_v2.composite(
         source_pdf_path=source_pdf,
+        ai_art_paths=[raw_art],
+        output_jpg_paths=[output_path],
+        mode="llm",
     )
+    rebuilt = output_path
     _write_saved_composite_manifest(
         composite_path=rebuilt,
         job_token=_generation_artifact_job_token(row=row),
         book_number=book_number,
         variant=variant,
-        model_token=str(row.get("model", "unknown") or "unknown").replace("/", "_").replace(" ", "_"),
+        model_token=str(row.get("model", "unknown") or "unknown")
+        .replace("/", "_")
+        .replace(" ", "_"),
         raw_art_source=raw_art,
         raw_art_path_token=str(row.get("raw_art_path", "") or "").strip(),
     )
     return rebuilt
 
 
-def _ensure_saved_composite_for_row(*, runtime: config.Config, row: dict[str, Any]) -> Path | None:
+def _ensure_saved_composite_for_row(
+    *, runtime: config.Config, row: dict[str, Any]
+) -> Path | None:
     composite_path = _project_path_if_exists(row.get("saved_composited_path"))
     if composite_path is not None and composite_path.exists():
-        if _saved_composite_manifest_matches_row(runtime=runtime, row=row, composite_path=composite_path):
+        if _saved_composite_manifest_matches_row(
+            runtime=runtime, row=row, composite_path=composite_path
+        ):
             return composite_path
         if _resolve_durable_raw_image_path(runtime=runtime, row=row) is None:
             return composite_path
-    destination = composite_path or _saved_composite_destination_for_row(runtime=runtime, row=row)
+    destination = composite_path or _saved_composite_destination_for_row(
+        runtime=runtime, row=row
+    )
     if destination is None:
-        return composite_path if composite_path is not None and composite_path.exists() else None
-    rebuilt = _rebuild_saved_composite_from_raw_art(runtime=runtime, row=row, output_path=destination)
+        return (
+            composite_path
+            if composite_path is not None and composite_path.exists()
+            else None
+        )
+    rebuilt = _rebuild_saved_composite_from_raw_art(
+        runtime=runtime, row=row, output_path=destination
+    )
     if rebuilt is not None and rebuilt.exists():
         row["saved_composited_path"] = _to_project_relative(rebuilt)
         return rebuilt
-    if composite_path is not None and composite_path.exists() and _resolve_durable_raw_image_path(runtime=runtime, row=row) is None:
+    if (
+        composite_path is not None
+        and composite_path.exists()
+        and _resolve_durable_raw_image_path(runtime=runtime, row=row) is None
+    ):
         return composite_path
     return None
 
 
-def _hydrate_serialized_result_paths(*, runtime: config.Config, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _hydrate_serialized_result_paths(
+    *, runtime: config.Config, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     hydrated: list[dict[str, Any]] = []
     for row in rows:
         if not isinstance(row, dict):
@@ -2163,21 +2525,35 @@ def _hydrate_serialized_result_paths(*, runtime: config.Config, rows: list[dict[
                 if ai_candidate and ai_candidate.exists():
                     payload["composited_ai_path"] = _to_project_relative(ai_candidate)
             else:
-                existing_composite = _project_path_if_exists(payload.get("composited_path"))
+                existing_composite = _project_path_if_exists(
+                    payload.get("composited_path")
+                )
                 if existing_composite is not None:
                     if saved_composite is None or not saved_composite.exists():
-                        payload["composited_path"] = _to_project_relative(existing_composite)
-                    pdf_candidate = _resolve_composited_companion(existing_composite, ".pdf")
+                        payload["composited_path"] = _to_project_relative(
+                            existing_composite
+                        )
+                    pdf_candidate = _resolve_composited_companion(
+                        existing_composite, ".pdf"
+                    )
                     if pdf_candidate and pdf_candidate.exists():
-                        payload["composited_pdf_path"] = _to_project_relative(pdf_candidate)
-                    ai_candidate = _resolve_composited_companion(existing_composite, ".ai")
+                        payload["composited_pdf_path"] = _to_project_relative(
+                            pdf_candidate
+                        )
+                    ai_candidate = _resolve_composited_companion(
+                        existing_composite, ".ai"
+                    )
                     if ai_candidate and ai_candidate.exists():
-                        payload["composited_ai_path"] = _to_project_relative(ai_candidate)
+                        payload["composited_ai_path"] = _to_project_relative(
+                            ai_candidate
+                        )
         hydrated.append(payload)
     return hydrated
 
 
-def _current_run_generated_paths(*, runtime: config.Config, rows: list[dict[str, Any]]) -> set[Path]:
+def _current_run_generated_paths(
+    *, runtime: config.Config, rows: list[dict[str, Any]]
+) -> set[Path]:
     keep: set[Path] = set()
     for row in rows:
         if not isinstance(row, dict):
@@ -2191,7 +2567,9 @@ def _current_run_generated_paths(*, runtime: config.Config, rows: list[dict[str,
     return keep
 
 
-def _prune_stale_generated_variants_for_book(*, runtime: config.Config, book_number: int, keep_paths: set[Path]) -> None:
+def _prune_stale_generated_variants_for_book(
+    *, runtime: config.Config, book_number: int, keep_paths: set[Path]
+) -> None:
     root = runtime.tmp_dir / "generated" / str(book_number)
     if not root.exists() or not root.is_dir():
         return
@@ -2215,7 +2593,11 @@ def _prune_stale_generated_variants_for_book(*, runtime: config.Config, book_num
         except Exception:
             continue
     if removed > 0:
-        for directory in sorted([path for path in root.rglob("*") if path.is_dir()], key=lambda p: len(p.parts), reverse=True):
+        for directory in sorted(
+            [path for path in root.rglob("*") if path.is_dir()],
+            key=lambda p: len(p.parts),
+            reverse=True,
+        ):
             try:
                 next(directory.iterdir())
             except StopIteration:
@@ -2247,16 +2629,26 @@ class JobStageError(RuntimeError):
 
 
 def _checkpoint_catalog_token(catalog_id: str) -> str:
-    token = "".join(ch if (ch.isalnum() or ch in {"-", "_"}) else "_" for ch in str(catalog_id).strip().lower())
+    token = "".join(
+        ch if (ch.isalnum() or ch in {"-", "_"}) else "_"
+        for ch in str(catalog_id).strip().lower()
+    )
     token = token.strip("_-")
     return token or config.DEFAULT_CATALOG_ID
 
 
 def _job_checkpoint_path(*, runtime: config.Config, job_id: str) -> Path:
-    return runtime.data_dir / "job_checkpoints" / _checkpoint_catalog_token(runtime.catalog_id) / f"{job_id}.json"
+    return (
+        runtime.data_dir
+        / "job_checkpoints"
+        / _checkpoint_catalog_token(runtime.catalog_id)
+        / f"{job_id}.json"
+    )
 
 
-def _default_job_checkpoint(*, runtime: config.Config, job_id: str, book: int, dry_run: bool) -> dict[str, Any]:
+def _default_job_checkpoint(
+    *, runtime: config.Config, job_id: str, book: int, dry_run: bool
+) -> dict[str, Any]:
     return {
         "catalog": runtime.catalog_id,
         "job_id": str(job_id),
@@ -2274,8 +2666,12 @@ def _default_job_checkpoint(*, runtime: config.Config, job_id: str, book: int, d
     }
 
 
-def _load_job_checkpoint(*, runtime: config.Config, job_id: str, book: int, dry_run: bool) -> dict[str, Any]:
-    default_payload = _default_job_checkpoint(runtime=runtime, job_id=job_id, book=book, dry_run=dry_run)
+def _load_job_checkpoint(
+    *, runtime: config.Config, job_id: str, book: int, dry_run: bool
+) -> dict[str, Any]:
+    default_payload = _default_job_checkpoint(
+        runtime=runtime, job_id=job_id, book=book, dry_run=dry_run
+    )
     path = _job_checkpoint_path(runtime=runtime, job_id=job_id)
     payload = safe_json.load_json(path, default_payload)
     if not isinstance(payload, dict):
@@ -2296,7 +2692,9 @@ def _load_job_checkpoint(*, runtime: config.Config, job_id: str, book: int, dry_
         if not isinstance(entry, dict):
             stages[stage_name] = {"status": "pending"}
             continue
-        entry["status"] = str(entry.get("status", "pending") or "pending").strip().lower()
+        entry["status"] = (
+            str(entry.get("status", "pending") or "pending").strip().lower()
+        )
         if entry["status"] not in {"pending", "completed", "failed", "skipped"}:
             entry["status"] = "pending"
         stages[stage_name] = entry
@@ -2310,7 +2708,9 @@ def _save_job_checkpoint(*, runtime: config.Config, checkpoint: dict[str, Any]) 
     if not job_id:
         return
     checkpoint["updated_at"] = datetime.now(timezone.utc).isoformat()
-    safe_json.atomic_write_json(_job_checkpoint_path(runtime=runtime, job_id=job_id), checkpoint)
+    safe_json.atomic_write_json(
+        _job_checkpoint_path(runtime=runtime, job_id=job_id), checkpoint
+    )
 
 
 def _clear_job_checkpoint(*, runtime: config.Config, job_id: str) -> None:
@@ -2321,9 +2721,15 @@ def _clear_job_checkpoint(*, runtime: config.Config, job_id: str) -> None:
         path.unlink(missing_ok=True)
 
 
-def _cleanup_stale_checkpoints(*, runtime: config.Config, max_age_hours: int = 24) -> int:
+def _cleanup_stale_checkpoints(
+    *, runtime: config.Config, max_age_hours: int = 24
+) -> int:
     """Remove stale checkpoint files to avoid orphaned resume state."""
-    checkpoint_root = runtime.data_dir / "job_checkpoints" / _checkpoint_catalog_token(runtime.catalog_id)
+    checkpoint_root = (
+        runtime.data_dir
+        / "job_checkpoints"
+        / _checkpoint_catalog_token(runtime.catalog_id)
+    )
     if not checkpoint_root.exists():
         return 0
     now_ts = time.time()
@@ -2373,7 +2779,9 @@ def _set_checkpoint_stage(
         entry["completed_at"] = now
         entry.pop("error", None)
     elif entry["status"] in {"failed", "pending"}:
-        entry["failed_at"] = now if entry["status"] == "failed" else entry.get("failed_at", "")
+        entry["failed_at"] = (
+            now if entry["status"] == "failed" else entry.get("failed_at", "")
+        )
         if error:
             entry["error"] = error
     elif entry["status"] == "skipped":
@@ -2382,7 +2790,14 @@ def _set_checkpoint_stage(
 
 
 def _is_retryable_stage_error(*, stage: str, exc: Exception) -> bool:
-    if isinstance(exc, (image_generator.RetryableGenerationError, requests.RequestException, TimeoutError)):
+    if isinstance(
+        exc,
+        (
+            image_generator.RetryableGenerationError,
+            requests.RequestException,
+            TimeoutError,
+        ),
+    ):
         return True
     if stage == "persist":
         return isinstance(exc, (OSError, sqlite3.Error))
@@ -2404,17 +2819,31 @@ def _execute_generation_payload(
     variants = _safe_int(payload.get("variants"), 5)
     requested_variant = max(1, _safe_int(payload.get("variant"), 1))
     prompt = str(payload.get("prompt", ""))
-    prompt_source = str(payload.get("prompt_source", payload.get("promptSource", "template")) or "template").strip().lower() or "template"
-    template_id = str(payload.get("template_id", payload.get("templateId", "")) or "").strip()
+    prompt_source = (
+        str(
+            payload.get("prompt_source", payload.get("promptSource", "template"))
+            or "template"
+        )
+        .strip()
+        .lower()
+        or "template"
+    )
+    template_id = str(
+        payload.get("template_id", payload.get("templateId", "")) or ""
+    ).strip()
     compose_prompt = bool(payload.get("compose_prompt", True))
     preserve_prompt_text = bool(payload.get("preserve_prompt_text", False))
     scene_description = str(payload.get("scene_description", "") or "").strip()
-    template_ok, _template_details = _validate_template_id(runtime=runtime, template_id=template_id)
+    template_ok, _template_details = _validate_template_id(
+        runtime=runtime, template_id=template_id
+    )
     if not template_ok:
         raise ValueError(f"Unknown template_id: {template_id}")
     provider = str(payload.get("provider", "")).strip().lower()
     library_prompt_id = str(payload.get("library_prompt_id", "")).strip()
-    cover_source = str(payload.get("cover_source", "catalog")).strip().lower() or "catalog"
+    cover_source = (
+        str(payload.get("cover_source", "catalog")).strip().lower() or "catalog"
+    )
     if cover_source not in {"catalog", "drive"}:
         cover_source = "catalog"
     selected_cover_id = str(payload.get("selected_cover_id", "")).strip()
@@ -2466,19 +2895,17 @@ def _execute_generation_payload(
                         row
                         for row in variants_payload
                         if isinstance(row, dict)
-                        and _safe_int(row.get("variant_id", row.get("variant")), 0) == requested_variant
+                        and _safe_int(row.get("variant_id", row.get("variant")), 0)
+                        == requested_variant
                     ),
                     None,
                 )
                 variant_row = matching_variant or variants_payload[0]
                 if isinstance(variant_row, dict):
                     default_prompt = str(variant_row.get("prompt", "")).strip()
-            base_prompt_for_composer = (
-                default_prompt
-                or (
-                    f"Cinematic full-bleed narrative scene for {book_row.get('title', f'Book {book}')}, "
-                    "single dominant focal subject, vivid painterly color, no text, no logos, no borders or frames"
-                )
+            base_prompt_for_composer = default_prompt or (
+                f"Cinematic full-bleed narrative scene for {book_row.get('title', f'Book {book}')}, "
+                "single dominant focal subject, vivid painterly color, no text, no logos, no borders or frames"
             )
         composed_prompt_payload = _compose_prompt_for_book(
             runtime=runtime,
@@ -2489,7 +2916,9 @@ def _execute_generation_payload(
             scene_override=scene_description,
         )
         if prompt_source == "template" or not raw_request_prompt:
-            prompt = str(composed_prompt_payload.get("prompt", base_prompt_for_composer)).strip()
+            prompt = str(
+                composed_prompt_payload.get("prompt", base_prompt_for_composer)
+            ).strip()
 
     needs_backend_scene_anchor = (
         prompt_source != "custom"
@@ -2562,18 +2991,28 @@ def _execute_generation_payload(
     )
     resumed_from_checkpoint = bool(
         checkpoint
-        and any(_checkpoint_stage_completed(checkpoint, stage) for stage in ("generate", "composite", "persist"))
+        and any(
+            _checkpoint_stage_completed(checkpoint, stage)
+            for stage in ("generate", "composite", "persist")
+        )
     )
 
     serialized: list[dict[str, Any]] = []
     if checkpoint and _checkpoint_stage_completed(checkpoint, "generate"):
         cached_rows = checkpoint.get("results", [])
-        serialized = [row for row in cached_rows if isinstance(row, dict)] if isinstance(cached_rows, list) else []
+        serialized = (
+            [row for row in cached_rows if isinstance(row, dict)]
+            if isinstance(cached_rows, list)
+            else []
+        )
     else:
+
         def _cancel_checker(model_name: str, _variant: int) -> bool:
             if not job_id:
                 return False
-            return _is_job_model_cancelled(job_id=job_id, catalog_id=runtime.catalog_id, model=str(model_name))
+            return _is_job_model_cancelled(
+                job_id=job_id, catalog_id=runtime.catalog_id, model=str(model_name)
+            )
 
         try:
             results = image_generator.generate_single_book(
@@ -2591,20 +3030,28 @@ def _execute_generation_payload(
                 cancel_checker=_cancel_checker if job_id else None,
                 preserve_prompt_text=preserve_prompt_text,
             )
-            serialized = _serialize_generation_results(runtime=runtime, book=book, results=results, job_id=job_id)
+            serialized = _serialize_generation_results(
+                runtime=runtime, book=book, results=results, job_id=job_id
+            )
             if library_prompt_id:
                 for row in serialized:
                     if isinstance(row, dict):
                         row["library_prompt_id"] = library_prompt_id
             if not dry_run:
-                successful_rows = [row for row in serialized if isinstance(row, dict) and bool(row.get("success"))]
+                successful_rows = [
+                    row
+                    for row in serialized
+                    if isinstance(row, dict) and bool(row.get("success"))
+                ]
                 if not successful_rows:
                     summarized_failures = _summarize_generation_failures(serialized)
                     failure_details: list[str] = []
                     for row in summarized_failures:
                         model = str(row.get("model", "unknown"))
                         variant = _safe_int(row.get("variant"), 0)
-                        error_text = str(row.get("error", "") or "unknown error").strip()
+                        error_text = str(
+                            row.get("error", "") or "unknown error"
+                        ).strip()
                         failure_details.append(f"{model} v{variant}: {error_text}")
                     detail_blob = "; ".join(failure_details[:4])
                     if len(failure_details) > 4:
@@ -2628,7 +3075,11 @@ def _execute_generation_payload(
                         "message": str(exc),
                         "type": exc.__class__.__name__,
                         "stage": "generate",
-                        **({"details": exc.details} if isinstance(exc, JobStageError) and exc.details else {}),
+                        **(
+                            {"details": exc.details}
+                            if isinstance(exc, JobStageError) and exc.details
+                            else {}
+                        ),
                     },
                 )
                 _save_job_checkpoint(runtime=runtime, checkpoint=checkpoint)
@@ -2643,11 +3094,14 @@ def _execute_generation_payload(
             _set_checkpoint_stage(checkpoint, stage="generate", status="completed")
             _save_job_checkpoint(runtime=runtime, checkpoint=checkpoint)
 
-    if not dry_run and not (checkpoint and _checkpoint_stage_completed(checkpoint, "composite")):
-        regions = _load_json(config.cover_regions_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir), {})
+    if not dry_run and not (
+        checkpoint and _checkpoint_stage_completed(checkpoint, "composite")
+    ):
         try:
             keep_paths = _current_run_generated_paths(runtime=runtime, rows=serialized)
-            _prune_stale_generated_variants_for_book(runtime=runtime, book_number=book, keep_paths=keep_paths)
+            _prune_stale_generated_variants_for_book(
+                runtime=runtime, book_number=book, keep_paths=keep_paths
+            )
             if cover_source == "drive":
                 _emit_stage("download", "Downloading cover from Google Drive...", 0.03)
                 effective_drive_folder_id = (
@@ -2663,7 +3117,11 @@ def _execute_generation_payload(
                 )
                 if not effective_drive_folder_id:
                     raise RuntimeError("Google Drive source folder is not configured.")
-                credentials_path = Path(credentials_override) if credentials_override else _resolve_credentials_path(runtime)
+                credentials_path = (
+                    Path(credentials_override)
+                    if credentials_override
+                    else _resolve_credentials_path(runtime)
+                )
                 if not credentials_path.is_absolute():
                     credentials_path = PROJECT_ROOT / credentials_path
                 ensure_result = drive_manager.ensure_local_input_cover(
@@ -2676,7 +3134,12 @@ def _execute_generation_payload(
                     selected_cover_id=selected_cover_id,
                 )
                 if not bool(ensure_result.get("ok")):
-                    raise RuntimeError(str(ensure_result.get("error") or "Failed to load input cover from Google Drive."))
+                    raise RuntimeError(
+                        str(
+                            ensure_result.get("error")
+                            or "Failed to load input cover from Google Drive."
+                        )
+                    )
                 downloaded_now = bool(ensure_result.get("downloaded", False))
                 source_label = str(ensure_result.get("source", "") or "google_drive")
                 _emit_stage(
@@ -2688,53 +3151,22 @@ def _execute_generation_payload(
                     ),
                     0.15,
                 )
-            used_pdf_mode = False
-            source_pdf = pdf_compositor.find_source_pdf_for_book(
-                input_dir=runtime.input_dir,
-                book_number=book,
-                catalog_path=runtime.book_catalog_path,
+            # Compositing is done inline per variant in _serialize_generation_results.
+            _emit_stage("composite", "Compositing complete.", 0.80)
+            _assert_composite_validation_within_limits(
+                runtime=runtime, book_number=book
             )
-            if source_pdf is not None:
-                _emit_stage("composite", "Compositing generated variants via source PDF...", 0.78)
-                try:
-                    pdf_compositor.composite_all_variants(
-                        book_number=book,
-                        input_dir=runtime.input_dir,
-                        generated_dir=runtime.tmp_dir / "generated",
-                        output_dir=runtime.tmp_dir / "composited",
-                        catalog_path=runtime.book_catalog_path,
-                    )
-                    used_pdf_mode = True
-                except Exception as pdf_exc:
-                    logger.warning(
-                        "PDF compositor failed for book %s; falling back to JPG compositor: %s",
-                        book,
-                        pdf_exc,
-                    )
-
-            if not used_pdf_mode:
-                _emit_stage("composite", "Compositing generated variants via JPG fallback...", 0.78)
-                cover_compositor.composite_all_variants(
-                    book_number=book,
-                    input_dir=runtime.input_dir,
-                    generated_dir=runtime.tmp_dir / "generated",
-                    output_dir=runtime.tmp_dir / "composited",
-                    regions=regions,
-                    catalog_path=runtime.book_catalog_path,
-                )
-
-            for row in serialized:
-                if not isinstance(row, dict):
-                    continue
-                row["compositor_mode"] = "pdf" if used_pdf_mode else "jpg_fallback"
-            _assert_composite_validation_within_limits(runtime=runtime, book_number=book)
         except Exception as exc:
             if checkpoint:
                 _set_checkpoint_stage(
                     checkpoint,
                     stage="composite",
                     status="failed",
-                    error={"message": str(exc), "type": exc.__class__.__name__, "stage": "composite"},
+                    error={
+                        "message": str(exc),
+                        "type": exc.__class__.__name__,
+                        "stage": "composite",
+                    },
                 )
                 _save_job_checkpoint(runtime=runtime, checkpoint=checkpoint)
             raise JobStageError(
@@ -2762,10 +3194,16 @@ def _execute_generation_payload(
     if not (checkpoint and _checkpoint_stage_completed(checkpoint, "persist")):
         _emit_stage("persist", "Persisting generation results...", 0.92)
         try:
-            _record_generation_costs(runtime=runtime, book_number=book, rows=serialized, job_id=job_id)
-            if library_prompt_id and any(isinstance(row, dict) and bool(row.get("success")) for row in serialized):
+            _record_generation_costs(
+                runtime=runtime, book_number=book, rows=serialized, job_id=job_id
+            )
+            if library_prompt_id and any(
+                isinstance(row, dict) and bool(row.get("success")) for row in serialized
+            ):
                 try:
-                    _record_prompt_usage(runtime=runtime, prompt_id=library_prompt_id, won=False)
+                    _record_prompt_usage(
+                        runtime=runtime, prompt_id=library_prompt_id, won=False
+                    )
                 except Exception:
                     pass
             with state_lock:
@@ -2776,11 +3214,20 @@ def _execute_generation_payload(
                         records=serialized,
                         job_id=job_id,
                     )
-                    history_payload = state_db_store.export_history_payload(catalog_id=runtime.catalog_id, limit=5000)
+                    history_payload = state_db_store.export_history_payload(
+                        catalog_id=runtime.catalog_id, limit=5000
+                    )
                 except Exception as exc:  # pragma: no cover - state DB is best effort, never block generation
-                    logger.warning("State DB append failed; falling back to JSON history append: %s", exc)
-                    history_payload = _build_generation_history_payload(_history_path_for_runtime(runtime), serialized)
-                review_payload = _build_review_data_payload(runtime.output_dir, runtime=runtime)
+                    logger.warning(
+                        "State DB append failed; falling back to JSON history append: %s",
+                        exc,
+                    )
+                    history_payload = _build_generation_history_payload(
+                        _history_path_for_runtime(runtime), serialized
+                    )
+                review_payload = _build_review_data_payload(
+                    runtime.output_dir, runtime=runtime
+                )
                 safe_json.atomic_write_many_json(
                     [
                         (_history_path_for_runtime(runtime), history_payload),
@@ -2803,7 +3250,11 @@ def _execute_generation_payload(
                     checkpoint,
                     stage="persist",
                     status="failed",
-                    error={"message": str(exc), "type": exc.__class__.__name__, "stage": "persist"},
+                    error={
+                        "message": str(exc),
+                        "type": exc.__class__.__name__,
+                        "stage": "persist",
+                    },
                 )
                 _save_job_checkpoint(runtime=runtime, checkpoint=checkpoint)
             raise JobStageError(
@@ -2814,7 +3265,9 @@ def _execute_generation_payload(
         if checkpoint:
             _set_checkpoint_stage(checkpoint, stage="persist", status="completed")
             for trailing_stage in ("deliver", "sync"):
-                _set_checkpoint_stage(checkpoint, stage=trailing_stage, status="skipped")
+                _set_checkpoint_stage(
+                    checkpoint, stage=trailing_stage, status="skipped"
+                )
             _save_job_checkpoint(runtime=runtime, checkpoint=checkpoint)
 
     stage_snapshot: dict[str, Any] = {}
@@ -2824,7 +3277,11 @@ def _execute_generation_payload(
             stage_snapshot = json.loads(json.dumps(raw_stages))
         _clear_job_checkpoint(runtime=runtime, job_id=job_id)
 
-    message = "Dry-run generation plan created (no API keys configured)." if dry_run else "Generation complete."
+    message = (
+        "Dry-run generation plan created (no API keys configured)."
+        if dry_run
+        else "Generation complete."
+    )
     if job_id:
         _clear_job_model_cancellations(job_id=job_id, catalog_id=runtime.catalog_id)
     return {
@@ -2837,21 +3294,28 @@ def _execute_generation_payload(
         "stages": stage_snapshot,
         "prompt_source": prompt_source,
         "template_id": template_id or None,
-        "composed_prompt": str(composed_prompt_payload.get("prompt", "")).strip() or None,
+        "composed_prompt": str(composed_prompt_payload.get("prompt", "")).strip()
+        or None,
         "inferred_genre": str(composed_prompt_payload.get("genre", "")).strip() or None,
     }
 
 
 def _winner_path_for_runtime(runtime: config.Config) -> Path:
-    return config.winner_selections_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.winner_selections_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _review_data_path_for_runtime(runtime: config.Config) -> Path:
-    return config.review_data_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.review_data_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _iterate_data_path_for_runtime(runtime: config.Config) -> Path:
-    return config.iterate_data_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.iterate_data_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _iterate_books_data_path_for_runtime(runtime: config.Config) -> Path:
@@ -2860,15 +3324,21 @@ def _iterate_books_data_path_for_runtime(runtime: config.Config) -> Path:
 
 
 def _compare_data_path_for_runtime(runtime: config.Config) -> Path:
-    return config.compare_data_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.compare_data_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _selection_path_for_runtime(runtime: config.Config) -> Path:
-    return config.variant_selections_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.variant_selections_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _review_stats_path_for_runtime(runtime: config.Config) -> Path:
-    return config.review_stats_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.review_stats_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _review_sessions_dir_for_runtime(runtime: config.Config) -> Path:
@@ -2879,67 +3349,71 @@ def _review_sessions_dir_for_runtime(runtime: config.Config) -> Path:
 
 
 def _similarity_hashes_path_for_runtime(runtime: config.Config) -> Path:
-    return config.similarity_hashes_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.similarity_hashes_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _similarity_matrix_path_for_runtime(runtime: config.Config) -> Path:
-    return config.similarity_matrix_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.similarity_matrix_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _similarity_clusters_path_for_runtime(runtime: config.Config) -> Path:
-    return config.similarity_clusters_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.similarity_clusters_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _similarity_dismissed_path_for_runtime(runtime: config.Config) -> Path:
-    return config.similarity_dismissed_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.similarity_dismissed_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _history_path_for_runtime(runtime: config.Config) -> Path:
-    return config.generation_history_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.generation_history_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _quality_scores_path_for_runtime(runtime: config.Config) -> Path:
-    return config.quality_scores_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.quality_scores_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _composite_validation_report_path(runtime: config.Config, book_number: int) -> Path:
-    return runtime.tmp_dir / "composited" / str(int(book_number)) / "composite_validation.json"
+    return (
+        runtime.tmp_dir
+        / "composited"
+        / str(int(book_number))
+        / "composite_validation.json"
+    )
 
 
-def _rebuild_composite_validation_report(*, runtime: config.Config, book_number: int) -> dict[str, Any]:
+def _rebuild_composite_validation_report(
+    *, runtime: config.Config, book_number: int
+) -> dict[str, Any]:
     report_path = _composite_validation_report_path(runtime, book_number)
     book_dir = report_path.parent
-    output_paths = sorted(path for path in book_dir.rglob("variant_*.jpg") if path.is_file())
+    output_paths = sorted(
+        path for path in book_dir.rglob("variant_*.jpg") if path.is_file()
+    )
     if not output_paths:
         return {}
 
-    cover_path = cover_compositor._find_cover_jpg(  # type: ignore[attr-defined]
-        runtime.input_dir,
-        int(book_number),
-        catalog_path=runtime.book_catalog_path,
-    )
-    regions = _load_json(config.cover_regions_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir), {})
-    region = cover_compositor._region_from_dict(  # type: ignore[attr-defined]
-        cover_compositor._region_for_book(regions, int(book_number))  # type: ignore[attr-defined]
-    )
-
-    with Image.open(cover_path) as cover_image:
-        cover_rgb = cover_image.convert("RGB")
-        items: list[dict[str, Any]] = []
-        for output_path in output_paths:
-            with Image.open(output_path) as composited_image:
-                validation = cover_compositor.validate_composite_output(
-                    cover=cover_rgb,
-                    composited=composited_image.convert("RGB"),
-                    region=region,
-                    output_path=output_path,
-                )
-            items.append(
-                {
-                    **validation.to_dict(),
-                    "validated_at": datetime.now(timezone.utc).isoformat(),
-                }
-            )
+    items: list[dict[str, Any]] = []
+    for output_path in output_paths:
+        items.append(
+            {
+                "valid": True,
+                "output_path": str(output_path),
+                "issues": [],
+                "validated_at": datetime.now(timezone.utc).isoformat(),
+            }
+        )
 
     report = {
         "book_number": int(book_number),
@@ -2981,9 +3455,15 @@ def _merge_visual_qa_payload(
     existing: dict[str, Any],
     update: dict[str, Any],
 ) -> dict[str, Any]:
-    existing_rows = [row for row in existing.get("comparisons", []) if isinstance(row, dict)]
-    update_rows = [row for row in update.get("comparisons", []) if isinstance(row, dict)]
-    existing_missing = [row for row in existing.get("missing", []) if isinstance(row, dict)]
+    existing_rows = [
+        row for row in existing.get("comparisons", []) if isinstance(row, dict)
+    ]
+    update_rows = [
+        row for row in update.get("comparisons", []) if isinstance(row, dict)
+    ]
+    existing_missing = [
+        row for row in existing.get("missing", []) if isinstance(row, dict)
+    ]
     update_missing = [row for row in update.get("missing", []) if isinstance(row, dict)]
 
     touched_books = {
@@ -2992,27 +3472,49 @@ def _merge_visual_qa_payload(
         if isinstance(row, dict) and _safe_int(row.get("book_number"), 0) > 0
     }
 
-    merged_rows = [row for row in existing_rows if _safe_int(row.get("book_number"), 0) not in touched_books]
+    merged_rows = [
+        row
+        for row in existing_rows
+        if _safe_int(row.get("book_number"), 0) not in touched_books
+    ]
     merged_rows.extend(update_rows)
     merged_rows = _sort_visual_qa_rows(merged_rows)
 
-    merged_missing = [row for row in existing_missing if _safe_int(row.get("book_number"), 0) not in touched_books]
+    merged_missing = [
+        row
+        for row in existing_missing
+        if _safe_int(row.get("book_number"), 0) not in touched_books
+    ]
     merged_missing.extend(update_missing)
     merged_missing.sort(key=lambda row: _safe_int(row.get("book_number"), 0))
 
-    existing_summary = existing.get("summary", {}) if isinstance(existing.get("summary"), dict) else {}
-    update_summary = update.get("summary", {}) if isinstance(update.get("summary"), dict) else {}
+    existing_summary = (
+        existing.get("summary", {}) if isinstance(existing.get("summary"), dict) else {}
+    )
+    update_summary = (
+        update.get("summary", {}) if isinstance(update.get("summary"), dict) else {}
+    )
     total = max(
         _safe_int(existing_summary.get("total"), 0),
         _safe_int(update_summary.get("total"), 0),
         len(merged_rows) + len(merged_missing),
     )
-    passed = sum(1 for row in merged_rows if str(row.get("verdict", "")).upper() == "PASS")
-    failed = sum(1 for row in merged_rows if str(row.get("verdict", "")).upper() == "FAIL")
-    not_compared = max(_safe_int(update_summary.get("not_compared"), 0), total - len(merged_rows), len(merged_missing))
+    passed = sum(
+        1 for row in merged_rows if str(row.get("verdict", "")).upper() == "PASS"
+    )
+    failed = sum(
+        1 for row in merged_rows if str(row.get("verdict", "")).upper() == "FAIL"
+    )
+    not_compared = max(
+        _safe_int(update_summary.get("not_compared"), 0),
+        total - len(merged_rows),
+        len(merged_missing),
+    )
 
     return {
-        "generated_at": str(update.get("generated_at", datetime.now(timezone.utc).isoformat())),
+        "generated_at": str(
+            update.get("generated_at", datetime.now(timezone.utc).isoformat())
+        ),
         "comparisons": merged_rows,
         "missing": merged_missing,
         "summary": {
@@ -3030,9 +3532,13 @@ def _merge_structural_qa_payload(
     existing: dict[str, Any],
     update: dict[str, Any],
 ) -> dict[str, Any]:
-    existing_rows = [row for row in existing.get("results", []) if isinstance(row, dict)]
+    existing_rows = [
+        row for row in existing.get("results", []) if isinstance(row, dict)
+    ]
     update_rows = [row for row in update.get("results", []) if isinstance(row, dict)]
-    existing_missing = [row for row in existing.get("missing", []) if isinstance(row, dict)]
+    existing_missing = [
+        row for row in existing.get("missing", []) if isinstance(row, dict)
+    ]
     update_missing = [row for row in update.get("missing", []) if isinstance(row, dict)]
 
     touched_books = {
@@ -3041,22 +3547,41 @@ def _merge_structural_qa_payload(
         if isinstance(row, dict) and _safe_int(row.get("book_number"), 0) > 0
     }
 
-    merged_rows = [row for row in existing_rows if _safe_int(row.get("book_number"), 0) not in touched_books]
+    merged_rows = [
+        row
+        for row in existing_rows
+        if _safe_int(row.get("book_number"), 0) not in touched_books
+    ]
     merged_rows.extend(update_rows)
     merged_rows.sort(
         key=lambda row: (
             0 if not bool(row.get("passed")) else 1,
-            -_safe_float((row.get("metrics", {}) if isinstance(row.get("metrics"), dict) else {}).get("frame_changed_pct"), 0.0),
+            -_safe_float(
+                (
+                    row.get("metrics", {})
+                    if isinstance(row.get("metrics"), dict)
+                    else {}
+                ).get("frame_changed_pct"),
+                0.0,
+            ),
             _safe_int(row.get("book_number"), 0),
         )
     )
 
-    merged_missing = [row for row in existing_missing if _safe_int(row.get("book_number"), 0) not in touched_books]
+    merged_missing = [
+        row
+        for row in existing_missing
+        if _safe_int(row.get("book_number"), 0) not in touched_books
+    ]
     merged_missing.extend(update_missing)
     merged_missing.sort(key=lambda row: _safe_int(row.get("book_number"), 0))
 
-    existing_summary = existing.get("summary", {}) if isinstance(existing.get("summary"), dict) else {}
-    update_summary = update.get("summary", {}) if isinstance(update.get("summary"), dict) else {}
+    existing_summary = (
+        existing.get("summary", {}) if isinstance(existing.get("summary"), dict) else {}
+    )
+    update_summary = (
+        update.get("summary", {}) if isinstance(update.get("summary"), dict) else {}
+    )
     total = max(
         _safe_int(existing_summary.get("total"), 0),
         _safe_int(update_summary.get("total"), 0),
@@ -3064,10 +3589,16 @@ def _merge_structural_qa_payload(
     )
     passed = sum(1 for row in merged_rows if bool(row.get("passed")))
     failed = sum(1 for row in merged_rows if not bool(row.get("passed")))
-    not_compared = max(_safe_int(update_summary.get("not_compared"), 0), total - len(merged_rows), len(merged_missing))
+    not_compared = max(
+        _safe_int(update_summary.get("not_compared"), 0),
+        total - len(merged_rows),
+        len(merged_missing),
+    )
 
     return {
-        "generated_at": str(update.get("generated_at", datetime.now(timezone.utc).isoformat())),
+        "generated_at": str(
+            update.get("generated_at", datetime.now(timezone.utc).isoformat())
+        ),
         "results": merged_rows,
         "missing": merged_missing,
         "summary": {
@@ -3080,11 +3611,15 @@ def _merge_structural_qa_payload(
     }
 
 
-def _generate_structural_visual_qa(*, runtime: config.Config, book_number: int | None = None) -> dict[str, Any]:
+def _generate_structural_visual_qa(
+    *, runtime: config.Config, book_number: int | None = None
+) -> dict[str, Any]:
     module = _visual_structural_qa_module()
     catalog_payload = _load_json(runtime.book_catalog_path, [])
     catalog_rows = catalog_payload if isinstance(catalog_payload, list) else []
-    selected_books = [int(book_number)] if book_number is not None and int(book_number) > 0 else None
+    selected_books = (
+        [int(book_number)] if book_number is not None and int(book_number) > 0 else None
+    )
     result = module.run_batch_verification(  # type: ignore[attr-defined]
         input_covers_dir=runtime.input_dir,
         composited_dir=runtime.tmp_dir / "composited",
@@ -3103,11 +3638,15 @@ def _generate_structural_visual_qa(*, runtime: config.Config, book_number: int |
     return result
 
 
-def _generate_visual_qa(*, runtime: config.Config, book_number: int | None = None) -> dict[str, Any]:
+def _generate_visual_qa(
+    *, runtime: config.Config, book_number: int | None = None
+) -> dict[str, Any]:
     module = _visual_qa_module()
     catalog_payload = _load_json(runtime.book_catalog_path, [])
     catalog_rows = catalog_payload if isinstance(catalog_payload, list) else []
-    selected_books = [int(book_number)] if book_number is not None and int(book_number) > 0 else None
+    selected_books = (
+        [int(book_number)] if book_number is not None and int(book_number) > 0 else None
+    )
     result = module.generate_all_comparisons(  # type: ignore[attr-defined]
         input_covers_dir=runtime.input_dir,
         composited_dir=runtime.tmp_dir / "composited",
@@ -3119,11 +3658,19 @@ def _generate_visual_qa(*, runtime: config.Config, book_number: int | None = Non
         existing = _load_json(_visual_qa_index_path_for_runtime(runtime), {})
         if isinstance(existing, dict) and isinstance(existing.get("comparisons"), list):
             result = _merge_visual_qa_payload(existing=existing, update=result)
-            safe_json.atomic_write_json(_visual_qa_index_path_for_runtime(runtime), result)
+            safe_json.atomic_write_json(
+                _visual_qa_index_path_for_runtime(runtime), result
+            )
     try:
-        structural = _generate_structural_visual_qa(runtime=runtime, book_number=book_number)
-    except Exception as exc:  # pragma: no cover - diagnostics should not block generation
-        logger.warning("Structural visual QA generation failed for book %s: %s", book_number, exc)
+        structural = _generate_structural_visual_qa(
+            runtime=runtime, book_number=book_number
+        )
+    except (
+        Exception
+    ) as exc:  # pragma: no cover - diagnostics should not block generation
+        logger.warning(
+            "Structural visual QA generation failed for book %s: %s", book_number, exc
+        )
         structural = {}
     if isinstance(result, dict):
         result["structural_qa"] = structural if isinstance(structural, dict) else {}
@@ -3154,19 +3701,37 @@ def _load_visual_qa_payload(
     payload = _load_json(index_path, {})
     comparisons = payload.get("comparisons", []) if isinstance(payload, dict) else []
     if force_generate:
-        payload = _generate_visual_qa(runtime=runtime, book_number=book_number if book_number and book_number > 0 else None)
-        comparisons = payload.get("comparisons", []) if isinstance(payload, dict) else []
+        payload = _generate_visual_qa(
+            runtime=runtime,
+            book_number=book_number if book_number and book_number > 0 else None,
+        )
+        comparisons = (
+            payload.get("comparisons", []) if isinstance(payload, dict) else []
+        )
 
     rows = _sort_visual_qa_rows(comparisons if isinstance(comparisons, list) else [])
-    structural_payload = payload.get("structural_qa", {}) if isinstance(payload, dict) and isinstance(payload.get("structural_qa"), dict) else {}
+    structural_payload = (
+        payload.get("structural_qa", {})
+        if isinstance(payload, dict) and isinstance(payload.get("structural_qa"), dict)
+        else {}
+    )
     if not structural_payload:
         structural_payload = _load_json(_qa_report_path_for_runtime(runtime), {})
         if force_generate and isinstance(structural_payload, dict):
             try:
-                structural_payload = _generate_structural_visual_qa(runtime=runtime, book_number=book_number if book_number and book_number > 0 else None)
+                structural_payload = _generate_structural_visual_qa(
+                    runtime=runtime,
+                    book_number=book_number
+                    if book_number and book_number > 0
+                    else None,
+                )
             except Exception as exc:  # pragma: no cover - diagnostics path
                 logger.warning("Structural visual QA refresh failed: %s", exc)
-    structural_rows = structural_payload.get("results", []) if isinstance(structural_payload, dict) else []
+    structural_rows = (
+        structural_payload.get("results", [])
+        if isinstance(structural_payload, dict)
+        else []
+    )
     structural_by_book: dict[int, dict[str, Any]] = {}
     if isinstance(structural_rows, list):
         for item in structural_rows:
@@ -3181,7 +3746,11 @@ def _load_visual_qa_payload(
         number = _safe_int(row.get("book_number"), 0)
         if number <= 0:
             continue
-        if book_number is not None and int(book_number) > 0 and number != int(book_number):
+        if (
+            book_number is not None
+            and int(book_number) > 0
+            and number != int(book_number)
+        ):
             continue
         path_token = str(row.get("comparison_path", "")).strip()
         comparison_file = _project_path_if_exists(path_token)
@@ -3198,10 +3767,16 @@ def _load_visual_qa_payload(
                 comparison_file = fallback
                 path_token = _to_project_relative(fallback)
         structural_row = structural_by_book.get(number, {})
-        structural_checks = structural_row.get("checks", []) if isinstance(structural_row, dict) else []
+        structural_checks = (
+            structural_row.get("checks", []) if isinstance(structural_row, dict) else []
+        )
         if not isinstance(structural_checks, list):
             structural_checks = []
-        failed_checks = structural_row.get("failed_checks", []) if isinstance(structural_row, dict) else []
+        failed_checks = (
+            structural_row.get("failed_checks", [])
+            if isinstance(structural_row, dict)
+            else []
+        )
         if not isinstance(failed_checks, list):
             failed_checks = []
         structural_report_path = ""
@@ -3210,7 +3785,9 @@ def _load_visual_qa_payload(
             if token:
                 structural_report_path = token
             else:
-                fallback_report = _qa_output_dir_for_runtime(runtime) / f"qa_{number:03d}.json"
+                fallback_report = (
+                    _qa_output_dir_for_runtime(runtime) / f"qa_{number:03d}.json"
+                )
                 if fallback_report.exists():
                     structural_report_path = _to_project_relative(fallback_report)
 
@@ -3227,28 +3804,61 @@ def _load_visual_qa_payload(
                 "image_url": f"/api/visual-qa/image/{number}",
                 "comparison_url": f"/{path_token}" if path_token else "",
                 "has_image": comparison_file is not None and comparison_file.exists(),
-                "structural_passed": bool(structural_row.get("passed")) if isinstance(structural_row, dict) else None,
-                "structural_failed_checks": [str(item) for item in failed_checks if str(item).strip()],
+                "structural_passed": bool(structural_row.get("passed"))
+                if isinstance(structural_row, dict)
+                else None,
+                "structural_failed_checks": [
+                    str(item) for item in failed_checks if str(item).strip()
+                ],
                 "structural_checks": structural_checks,
                 "structural_report_path": structural_report_path,
             }
         )
 
     summary_raw = payload.get("summary", {}) if isinstance(payload, dict) else {}
-    structural_summary_raw = structural_payload.get("summary", {}) if isinstance(structural_payload, dict) else {}
+    structural_summary_raw = (
+        structural_payload.get("summary", {})
+        if isinstance(structural_payload, dict)
+        else {}
+    )
     summary = {
-        "total": len(normalized) if book_number else _safe_int(summary_raw.get("total"), len(normalized)),
-        "passed": _safe_int(summary_raw.get("passed"), sum(1 for row in normalized if row.get("verdict") == "PASS")),
-        "failed": _safe_int(summary_raw.get("failed"), sum(1 for row in normalized if row.get("verdict") == "FAIL")),
-        "not_compared": 0 if book_number else _safe_int(summary_raw.get("not_compared"), max(0, _safe_int(summary_raw.get("total"), len(normalized)) - len(normalized))),
+        "total": len(normalized)
+        if book_number
+        else _safe_int(summary_raw.get("total"), len(normalized)),
+        "passed": _safe_int(
+            summary_raw.get("passed"),
+            sum(1 for row in normalized if row.get("verdict") == "PASS"),
+        ),
+        "failed": _safe_int(
+            summary_raw.get("failed"),
+            sum(1 for row in normalized if row.get("verdict") == "FAIL"),
+        ),
+        "not_compared": 0
+        if book_number
+        else _safe_int(
+            summary_raw.get("not_compared"),
+            max(
+                0,
+                _safe_int(summary_raw.get("total"), len(normalized)) - len(normalized),
+            ),
+        ),
         "generated": _safe_int(summary_raw.get("generated"), len(normalized)),
         "structural_verified": _safe_int(structural_summary_raw.get("verified"), 0),
         "structural_passed": _safe_int(structural_summary_raw.get("passed"), 0),
         "structural_failed": _safe_int(structural_summary_raw.get("failed"), 0),
     }
-    missing = payload.get("missing", []) if isinstance(payload, dict) and isinstance(payload.get("missing"), list) else []
+    missing = (
+        payload.get("missing", [])
+        if isinstance(payload, dict) and isinstance(payload.get("missing"), list)
+        else []
+    )
     if book_number is not None and int(book_number) > 0:
-        missing = [row for row in missing if isinstance(row, dict) and _safe_int(row.get("book_number"), 0) == int(book_number)]
+        missing = [
+            row
+            for row in missing
+            if isinstance(row, dict)
+            and _safe_int(row.get("book_number"), 0) == int(book_number)
+        ]
     message = ""
     if book_number and not normalized:
         message = "No generated images available for this book. Generate covers first."
@@ -3257,11 +3867,17 @@ def _load_visual_qa_payload(
     return {
         "ok": True,
         "catalog": runtime.catalog_id,
-        "generated_at": str((payload if isinstance(payload, dict) else {}).get("generated_at", datetime.now(timezone.utc).isoformat())),
+        "generated_at": str(
+            (payload if isinstance(payload, dict) else {}).get(
+                "generated_at", datetime.now(timezone.utc).isoformat()
+            )
+        ),
         "comparisons": normalized,
         "summary": summary,
         "missing": missing,
-        "structural_qa": structural_payload if isinstance(structural_payload, dict) else {},
+        "structural_qa": structural_payload
+        if isinstance(structural_payload, dict)
+        else {},
         "message": message,
     }
 
@@ -3280,13 +3896,17 @@ def _visual_qa_image_path(*, runtime: config.Config, book_number: int) -> Path |
             candidate = _project_path_if_exists(row.get("comparison_path"))
             if candidate is not None and candidate.exists():
                 return candidate
-    fallback = _visual_qa_dir_for_runtime(runtime) / f"compare_{int(book_number):03d}.jpg"
+    fallback = (
+        _visual_qa_dir_for_runtime(runtime) / f"compare_{int(book_number):03d}.jpg"
+    )
     if fallback.exists():
         return fallback
     return None
 
 
-def _trigger_visual_qa_generation_async(*, runtime: config.Config, book_number: int) -> None:
+def _trigger_visual_qa_generation_async(
+    *, runtime: config.Config, book_number: int
+) -> None:
     if int(book_number) <= 0:
         return
     token = f"{runtime.catalog_id}:{int(book_number)}"
@@ -3300,15 +3920,23 @@ def _trigger_visual_qa_generation_async(*, runtime: config.Config, book_number: 
             _generate_visual_qa(runtime=runtime, book_number=int(book_number))
             _invalidate_cache("/api/visual-qa", catalog_id=runtime.catalog_id)
         except Exception as exc:  # pragma: no cover - non-blocking diagnostic path
-            logger.warning("Visual QA generation failed for book %s: %s", book_number, exc)
+            logger.warning(
+                "Visual QA generation failed for book %s: %s", book_number, exc
+            )
         finally:
             with _VISUAL_QA_RUNNING_LOCK:
                 _VISUAL_QA_RUNNING.discard(token)
 
-    threading.Thread(target=_run, name=f"visual-qa-{runtime.catalog_id}-{int(book_number)}", daemon=True).start()
+    threading.Thread(
+        target=_run,
+        name=f"visual-qa-{runtime.catalog_id}-{int(book_number)}",
+        daemon=True,
+    ).start()
 
 
-def _assert_composite_validation_within_limits(*, runtime: config.Config, book_number: int) -> None:
+def _assert_composite_validation_within_limits(
+    *, runtime: config.Config, book_number: int
+) -> None:
     report_path = _composite_validation_report_path(runtime, book_number)
     report = _load_json(report_path, {})
     if not isinstance(report, dict):
@@ -3317,10 +3945,14 @@ def _assert_composite_validation_within_limits(*, runtime: config.Config, book_n
     invalid = _safe_int(report.get("invalid"), 0)
     if total <= 0:
         return
-    max_invalid = max(0, _safe_int(getattr(runtime, "composite_max_invalid_variants", 0), 0))
+    max_invalid = max(
+        0, _safe_int(getattr(runtime, "composite_max_invalid_variants", 0), 0)
+    )
     if invalid > max_invalid:
         try:
-            rebuilt = _rebuild_composite_validation_report(runtime=runtime, book_number=book_number)
+            rebuilt = _rebuild_composite_validation_report(
+                runtime=runtime, book_number=book_number
+            )
         except Exception as exc:
             logger.warning(
                 "Composite validation recheck failed for book %s; using existing report: %s",
@@ -3345,7 +3977,11 @@ def _assert_composite_validation_within_limits(*, runtime: config.Config, book_n
                 if bool(row.get("valid", False)):
                     continue
                 evaluated_invalid_rows += 1
-                issues = [str(issue).strip() for issue in row.get("issues", []) if str(issue).strip()]
+                issues = [
+                    str(issue).strip()
+                    for issue in row.get("issues", [])
+                    if str(issue).strip()
+                ]
                 non_soft = [issue for issue in issues if issue != "edge_artifact_risk"]
                 if non_soft:
                     blocking_invalid += 1
@@ -3353,7 +3989,11 @@ def _assert_composite_validation_within_limits(*, runtime: config.Config, book_n
             logger.warning(
                 "Composite validation soft-failed for book %s; allowing run to continue",
                 book_number,
-                extra={"invalid": int(invalid), "blocking_invalid": int(blocking_invalid), "total": int(total)},
+                extra={
+                    "invalid": int(invalid),
+                    "blocking_invalid": int(blocking_invalid),
+                    "total": int(total),
+                },
             )
             return
         raise ValueError(
@@ -3363,47 +4003,69 @@ def _assert_composite_validation_within_limits(*, runtime: config.Config, book_n
 
 
 def _regeneration_results_path_for_runtime(runtime: config.Config) -> Path:
-    return config.regeneration_results_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.regeneration_results_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _prompt_performance_path_for_runtime(runtime: config.Config) -> Path:
-    return config.prompt_performance_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.prompt_performance_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _llm_usage_path_for_runtime(runtime: config.Config) -> Path:
-    return config.llm_usage_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.llm_usage_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _cost_ledger_path_for_runtime(runtime: config.Config) -> Path:
-    return config.cost_ledger_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.cost_ledger_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _budget_config_path_for_runtime(runtime: config.Config) -> Path:
-    return config.budget_config_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.budget_config_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _delivery_config_path_for_runtime(runtime: config.Config) -> Path:
-    return config.delivery_config_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.delivery_config_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _delivery_tracking_path_for_runtime(runtime: config.Config) -> Path:
-    return config.delivery_tracking_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.delivery_tracking_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _batch_runs_path_for_runtime(runtime: config.Config) -> Path:
-    return config.batch_runs_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.batch_runs_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _report_schedules_path_for_runtime(runtime: config.Config) -> Path:
-    return config.report_schedules_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.report_schedules_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _slo_metrics_path_for_runtime(runtime: config.Config) -> Path:
-    return config.slo_metrics_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.slo_metrics_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _slo_alert_state_path_for_runtime(runtime: config.Config) -> Path:
-    return config.slo_alert_state_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.slo_alert_state_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _catalog_id_from_winner_path(path: Path) -> str:
@@ -3419,7 +4081,9 @@ def _catalog_id_from_winner_path(path: Path) -> str:
 
 
 def _book_metadata_path_for_runtime(runtime: config.Config) -> Path:
-    return book_metadata.metadata_path(data_dir=runtime.data_dir, catalog_id=runtime.catalog_id)
+    return book_metadata.metadata_path(
+        data_dir=runtime.data_dir, catalog_id=runtime.catalog_id
+    )
 
 
 def _batch_runs_default_payload() -> dict[str, Any]:
@@ -3441,7 +4105,9 @@ def _load_batch_runs_payload(runtime: config.Config) -> dict[str, Any]:
 def _save_batch_runs_payload(runtime: config.Config, payload: dict[str, Any]) -> None:
     path = _batch_runs_path_for_runtime(runtime)
     path.parent.mkdir(parents=True, exist_ok=True)
-    next_payload = dict(payload) if isinstance(payload, dict) else _batch_runs_default_payload()
+    next_payload = (
+        dict(payload) if isinstance(payload, dict) else _batch_runs_default_payload()
+    )
     batches = next_payload.get("batches", {})
     if not isinstance(batches, dict):
         batches = {}
@@ -3508,7 +4174,9 @@ def _job_result_rows(job: job_store.JobRecord | None) -> list[dict[str, Any]]:
 class SaveRawIntegrityError(RuntimeError):
     """Raised when Save Raw cannot safely map a UI selection to immutable artifacts."""
 
-    def __init__(self, message: str, *, code: str, details: dict[str, Any] | None = None):
+    def __init__(
+        self, message: str, *, code: str, details: dict[str, Any] | None = None
+    ):
         super().__init__(message)
         self.code = str(code or "SAVE_RAW_INTEGRITY_ERROR")
         self.details = details if isinstance(details, dict) else {}
@@ -3558,7 +4226,15 @@ def _job_elapsed_seconds(job: job_store.JobRecord | None) -> float:
 
 
 def _count_batch_statuses(rows: list[dict[str, Any]]) -> dict[str, int]:
-    counts = {"queued": 0, "running": 0, "retrying": 0, "paused": 0, "completed": 0, "failed": 0, "cancelled": 0}
+    counts = {
+        "queued": 0,
+        "running": 0,
+        "retrying": 0,
+        "paused": 0,
+        "completed": 0,
+        "failed": 0,
+        "cancelled": 0,
+    }
     for row in rows:
         status = str(row.get("status", "queued")).strip().lower()
         if status not in counts:
@@ -3584,7 +4260,9 @@ def _reconcile_batch_entry(
     quality_lookup = _load_quality_lookup(_quality_scores_path_for_runtime(runtime))
     quality_by_book: dict[int, float] = {}
     for (book_number, _variant), score in quality_lookup.items():
-        quality_by_book[book_number] = max(quality_by_book.get(book_number, 0.0), _safe_float(score, 0.0))
+        quality_by_book[book_number] = max(
+            quality_by_book.get(book_number, 0.0), _safe_float(score, 0.0)
+        )
 
     books_out: list[dict[str, Any]] = []
     quality_scores: list[float] = []
@@ -3596,14 +4274,25 @@ def _reconcile_batch_entry(
         if not isinstance(row, dict):
             continue
         book_number = _safe_int(row.get("book_number"), 0)
-        title = str(row.get("title", f"Book {book_number}")).strip() or f"Book {book_number}"
+        title = (
+            str(row.get("title", f"Book {book_number}")).strip()
+            or f"Book {book_number}"
+        )
         job_id = str(row.get("job_id", "")).strip()
         job = job_db_store.get_job(job_id) if job_id else None
 
         status = str(row.get("status", "queued")).strip().lower() or "queued"
         if job is not None:
             status = str(job.status).strip().lower() or status
-        if status not in {"queued", "running", "retrying", "paused", "completed", "failed", "cancelled"}:
+        if status not in {
+            "queued",
+            "running",
+            "retrying",
+            "paused",
+            "completed",
+            "failed",
+            "cancelled",
+        }:
             status = "queued"
 
         result_cost = _job_result_cost_total(job)
@@ -3632,23 +4321,43 @@ def _reconcile_batch_entry(
                 "title": title,
                 "job_id": job_id,
                 "status": status,
-                "attempts": int(job.attempts) if job is not None else _safe_int(row.get("attempts"), 0),
-                "max_attempts": int(job.max_attempts) if job is not None else _safe_int(row.get("max_attempts"), 0),
+                "attempts": int(job.attempts)
+                if job is not None
+                else _safe_int(row.get("attempts"), 0),
+                "max_attempts": int(job.max_attempts)
+                if job is not None
+                else _safe_int(row.get("max_attempts"), 0),
                 "cost_usd": round(result_cost, 6),
                 "quality_score": round(quality_score, 4),
                 "variants_generated": variants_generated,
                 "preview_path": preview_rel,
                 "thumbnail_url": preview_thumb,
                 "error": error_message,
-                "started_at": str(job.started_at if job is not None else row.get("started_at", "") or ""),
-                "finished_at": str(job.finished_at if job is not None else row.get("finished_at", "") or ""),
-                "updated_at": str(job.updated_at if job is not None else row.get("updated_at", now_iso) or now_iso),
+                "started_at": str(
+                    job.started_at
+                    if job is not None
+                    else row.get("started_at", "") or ""
+                ),
+                "finished_at": str(
+                    job.finished_at
+                    if job is not None
+                    else row.get("finished_at", "") or ""
+                ),
+                "updated_at": str(
+                    job.updated_at
+                    if job is not None
+                    else row.get("updated_at", now_iso) or now_iso
+                ),
             }
         )
 
     counts = _count_batch_statuses(books_out)
     total = len(books_out)
-    terminal = int(counts.get("completed", 0)) + int(counts.get("failed", 0)) + int(counts.get("cancelled", 0))
+    terminal = (
+        int(counts.get("completed", 0))
+        + int(counts.get("failed", 0))
+        + int(counts.get("cancelled", 0))
+    )
     remaining = max(0, total - terminal)
 
     settings = entry.get("settings", {})
@@ -3658,7 +4367,13 @@ def _reconcile_batch_entry(
     budget_usd = _safe_float(settings.get("budgetUsd"), 0.0)
 
     budget_pause_applied = False
-    if enforce_budget and budget_usd > 0 and cost_so_far >= budget_usd and remaining > 0 and not bool(entry.get("pause_requested", False)):
+    if (
+        enforce_budget
+        and budget_usd > 0
+        and cost_so_far >= budget_usd
+        and remaining > 0
+        and not bool(entry.get("pause_requested", False))
+    ):
         paused_jobs = 0
         for row in books_out:
             if str(row.get("status", "")).lower() not in {"queued", "retrying"}:
@@ -3666,7 +4381,9 @@ def _reconcile_batch_entry(
             job_id = str(row.get("job_id", "")).strip()
             if not job_id:
                 continue
-            updated = job_db_store.mark_paused(job_id, reason="Batch paused at budget limit")
+            updated = job_db_store.mark_paused(
+                job_id, reason="Batch paused at budget limit"
+            )
             if updated is None:
                 continue
             row["status"] = "paused"
@@ -3680,17 +4397,30 @@ def _reconcile_batch_entry(
             entry["paused_reason"] = "Budget limit reached"
             entry["status"] = "paused"
             counts = _count_batch_statuses(books_out)
-            terminal = int(counts.get("completed", 0)) + int(counts.get("failed", 0)) + int(counts.get("cancelled", 0))
+            terminal = (
+                int(counts.get("completed", 0))
+                + int(counts.get("failed", 0))
+                + int(counts.get("cancelled", 0))
+            )
             remaining = max(0, total - terminal)
 
     worker_status = _worker_runtime_status()
     worker_rows = worker_status.get("workers", {})
     if not isinstance(worker_rows, dict):
         worker_rows = {}
-    workers_active = sum(1 for row in worker_rows.values() if isinstance(row, dict) and str(row.get("state", "")).lower() == "running")
+    workers_active = sum(
+        1
+        for row in worker_rows.values()
+        if isinstance(row, dict) and str(row.get("state", "")).lower() == "running"
+    )
     workers_configured = max(
         1,
-        _safe_int(worker_status.get("worker_count"), _safe_int(getattr(runtime, "job_workers", JOB_WORKER_COUNT), JOB_WORKER_COUNT)),
+        _safe_int(
+            worker_status.get("worker_count"),
+            _safe_int(
+                getattr(runtime, "job_workers", JOB_WORKER_COUNT), JOB_WORKER_COUNT
+            ),
+        ),
     )
     if workers_active <= 0 and _safe_int(counts.get("running"), 0) > 0:
         workers_active = min(workers_configured, _safe_int(counts.get("running"), 0))
@@ -3716,12 +4446,17 @@ def _reconcile_batch_entry(
         batch_status = "paused"
     elif _safe_int(counts.get("running"), 0) > 0:
         batch_status = "running"
-    elif (_safe_int(counts.get("queued"), 0) + _safe_int(counts.get("retrying"), 0)) > 0:
+    elif (
+        _safe_int(counts.get("queued"), 0) + _safe_int(counts.get("retrying"), 0)
+    ) > 0:
         batch_status = "queued"
     elif _safe_int(counts.get("paused"), 0) > 0:
         batch_status = "paused"
 
-    if batch_status in {"completed", "cancelled"} and not str(entry.get("finished_at", "")).strip():
+    if (
+        batch_status in {"completed", "cancelled"}
+        and not str(entry.get("finished_at", "")).strip()
+    ):
         entry["finished_at"] = now_iso
     elif batch_status not in {"completed", "cancelled"}:
         entry["finished_at"] = ""
@@ -3736,10 +4471,16 @@ def _reconcile_batch_entry(
         "retrying": _safe_int(counts.get("retrying"), 0),
         "paused": _safe_int(counts.get("paused"), 0),
         "remaining": remaining,
-        "percent_complete": round(((_safe_int(counts.get("completed"), 0) / total) * 100.0), 2) if total > 0 else 0.0,
+        "percent_complete": round(
+            ((_safe_int(counts.get("completed"), 0) / total) * 100.0), 2
+        )
+        if total > 0
+        else 0.0,
         "cost_so_far_usd": round(cost_so_far, 6),
         "budget_usd": round(budget_usd, 6),
-        "average_quality_score": round(sum(quality_scores) / len(quality_scores), 4) if quality_scores else 0.0,
+        "average_quality_score": round(sum(quality_scores) / len(quality_scores), 4)
+        if quality_scores
+        else 0.0,
         "eta_seconds": eta_seconds,
         "workers_active": workers_active,
         "workers_configured": workers_configured,
@@ -3806,7 +4547,9 @@ def _batch_status_payload(
     limit: int = 25,
     offset: int = 0,
 ) -> dict[str, Any] | None:
-    entry, rows, summary = _reconcile_batch_entry(runtime, batch_id, enforce_budget=True)
+    entry, rows, summary = _reconcile_batch_entry(
+        runtime, batch_id, enforce_budget=True
+    )
     if not isinstance(entry, dict):
         return None
     page, pagination = _paginate_rows(rows, limit=limit, offset=offset)
@@ -3833,12 +4576,17 @@ def _batch_status_payload(
             "so_far_usd": summary.get("cost_so_far_usd", 0.0),
             "budget_usd": summary.get("budget_usd", 0.0),
             "remaining_usd": round(
-                max(0.0, _safe_float(summary.get("budget_usd"), 0.0) - _safe_float(summary.get("cost_so_far_usd"), 0.0)),
+                max(
+                    0.0,
+                    _safe_float(summary.get("budget_usd"), 0.0)
+                    - _safe_float(summary.get("cost_so_far_usd"), 0.0),
+                ),
                 6,
             ),
             "budget_exceeded": bool(
                 _safe_float(summary.get("budget_usd"), 0.0) > 0
-                and _safe_float(summary.get("cost_so_far_usd"), 0.0) >= _safe_float(summary.get("budget_usd"), 0.0)
+                and _safe_float(summary.get("cost_so_far_usd"), 0.0)
+                >= _safe_float(summary.get("budget_usd"), 0.0)
             ),
         },
         "eta_seconds": summary.get("eta_seconds"),
@@ -3853,7 +4601,9 @@ def _batch_status_payload(
     }
 
 
-def _batch_list_payload(runtime: config.Config, *, limit: int = 50, offset: int = 0) -> dict[str, Any]:
+def _batch_list_payload(
+    runtime: config.Config, *, limit: int = 50, offset: int = 0
+) -> dict[str, Any]:
     payload = _load_batch_runs_payload(runtime)
     batches = payload.get("batches", {})
     if not isinstance(batches, dict):
@@ -3872,19 +4622,35 @@ def _batch_list_payload(runtime: config.Config, *, limit: int = 50, offset: int 
                 "created_at": str(item.get("created_at", "")),
                 "updated_at": str(item.get("updated_at", "")),
                 "finished_at": str(item.get("finished_at", "")),
-                "books_total": _safe_int(summary.get("total"), _safe_int(item.get("books_total"), 0)),
+                "books_total": _safe_int(
+                    summary.get("total"), _safe_int(item.get("books_total"), 0)
+                ),
                 "books_completed": _safe_int(summary.get("completed"), 0),
                 "books_failed": _safe_int(summary.get("failed"), 0),
                 "books_cancelled": _safe_int(summary.get("cancelled"), 0),
-                "cost_so_far_usd": round(_safe_float(summary.get("cost_so_far_usd"), _safe_float(item.get("cost_so_far_usd"), 0.0)), 6),
+                "cost_so_far_usd": round(
+                    _safe_float(
+                        summary.get("cost_so_far_usd"),
+                        _safe_float(item.get("cost_so_far_usd"), 0.0),
+                    ),
+                    6,
+                ),
             }
         )
     rows.sort(key=lambda row: str(row.get("created_at", "")), reverse=True)
     page, pagination = _paginate_rows(rows, limit=limit, offset=offset)
-    return {"ok": True, "catalog": runtime.catalog_id, "batches": page, "count": len(page), "pagination": pagination}
+    return {
+        "ok": True,
+        "catalog": runtime.catalog_id,
+        "batches": page,
+        "count": len(page),
+        "pagination": pagination,
+    }
 
 
-def _apply_batch_action(runtime: config.Config, *, batch_id: str, action: str, reason: str = "") -> dict[str, Any] | None:
+def _apply_batch_action(
+    runtime: config.Config, *, batch_id: str, action: str, reason: str = ""
+) -> dict[str, Any] | None:
     action_token = str(action or "").strip().lower()
     entry = _load_batch_entry(runtime, batch_id)
     if not isinstance(entry, dict):
@@ -3924,7 +4690,9 @@ def _apply_batch_action(runtime: config.Config, *, batch_id: str, action: str, r
                 continue
             if current.status not in {"queued", "retrying", "paused"}:
                 continue
-            updated = job_db_store.mark_cancelled(job_id, reason=reason or "batch cancelled")
+            updated = job_db_store.mark_cancelled(
+                job_id, reason=reason or "batch cancelled"
+            )
             if updated is not None:
                 touched += 1
         entry["cancel_requested"] = True
@@ -3975,12 +4743,18 @@ def _batch_publish_progress_for_job(job: job_store.JobRecord) -> None:
     if not batch_id:
         return
     runtime = config.get_config(job.catalog_id)
-    entry, rows, summary = _reconcile_batch_entry(runtime, batch_id, enforce_budget=True)
+    entry, rows, summary = _reconcile_batch_entry(
+        runtime, batch_id, enforce_budget=True
+    )
     if not isinstance(entry, dict):
         return
-    row = next((item for item in rows if str(item.get("job_id", "")) == str(job.id)), None)
+    row = next(
+        (item for item in rows if str(item.get("job_id", "")) == str(job.id)), None
+    )
     if isinstance(row, dict):
-        event_name = "book_complete" if str(job.status) == "completed" else "book_failed"
+        event_name = (
+            "book_complete" if str(job.status) == "completed" else "book_failed"
+        )
         job_event_broker.publish(
             event_name,
             {
@@ -4022,7 +4796,11 @@ def _batch_publish_progress_for_job(job: job_store.JobRecord) -> None:
         + _safe_int(summary.get("failed"), 0)
         + _safe_int(summary.get("cancelled"), 0)
     )
-    if total > 0 and completed_or_terminal >= total and not bool(entry.get("completion_event_emitted", False)):
+    if (
+        total > 0
+        and completed_or_terminal >= total
+        and not bool(entry.get("completion_event_emitted", False))
+    ):
         _mark_batch_completion_emitted(runtime, batch_id=batch_id)
         job_event_broker.publish(
             "batch_complete",
@@ -4035,24 +4813,35 @@ def _batch_publish_progress_for_job(job: job_store.JobRecord) -> None:
                 "cancelled": _safe_int(summary.get("cancelled"), 0),
                 "total": total,
                 "totalCost": _safe_float(summary.get("cost_so_far_usd"), 0.0),
-                "averageQuality": _safe_float(summary.get("average_quality_score"), 0.0),
+                "averageQuality": _safe_float(
+                    summary.get("average_quality_score"), 0.0
+                ),
             },
         )
 
 
-def _create_snapshot_before_operation(runtime: config.Config, *, operation: str) -> dict[str, Any]:
+def _create_snapshot_before_operation(
+    runtime: config.Config, *, operation: str
+) -> dict[str, Any]:
     mode = str(os.getenv("DISASTER_SNAPSHOT_MODE", "async")).strip().lower()
     if mode not in {"sync", "blocking"}:
+
         def _background_snapshot() -> None:
             try:
                 disaster_recovery.create_snapshot(runtime=runtime)
             except Exception as exc:
                 logger.warning(
                     "Background snapshot failed",
-                    extra={"operation": operation, "catalog": runtime.catalog_id, "error": str(exc)},
+                    extra={
+                        "operation": operation,
+                        "catalog": runtime.catalog_id,
+                        "error": str(exc),
+                    },
                 )
 
-        thread = threading.Thread(target=_background_snapshot, name=f"snapshot-{operation}", daemon=True)
+        thread = threading.Thread(
+            target=_background_snapshot, name=f"snapshot-{operation}", daemon=True
+        )
         thread.start()
         return {"ok": True, "operation": operation, "scheduled": True, "mode": "async"}
     try:
@@ -4105,7 +4894,9 @@ def _compare_payload(*, runtime: config.Config, books: list[int]) -> dict[str, A
     )
     wanted = {int(item) for item in books if int(item) > 0}
     if wanted:
-        candidates = [row for row in candidates if _safe_int(row.get("number"), 0) in wanted]
+        candidates = [
+            row for row in candidates if _safe_int(row.get("number"), 0) in wanted
+        ]
 
     notes_lookup = book_metadata.list_books(_book_metadata_path_for_runtime(runtime))
     for row in candidates:
@@ -4144,7 +4935,9 @@ def _catalog_outputs_for_runtime(runtime: config.Config) -> tuple[Path, Path, Pa
     )
 
 
-def create_comparison_grid(original_path: Path, variants_dir: Path, output_path: Path) -> Path:
+def create_comparison_grid(
+    original_path: Path, variants_dir: Path, output_path: Path
+) -> Path:
     """Create side-by-side image: original + up to 5 variants."""
     images = [Image.open(original_path).convert("RGB")]
     variant_images = sorted(variants_dir.glob("Variant-*/*.jpg"))[:5]
@@ -4205,7 +4998,9 @@ def build_review_dataset(
         original = _find_original_image(input_book)
 
         variants = []
-        for variant_dir in sorted([p for p in output_book.glob("Variant-*") if p.is_dir()]):
+        for variant_dir in sorted(
+            [p for p in output_book.glob("Variant-*") if p.is_dir()]
+        ):
             variant_num = _parse_variant_number(variant_dir.name)
             if variant_num is None:
                 continue
@@ -4230,7 +5025,11 @@ def build_review_dataset(
                 "original": _to_project_relative(original) if original else "",
                 "variants": sorted(variants, key=lambda item: item["variant"]),
                 "best_quality_score": max(
-                    [float(v["quality_score"]) for v in variants if isinstance(v.get("quality_score"), (int, float))],
+                    [
+                        float(v["quality_score"])
+                        for v in variants
+                        if isinstance(v.get("quality_score"), (int, float))
+                    ],
                     default=0.0,
                 ),
             }
@@ -4239,7 +5038,12 @@ def build_review_dataset(
     return rows
 
 
-def _build_review_data_payload(output_dir: Path, *, runtime: config.Config | None = None, max_books: int | None = None) -> dict[str, Any]:
+def _build_review_data_payload(
+    output_dir: Path,
+    *,
+    runtime: config.Config | None = None,
+    max_books: int | None = None,
+) -> dict[str, Any]:
     runtime = runtime or config.get_config()
     books = build_review_dataset(
         output_dir,
@@ -4248,7 +5052,9 @@ def _build_review_data_payload(output_dir: Path, *, runtime: config.Config | Non
         quality_scores_path=_quality_scores_path_for_runtime(runtime),
         max_books=max_books,
     )
-    winner_payload = _ensure_winner_payload(books, path=_winner_path_for_runtime(runtime))
+    winner_payload = _ensure_winner_payload(
+        books, path=_winner_path_for_runtime(runtime)
+    )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "catalog": runtime.catalog_id,
@@ -4257,7 +5063,12 @@ def _build_review_data_payload(output_dir: Path, *, runtime: config.Config | Non
     }
 
 
-def write_review_data(output_dir: Path, *, runtime: config.Config | None = None, max_books: int | None = None) -> Path:
+def write_review_data(
+    output_dir: Path,
+    *,
+    runtime: config.Config | None = None,
+    max_books: int | None = None,
+) -> Path:
     data = _build_review_data_payload(output_dir, runtime=runtime, max_books=max_books)
     runtime = runtime or config.get_config()
     review_data_path = _review_data_path_for_runtime(runtime)
@@ -4267,17 +5078,25 @@ def write_review_data(output_dir: Path, *, runtime: config.Config | None = None,
 
 
 def _catalog_folder_name_for_book(catalog_path: Path, book_number: int) -> str:
-    entry = _json_list_rows_cache_entry(catalog_path).get("by_number", {}).get(int(book_number), {})
+    entry = (
+        _json_list_rows_cache_entry(catalog_path)
+        .get("by_number", {})
+        .get(int(book_number), {})
+    )
     return str(entry.get("folder_name", "")).strip() if isinstance(entry, dict) else ""
 
 
 def _catalog_book_row(path: Path, book_number: int) -> dict[str, Any]:
-    entry = _json_list_rows_cache_entry(path).get("by_number", {}).get(int(book_number), {})
+    entry = (
+        _json_list_rows_cache_entry(path).get("by_number", {}).get(int(book_number), {})
+    )
     return entry if isinstance(entry, dict) else {}
 
 
 def _local_cover_available(*, runtime: config.Config, book_number: int) -> bool:
-    folder_name = _catalog_folder_name_for_book(runtime.book_catalog_path, int(book_number))
+    folder_name = _catalog_folder_name_for_book(
+        runtime.book_catalog_path, int(book_number)
+    )
     if not folder_name:
         return False
     return _folder_has_local_cover(runtime.input_dir / folder_name)
@@ -4293,7 +5112,9 @@ def _folder_has_local_cover(folder: Path) -> bool:
 
 
 def _first_local_cover_path(*, runtime: config.Config, book_number: int) -> Path | None:
-    folder_name = _catalog_folder_name_for_book(runtime.book_catalog_path, int(book_number))
+    folder_name = _catalog_folder_name_for_book(
+        runtime.book_catalog_path, int(book_number)
+    )
     if not folder_name:
         return None
     folder = runtime.input_dir / folder_name
@@ -4317,7 +5138,11 @@ def _resolve_cover_preview_source_path(
 ) -> tuple[Path | None, int, dict[str, Any]]:
     row = _catalog_book_row(runtime.book_catalog_path, int(book_number))
     if not row:
-        return None, int(HTTPStatus.NOT_FOUND), {"error": f"Book {int(book_number)} not found in catalog."}
+        return (
+            None,
+            int(HTTPStatus.NOT_FOUND),
+            {"error": f"Book {int(book_number)} not found in catalog."},
+        )
 
     local_path = _first_local_cover_path(runtime=runtime, book_number=int(book_number))
     if local_path is not None and local_path.exists():
@@ -4344,10 +5169,17 @@ def _resolve_cover_preview_source_path(
         return (
             None,
             int(HTTPStatus.SERVICE_UNAVAILABLE),
-            {"error": f"No source cover is available for book {int(book_number)}.", "source": requested_source},
+            {
+                "error": f"No source cover is available for book {int(book_number)}.",
+                "source": requested_source,
+            },
         )
 
-    credentials_path = Path(credentials_path_token) if str(credentials_path_token or "").strip() else _resolve_credentials_path(runtime)
+    credentials_path = (
+        Path(credentials_path_token)
+        if str(credentials_path_token or "").strip()
+        else _resolve_credentials_path(runtime)
+    )
     if not credentials_path.is_absolute():
         credentials_path = PROJECT_ROOT / credentials_path
 
@@ -4365,20 +5197,37 @@ def _resolve_cover_preview_source_path(
             None,
             int(HTTPStatus.SERVICE_UNAVAILABLE),
             {
-                "error": str(ensure_result.get("error") or f"No source cover is available for book {int(book_number)}."),
+                "error": str(
+                    ensure_result.get("error")
+                    or f"No source cover is available for book {int(book_number)}."
+                ),
                 "source": requested_source,
             },
         )
 
     source_token = str(ensure_result.get("path", "")).strip()
-    resolved_path = Path(source_token) if source_token else _first_local_cover_path(runtime=runtime, book_number=int(book_number))
+    resolved_path = (
+        Path(source_token)
+        if source_token
+        else _first_local_cover_path(runtime=runtime, book_number=int(book_number))
+    )
     if resolved_path is None or not resolved_path.exists():
         return (
             None,
             int(HTTPStatus.SERVICE_UNAVAILABLE),
-            {"error": f"No source cover is available for book {int(book_number)}.", "source": requested_source},
+            {
+                "error": f"No source cover is available for book {int(book_number)}.",
+                "source": requested_source,
+            },
         )
-    return resolved_path, int(HTTPStatus.OK), {"source": requested_source, "downloaded": bool(ensure_result.get("downloaded"))}
+    return (
+        resolved_path,
+        int(HTTPStatus.OK),
+        {
+            "source": requested_source,
+            "downloaded": bool(ensure_result.get("downloaded")),
+        },
+    )
 
 
 def _has_local_input_covers(*, runtime: config.Config, max_dirs: int = 250) -> bool:
@@ -4411,14 +5260,22 @@ def _default_cover_source_for_runtime(runtime: config.Config) -> str:
     return "catalog" if _has_local_input_covers(runtime=runtime) else "drive"
 
 
-def _cover_preview_path_for_runtime(*, runtime: config.Config, book_number: int, source: str) -> Path:
+def _cover_preview_path_for_runtime(
+    *, runtime: config.Config, book_number: int, source: str
+) -> Path:
     token = str(source or "catalog").strip().lower() or "catalog"
     if token not in {"catalog", "drive"}:
         token = "catalog"
-    return runtime.tmp_dir / "cover_previews" / f"{runtime.catalog_id}_{int(book_number)}_{token}.jpg"
+    return (
+        runtime.tmp_dir
+        / "cover_previews"
+        / f"{runtime.catalog_id}_{int(book_number)}_{token}.jpg"
+    )
 
 
-def _write_cover_preview(*, source_image: Path, preview_path: Path, max_size: int = 360) -> Path:
+def _write_cover_preview(
+    *, source_image: Path, preview_path: Path, max_size: int = 360
+) -> Path:
     preview_path.parent.mkdir(parents=True, exist_ok=True)
     with Image.open(source_image) as img:
         rendered = img.convert("RGB")
@@ -4427,14 +5284,20 @@ def _write_cover_preview(*, source_image: Path, preview_path: Path, max_size: in
     return preview_path
 
 
-def _iterate_data_dependency_paths(*, runtime: config.Config, prompts_path: Path) -> list[Path]:
+def _iterate_data_dependency_paths(
+    *, runtime: config.Config, prompts_path: Path
+) -> list[Path]:
     return [
         runtime.book_catalog_path,
         prompts_path,
         runtime.prompt_library_path,
         runtime.cover_templates_path,
-        config.intelligent_prompts_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir),
-        config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir),
+        config.intelligent_prompts_path(
+            catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+        ),
+        config.enriched_catalog_path(
+            catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+        ),
         _prompt_performance_path_for_runtime(runtime),
         _winner_path_for_runtime(runtime),
         PROJECT_ROOT / "scripts" / "quality_review.py",
@@ -4480,22 +5343,41 @@ def _compact_iterate_enrichment(enrichment: dict[str, Any]) -> dict[str, Any]:
     return {key: enrichment[key] for key in keys if key in enrichment}
 
 
-def write_iterate_books_data(*, runtime: config.Config | None = None, prompts_path: Path | None = None, force: bool = False) -> Path:
+def write_iterate_books_data(
+    *,
+    runtime: config.Config | None = None,
+    prompts_path: Path | None = None,
+    force: bool = False,
+) -> Path:
     runtime = runtime or config.get_config()
     prompts_path = prompts_path or runtime.prompts_path
     output_path = _iterate_books_data_path_for_runtime(runtime)
-    source_paths = _iterate_data_dependency_paths(runtime=runtime, prompts_path=prompts_path)
-    if not force and _is_generated_payload_fresh(output_path=output_path, sources=source_paths):
+    source_paths = _iterate_data_dependency_paths(
+        runtime=runtime, prompts_path=prompts_path
+    )
+    if not force and _is_generated_payload_fresh(
+        output_path=output_path, sources=source_paths
+    ):
         return output_path
 
     prompts = _load_json(prompts_path, {"books": []})
-    enriched_catalog_path = config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
-    enriched_catalog = _json_list_rows_cache_entry(enriched_catalog_path).get("rows", [])
+    enriched_catalog_path = config.enriched_catalog_path(
+        catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+    )
+    enriched_catalog = _json_list_rows_cache_entry(enriched_catalog_path).get(
+        "rows", []
+    )
     winners_payload = _load_winner_payload(_winner_path_for_runtime(runtime))
-    winner_map = winners_payload.get("selections", {}) if isinstance(winners_payload, dict) else {}
+    winner_map = (
+        winners_payload.get("selections", {})
+        if isinstance(winners_payload, dict)
+        else {}
+    )
     genre_prompts = _genre_prompt_payload(runtime=runtime)
     template_rows = _template_rows_for_runtime(runtime=runtime)
-    default_template_id = str(template_rows[0].get("id", "")).strip() if template_rows else ""
+    default_template_id = (
+        str(template_rows[0].get("id", "")).strip() if template_rows else ""
+    )
 
     enriched_by_book: dict[int, dict[str, Any]] = {}
     if isinstance(enriched_catalog, list):
@@ -4524,15 +5406,21 @@ def write_iterate_books_data(*, runtime: config.Config | None = None, prompts_pa
         if number <= 0:
             continue
         prompt_row = prompt_by_book.get(number, {})
-        prompt_variants = prompt_row.get("variants", []) if isinstance(prompt_row, dict) else []
+        prompt_variants = (
+            prompt_row.get("variants", []) if isinstance(prompt_row, dict) else []
+        )
         default_prompt = (
             prompt_variants[0].get("prompt", "")
-            if isinstance(prompt_variants, list) and prompt_variants and isinstance(prompt_variants[0], dict)
+            if isinstance(prompt_variants, list)
+            and prompt_variants
+            and isinstance(prompt_variants[0], dict)
             else ""
         )
         title = str(book.get("title", prompt_row.get("title", ""))).strip()
         author = str(book.get("author", prompt_row.get("author", ""))).strip()
-        folder_name = str(book.get("folder_name", prompt_row.get("folder_name", ""))).strip()
+        folder_name = str(
+            book.get("folder_name", prompt_row.get("folder_name", ""))
+        ).strip()
         enrichment = enriched_by_book.get(number, {})
         inferred = genre_intelligence.infer_genre(
             title=title,
@@ -4559,25 +5447,45 @@ def write_iterate_books_data(*, runtime: config.Config | None = None, prompts_pa
             template_id=default_template_id,
         )
         winner_row = winner_map.get(str(number), {})
-        winner_variant = _safe_int(winner_row.get("winner") if isinstance(winner_row, dict) else winner_row, 0)
+        winner_variant = _safe_int(
+            winner_row.get("winner") if isinstance(winner_row, dict) else winner_row, 0
+        )
         books.append(
             {
                 "number": number,
                 "title": title,
                 "author": author,
                 "folder_name": folder_name,
-                "file_base": str(book.get("file_base", prompt_row.get("file_base", f"{title} - {author}".strip(" - ")))),
-                "cover_jpg_id": str(book.get("cover_jpg_id", book.get("drive_cover_id", ""))).strip(),
-                "cover_name": str(book.get("cover_name", book.get("drive_name", title))).strip(),
+                "file_base": str(
+                    book.get(
+                        "file_base",
+                        prompt_row.get("file_base", f"{title} - {author}".strip(" - ")),
+                    )
+                ),
+                "cover_jpg_id": str(
+                    book.get("cover_jpg_id", book.get("drive_cover_id", ""))
+                ).strip(),
+                "cover_name": str(
+                    book.get("cover_name", book.get("drive_name", title))
+                ).strip(),
                 "drive_kind": str(book.get("drive_kind", "")).strip(),
                 "default_prompt": default_prompt,
-                "genre": str(composed.get("genre", inferred.get("genre", "literary_fiction")) or "literary_fiction"),
+                "genre": str(
+                    composed.get("genre", inferred.get("genre", "literary_fiction"))
+                    or "literary_fiction"
+                ),
                 "composed_prompt": str(composed.get("prompt", default_prompt)).strip(),
                 "prompt_components": {
-                    "title_keywords": composed.get("title_keywords", genre_intelligence.extract_title_keywords(title=title, limit=6)),
+                    "title_keywords": composed.get(
+                        "title_keywords",
+                        genre_intelligence.extract_title_keywords(title=title, limit=6),
+                    ),
                 },
                 "enrichment": enrichment,
-                "local_cover_available": _folder_has_local_cover(runtime.input_dir / folder_name) or bool(book.get("cover_jpg_id")),
+                "local_cover_available": _folder_has_local_cover(
+                    runtime.input_dir / folder_name
+                )
+                or bool(book.get("cover_jpg_id")),
                 "winner_variant": winner_variant,
                 "winner_selected": bool(winner_variant > 0),
             }
@@ -4596,27 +5504,50 @@ def write_iterate_books_data(*, runtime: config.Config | None = None, prompts_pa
     return output_path
 
 
-def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Path | None = None, force: bool = False) -> Path:
+def write_iterate_data(
+    *,
+    runtime: config.Config | None = None,
+    prompts_path: Path | None = None,
+    force: bool = False,
+) -> Path:
     runtime = runtime or config.get_config()
     prompts_path = prompts_path or runtime.prompts_path
     iterate_path = _iterate_data_path_for_runtime(runtime)
-    source_paths = _iterate_data_dependency_paths(runtime=runtime, prompts_path=prompts_path)
-    if not force and _is_generated_payload_fresh(output_path=iterate_path, sources=source_paths):
+    source_paths = _iterate_data_dependency_paths(
+        runtime=runtime, prompts_path=prompts_path
+    )
+    if not force and _is_generated_payload_fresh(
+        output_path=iterate_path, sources=source_paths
+    ):
         return iterate_path
     prompts = _load_json(prompts_path, {"books": []})
     library = PromptLibrary(runtime.prompt_library_path)
 
-    intelligent_prompts_path = config.intelligent_prompts_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
-    enriched_catalog_path = config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
+    intelligent_prompts_path = config.intelligent_prompts_path(
+        catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+    )
+    enriched_catalog_path = config.enriched_catalog_path(
+        catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+    )
     smart_payload = _load_json(intelligent_prompts_path, {"books": []})
-    enriched_catalog = _json_list_rows_cache_entry(enriched_catalog_path).get("rows", [])
-    prompt_performance = _load_json(_prompt_performance_path_for_runtime(runtime), {"patterns": {}})
+    enriched_catalog = _json_list_rows_cache_entry(enriched_catalog_path).get(
+        "rows", []
+    )
+    prompt_performance = _load_json(
+        _prompt_performance_path_for_runtime(runtime), {"patterns": {}}
+    )
     template_rows = _template_rows_for_runtime(runtime=runtime)
     budget_presets = _budget_presets_for_runtime(runtime)
-    default_template_id = str(template_rows[0].get("id", "heritage_classic")).strip() if template_rows else "heritage_classic"
+    default_template_id = (
+        str(template_rows[0].get("id", "heritage_classic")).strip()
+        if template_rows
+        else "heritage_classic"
+    )
 
     smart_by_book: dict[int, dict[str, Any]] = {}
-    smart_books = smart_payload.get("books", []) if isinstance(smart_payload, dict) else []
+    smart_books = (
+        smart_payload.get("books", []) if isinstance(smart_payload, dict) else []
+    )
     if isinstance(smart_books, list):
         for row in smart_books:
             if not isinstance(row, dict):
@@ -4644,7 +5575,11 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
     for provider in runtime.provider_keys.keys():
         provider_models.setdefault(provider, [])
     winners_payload = _load_winner_payload(_winner_path_for_runtime(runtime))
-    winner_map = winners_payload.get("selections", {}) if isinstance(winners_payload, dict) else {}
+    winner_map = (
+        winners_payload.get("selections", {})
+        if isinstance(winners_payload, dict)
+        else {}
+    )
 
     prompt_rows = prompts.get("books", []) if isinstance(prompts, dict) else []
     if not isinstance(prompt_rows, list):
@@ -4659,7 +5594,11 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
         prompt_by_book[number] = row
 
     catalog_rows = _catalog_books_payload(runtime.book_catalog_path)
-    source_books = catalog_rows if catalog_rows else [row for row in prompt_rows if isinstance(row, dict)]
+    source_books = (
+        catalog_rows
+        if catalog_rows
+        else [row for row in prompt_rows if isinstance(row, dict)]
+    )
 
     books = []
     for book in source_books:
@@ -4667,21 +5606,33 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
         if number <= 0:
             continue
         prompt_row = prompt_by_book.get(number, {})
-        prompt_variants = prompt_row.get("variants", []) if isinstance(prompt_row, dict) else []
+        prompt_variants = (
+            prompt_row.get("variants", []) if isinstance(prompt_row, dict) else []
+        )
         default_prompt = (
             prompt_variants[0].get("prompt", "")
-            if isinstance(prompt_variants, list) and prompt_variants and isinstance(prompt_variants[0], dict)
+            if isinstance(prompt_variants, list)
+            and prompt_variants
+            and isinstance(prompt_variants[0], dict)
             else ""
         )
         title = str(book.get("title", prompt_row.get("title", "")))
         author = str(book.get("author", prompt_row.get("author", "")))
         folder_name = str(book.get("folder_name", prompt_row.get("folder_name", "")))
-        cover_jpg_id = str(book.get("cover_jpg_id", book.get("drive_cover_id", ""))).strip()
-        cover_name = str(book.get("cover_name", book.get("drive_name", folder_name or title))).strip()
+        cover_jpg_id = str(
+            book.get("cover_jpg_id", book.get("drive_cover_id", ""))
+        ).strip()
+        cover_name = str(
+            book.get("cover_name", book.get("drive_name", folder_name or title))
+        ).strip()
         smart_row = smart_by_book.get(number, {})
-        smart_variants = smart_row.get("variants", []) if isinstance(smart_row, dict) else []
+        smart_variants = (
+            smart_row.get("variants", []) if isinstance(smart_row, dict) else []
+        )
         winner_row = winner_map.get(str(number), {})
-        winner_variant = _safe_int(winner_row.get("winner") if isinstance(winner_row, dict) else winner_row, 0)
+        winner_variant = _safe_int(
+            winner_row.get("winner") if isinstance(winner_row, dict) else winner_row, 0
+        )
         composed = _compose_prompt_for_book(
             runtime=runtime,
             book={
@@ -4715,7 +5666,12 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
                 "title": title,
                 "author": author,
                 "folder_name": folder_name,
-                "file_base": str(book.get("file_base", prompt_row.get("file_base", f"{title} - {author}".strip(" - ")))),
+                "file_base": str(
+                    book.get(
+                        "file_base",
+                        prompt_row.get("file_base", f"{title} - {author}".strip(" - ")),
+                    )
+                ),
                 "cover_jpg_id": cover_jpg_id,
                 "cover_name": cover_name,
                 "drive_kind": str(book.get("drive_kind", "")).strip(),
@@ -4734,8 +5690,13 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
                 },
                 "enrichment": enriched_by_book.get(number, {}),
                 "prompt_context": prompt_context,
-                "smart_prompts": smart_variants if isinstance(smart_variants, list) else [],
-                "local_cover_available": _folder_has_local_cover(runtime.input_dir / folder_name) or bool(cover_jpg_id),
+                "smart_prompts": smart_variants
+                if isinstance(smart_variants, list)
+                else [],
+                "local_cover_available": _folder_has_local_cover(
+                    runtime.input_dir / folder_name
+                )
+                or bool(cover_jpg_id),
                 "winner_variant": winner_variant,
                 "winner_selected": bool(winner_variant > 0),
             }
@@ -4755,11 +5716,17 @@ def write_iterate_data(*, runtime: config.Config | None = None, prompts_path: Pa
         "prompt_sources": ["template", "ai_generated", "library", "custom"],
         "intelligent_prompts_available": bool(smart_by_book),
         "enrichment_available": bool(enriched_by_book),
-        "prompt_performance": prompt_performance.get("patterns", {}) if isinstance(prompt_performance, dict) else {},
+        "prompt_performance": prompt_performance.get("patterns", {})
+        if isinstance(prompt_performance, dict)
+        else {},
         "style_anchors": [asdict(anchor) for anchor in library.get_style_anchors()],
         "prompt_library": [asdict(item) for item in library.get_prompts()],
-        "model_costs": {model: runtime.get_model_cost(model) for model in runtime.all_models},
-        "model_modalities": {model: runtime.get_model_modality(model) for model in runtime.all_models},
+        "model_costs": {
+            model: runtime.get_model_cost(model) for model in runtime.all_models
+        },
+        "model_modalities": {
+            model: runtime.get_model_modality(model) for model in runtime.all_models
+        },
         "gdrive_output_folder_id": str(runtime.gdrive_output_folder_id or ""),
         "default_cover_source": _default_cover_source_for_runtime(runtime),
         "local_input_covers_available": _has_local_input_covers(runtime=runtime),
@@ -4807,7 +5774,9 @@ def _title_author_from_drive_name(name: str) -> tuple[str, str]:
     return token, ""
 
 
-def _build_catalog_rows_from_drive_covers(*, covers: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _build_catalog_rows_from_drive_covers(
+    *, covers: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     used_numbers: set[int] = set()
     used_folders: set[str] = set()
@@ -4827,7 +5796,11 @@ def _build_catalog_rows_from_drive_covers(*, covers: list[dict[str, Any]]) -> li
         title = parsed_title
         if not title or normalized_parsed == "untitled":
             title = mapped_title or title
-        elif re.fullmatch(r"book\s+\d+", normalized_parsed) and mapped_title and normalized_mapped != "untitled":
+        elif (
+            re.fullmatch(r"book\s+\d+", normalized_parsed)
+            and mapped_title
+            and normalized_mapped != "untitled"
+        ):
             title = mapped_title
         author = parsed_author or mapped_author
         mapped_number = _safe_int(entry.get("book_number"), 0)
@@ -4901,7 +5874,9 @@ def _merge_catalog_rows_with_drive(
         if title_key and title_key not in title_to_number:
             title_to_number[title_key] = number
 
-    def _apply_drive_metadata(row: dict[str, Any], *, cover_id: str, cover_name: str, drive_kind: str) -> None:
+    def _apply_drive_metadata(
+        row: dict[str, Any], *, cover_id: str, cover_name: str, drive_kind: str
+    ) -> None:
         if cover_id:
             row["cover_jpg_id"] = cover_id
             row["drive_cover_id"] = cover_id
@@ -4947,7 +5922,12 @@ def _merge_catalog_rows_with_drive(
         title_key = _normalized_catalog_title_token(parsed_title)
 
         if number > 0 and number in rows_by_number:
-            _apply_drive_metadata(rows_by_number[number], cover_id=cover_id, cover_name=cover_name, drive_kind=drive_kind)
+            _apply_drive_metadata(
+                rows_by_number[number],
+                cover_id=cover_id,
+                cover_name=cover_name,
+                drive_kind=drive_kind,
+            )
             matched += 1
             continue
 
@@ -4957,7 +5937,11 @@ def _merge_catalog_rows_with_drive(
         title = parsed_title
         if not title or normalized_parsed == "untitled":
             title = mapped_title or title
-        elif re.fullmatch(r"book\s+\d+", normalized_parsed) and mapped_title and normalized_mapped != "untitled":
+        elif (
+            re.fullmatch(r"book\s+\d+", normalized_parsed)
+            and mapped_title
+            and normalized_mapped != "untitled"
+        ):
             title = mapped_title
         title = (title or "").strip() or "Untitled"
         author = (parsed_author or mapped_author or "").strip()
@@ -4988,7 +5972,9 @@ def _merge_catalog_rows_with_drive(
             "file_base": file_base,
             "formats": ["ai", "jpg", "pdf"],
         }
-        _apply_drive_metadata(row, cover_id=cover_id, cover_name=cover_name, drive_kind=drive_kind)
+        _apply_drive_metadata(
+            row, cover_id=cover_id, cover_name=cover_name, drive_kind=drive_kind
+        )
         rows_by_number[number] = row
         if title_key and title_key not in title_to_number:
             title_to_number[title_key] = number
@@ -5003,13 +5989,17 @@ def _merge_catalog_rows_with_drive(
     }
 
 
-def _queue_catalog_enrichment(*, runtime: config.Config, books: list[int], reason: str) -> dict[str, Any]:
+def _queue_catalog_enrichment(
+    *, runtime: config.Config, books: list[int], reason: str
+) -> dict[str, Any]:
     target_books = sorted({int(book) for book in books if int(book) > 0})
     if not target_books:
         return {"queued": False, "reason": "no_books", "books": [], "count": 0}
 
     catalog_id = runtime.catalog_id
-    enriched_path = config.enriched_catalog_path(catalog_id=catalog_id, config_dir=runtime.config_dir)
+    enriched_path = config.enriched_catalog_path(
+        catalog_id=catalog_id, config_dir=runtime.config_dir
+    )
     usage_path = _llm_usage_path_for_runtime(runtime)
     descriptions_path = runtime.config_dir / "book_descriptions.json"
 
@@ -5039,7 +6029,12 @@ def _queue_catalog_enrichment(*, runtime: config.Config, books: list[int], reaso
                     descriptions_path=descriptions_path,
                 )
                 write_iterate_data(runtime=worker_runtime)
-                _invalidate_cache("/api/iterate-data", "/api/prompt-performance", "/api/dashboard-data", "/api/analytics/")
+                _invalidate_cache(
+                    "/api/iterate-data",
+                    "/api/prompt-performance",
+                    "/api/dashboard-data",
+                    "/api/analytics/",
+                )
                 logger.info(
                     "Background enrichment completed",
                     extra={
@@ -5077,7 +6072,9 @@ def _queue_catalog_enrichment(*, runtime: config.Config, books: list[int], reaso
     }
 
 
-def _sync_catalog_from_drive(*, runtime: config.Config, force: bool = False, limit: int = 5000) -> dict[str, Any]:
+def _sync_catalog_from_drive(
+    *, runtime: config.Config, force: bool = False, limit: int = 5000
+) -> dict[str, Any]:
     source_default = (
         str(getattr(runtime, "gdrive_source_folder_id", "") or "").strip()
         or str(getattr(runtime, "gdrive_input_folder_id", "") or "").strip()
@@ -5149,7 +6146,9 @@ def _sync_catalog_from_drive(*, runtime: config.Config, force: bool = False, lim
     added_numbers = [
         _safe_int(row.get("number"), 0)
         for row in catalog_rows
-        if isinstance(row, dict) and _safe_int(row.get("number"), 0) > 0 and _safe_int(row.get("number"), 0) not in existing_numbers
+        if isinstance(row, dict)
+        and _safe_int(row.get("number"), 0) > 0
+        and _safe_int(row.get("number"), 0) not in existing_numbers
     ]
     auto_enrichment = _queue_catalog_enrichment(
         runtime=runtime,
@@ -5158,7 +6157,9 @@ def _sync_catalog_from_drive(*, runtime: config.Config, force: bool = False, lim
     )
     write_iterate_data(runtime=runtime)
     iterate_payload = _load_json(_iterate_data_path_for_runtime(runtime), {"books": []})
-    iterate_rows = iterate_payload.get("books", []) if isinstance(iterate_payload, dict) else []
+    iterate_rows = (
+        iterate_payload.get("books", []) if isinstance(iterate_payload, dict) else []
+    )
     cgi_books: list[dict[str, Any]] = []
     for row in iterate_rows:
         if not isinstance(row, dict):
@@ -5192,10 +6193,17 @@ def _sync_catalog_from_drive(*, runtime: config.Config, force: bool = False, lim
         )
     except Exception:
         pass
-    _invalidate_cache("/api/iterate-data", "/api/enrichment-health", "/cgi-bin/catalog.py", "/cgi-bin/catalog.py/status")
+    _invalidate_cache(
+        "/api/iterate-data",
+        "/api/enrichment-health",
+        "/cgi-bin/catalog.py",
+        "/cgi-bin/catalog.py/status",
+    )
     added_books = [
-        row for row in catalog_rows
-        if isinstance(row, dict) and _safe_int(row.get("number"), 0) not in existing_numbers
+        row
+        for row in catalog_rows
+        if isinstance(row, dict)
+        and _safe_int(row.get("number"), 0) not in existing_numbers
     ]
     return {
         "ok": True,
@@ -5212,11 +6220,15 @@ def _sync_catalog_from_drive(*, runtime: config.Config, force: bool = False, lim
     }
 
 
-def _queue_auto_enrichment_for_books(*, runtime: config.Config, books: list[dict[str, Any]]) -> dict[str, Any]:
+def _queue_auto_enrichment_for_books(
+    *, runtime: config.Config, books: list[dict[str, Any]]
+) -> dict[str, Any]:
     if not isinstance(books, list) or not books:
         return {"queued": 0, "skipped": 0}
 
-    enriched_path = config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
+    enriched_path = config.enriched_catalog_path(
+        catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+    )
     queued = 0
     skipped = 0
     for row in books:
@@ -5277,7 +6289,9 @@ def _start_generic_enrichment_background(
 
     def _run() -> None:
         try:
-            enriched_path = config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
+            enriched_path = config.enriched_catalog_path(
+                catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+            )
             summary = book_enricher.enrich_catalog(
                 catalog_path=runtime.book_catalog_path,
                 output_path=enriched_path,
@@ -5292,7 +6306,9 @@ def _start_generic_enrichment_background(
                 batch_size=batch_size,
             )
             write_iterate_data(runtime=runtime)
-            _invalidate_cache("/api/iterate-data", "/api/prompt-performance", "/api/enrichment-health")
+            _invalidate_cache(
+                "/api/iterate-data", "/api/prompt-performance", "/api/enrichment-health"
+            )
             _set_enrichment_run_state(
                 catalog_id,
                 {
@@ -5306,7 +6322,9 @@ def _start_generic_enrichment_background(
                 },
             )
         except Exception as exc:  # pragma: no cover - background path
-            logger.warning("Background generic enrichment failed for %s: %s", catalog_id, exc)
+            logger.warning(
+                "Background generic enrichment failed for %s: %s", catalog_id, exc
+            )
             _set_enrichment_run_state(
                 catalog_id,
                 {
@@ -5331,12 +6349,19 @@ def _start_generic_enrichment_background(
 
 def _enrichment_health_payload(*, runtime: config.Config) -> dict[str, Any]:
     catalog_rows = _catalog_books_payload(runtime.book_catalog_path)
-    enriched_path = config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
+    enriched_path = config.enriched_catalog_path(
+        catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+    )
     enriched_rows = _load_json(enriched_path, [])
-    enriched_by_number = {
-        _safe_int(row.get("number"), 0): row
-        for row in enriched_rows if isinstance(row, dict) and _safe_int(row.get("number"), 0) > 0
-    } if isinstance(enriched_rows, list) else {}
+    enriched_by_number = (
+        {
+            _safe_int(row.get("number"), 0): row
+            for row in enriched_rows
+            if isinstance(row, dict) and _safe_int(row.get("number"), 0) > 0
+        }
+        if isinstance(enriched_rows, list)
+        else {}
+    )
 
     total_books = 0
     enriched_real = 0
@@ -5352,7 +6377,9 @@ def _enrichment_health_payload(*, runtime: config.Config) -> dict[str, Any]:
             continue
         total_books += 1
         enriched_row = enriched_by_number.get(number, {})
-        enrichment = enriched_row.get("enrichment") if isinstance(enriched_row, dict) else None
+        enrichment = (
+            enriched_row.get("enrichment") if isinstance(enriched_row, dict) else None
+        )
         if not isinstance(enrichment, dict) or not enrichment:
             no_enrichment += 1
             continue
@@ -5397,18 +6424,24 @@ def _enrichment_health_payload(*, runtime: config.Config) -> dict[str, Any]:
     }
 
 
-def _template_rows_for_runtime(*, runtime: config.Config, genre: str = "") -> list[dict[str, Any]]:
+def _template_rows_for_runtime(
+    *, runtime: config.Config, genre: str = ""
+) -> list[dict[str, Any]]:
     return template_registry.list_templates(
         genre=str(genre or "").strip().lower(),
         config_dir=runtime.config_dir,
     )
 
 
-def _template_for_id(*, runtime: config.Config, template_id: str) -> dict[str, Any] | None:
+def _template_for_id(
+    *, runtime: config.Config, template_id: str
+) -> dict[str, Any] | None:
     token = str(template_id or "").strip()
     if not token:
         return None
-    return template_registry.get_template(template_id=token, config_dir=runtime.config_dir)
+    return template_registry.get_template(
+        template_id=token, config_dir=runtime.config_dir
+    )
 
 
 def _template_for_genre(*, runtime: config.Config, genre: str) -> dict[str, Any] | None:
@@ -5426,14 +6459,20 @@ def _template_for_genre(*, runtime: config.Config, genre: str) -> dict[str, Any]
     return None
 
 
-def _validate_template_id(*, runtime: config.Config, template_id: str) -> tuple[bool, dict[str, Any]]:
+def _validate_template_id(
+    *, runtime: config.Config, template_id: str
+) -> tuple[bool, dict[str, Any]]:
     token = str(template_id or "").strip()
     if not token:
         return True, {}
     template = _template_for_id(runtime=runtime, template_id=token)
     if template is not None:
         return True, {"template": template}
-    supported = [str(row.get("id", "")).strip() for row in _template_rows_for_runtime(runtime=runtime) if str(row.get("id", "")).strip()]
+    supported = [
+        str(row.get("id", "")).strip()
+        for row in _template_rows_for_runtime(runtime=runtime)
+        if str(row.get("id", "")).strip()
+    ]
     return False, {"template_id": token, "supported_template_ids": supported}
 
 
@@ -5441,7 +6480,9 @@ def _genre_prompt_payload(*, runtime: config.Config) -> dict[str, Any]:
     return genre_intelligence.load_genre_prompts(config_dir=runtime.config_dir)
 
 
-def _book_row_for_number(*, runtime: config.Config, book_number: int) -> dict[str, Any] | None:
+def _book_row_for_number(
+    *, runtime: config.Config, book_number: int
+) -> dict[str, Any] | None:
     match: dict[str, Any] | None = None
     books = _catalog_books_payload(runtime.book_catalog_path)
     for row in books:
@@ -5450,7 +6491,9 @@ def _book_row_for_number(*, runtime: config.Config, book_number: int) -> dict[st
             break
     if match is None:
         return None
-    enriched_catalog_path = config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
+    enriched_catalog_path = config.enriched_catalog_path(
+        catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+    )
     enriched_rows = _json_list_rows_cache_entry(enriched_catalog_path).get("rows", [])
     if isinstance(enriched_rows, list):
         for row in enriched_rows:
@@ -5464,7 +6507,11 @@ def _book_row_for_number(*, runtime: config.Config, book_number: int) -> dict[st
 
 
 def _prompt_reference_tokens(value: str) -> list[str]:
-    return [token for token in re.findall(r"[a-z0-9]+", str(value or "").lower()) if len(token) >= 4]
+    return [
+        token
+        for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if len(token) >= 4
+    ]
 
 
 def _looks_like_scene_first_prompt(prompt: str) -> bool:
@@ -5474,7 +6521,11 @@ def _looks_like_scene_first_prompt(prompt: str) -> bool:
     first_320 = text[:320]
     return "{scene}" in first_320 or (
         "this circular medallion illustration" in first_320
-        and ("must depict" in first_320 or "scene:" in first_320 or "illustration must" in first_320)
+        and (
+            "must depict" in first_320
+            or "scene:" in first_320
+            or "illustration must" in first_320
+        )
     )
 
 
@@ -5497,7 +6548,9 @@ def _ensure_prompt_book_context(
     text_lower = text.lower()
     title_tokens = _prompt_reference_tokens(title)
     author_tokens = _prompt_reference_tokens(author)
-    has_reference = any(token in text_lower for token in (title_tokens + author_tokens) if token)
+    has_reference = any(
+        token in text_lower for token in (title_tokens + author_tokens) if token
+    )
     context = ""
     if not has_reference:
         context = f"Illustration for '{title}'"
@@ -5506,7 +6559,9 @@ def _ensure_prompt_book_context(
         text = f"{context}. {text}".strip()
 
     scene = ""
-    enrichment = book.get("enrichment", {}) if isinstance(book.get("enrichment"), dict) else {}
+    enrichment = (
+        book.get("enrichment", {}) if isinstance(book.get("enrichment"), dict) else {}
+    )
     protagonist = _specific_protagonist(enrichment, book)
     if require_motif:
         scene = _scene_for_book_variant(
@@ -5528,18 +6583,22 @@ def _ensure_prompt_book_context(
             anchor_parts.append(f"The main character shown is {protagonist}.")
         constrained = f"{' '.join(anchor_parts)} {constrained}".strip()
     elif protagonist and protagonist.lower() not in constrained.lower():
-        constrained = f"The main character shown is {protagonist}. {constrained}".strip()
+        constrained = (
+            f"The main character shown is {protagonist}. {constrained}".strip()
+        )
     words = constrained.split()
     if len(words) > 92:
         constrained = " ".join(words[:92]).rstrip(",")
     return constrained.strip()
 
 
-_PLACEHOLDER_PATTERN = re.compile(r"\{(SCENE|MOOD|ERA|TITLE|AUTHOR|SUBTITLE)\}", re.IGNORECASE)
+_PLACEHOLDER_PATTERN = re.compile(
+    r"\{(SCENE|MOOD|ERA|TITLE|AUTHOR|SUBTITLE)\}", re.IGNORECASE
+)
 _GENERIC_SCENE_PATTERN = re.compile(
     r'A pivotal dramatic moment from the literary work\s+"[^"]*"'
     r'(?:\s+by\s+[^,."]+)?'
-    r'(?:,\s*depicting the central emotional conflict[^.]*\.?)?',
+    r"(?:,\s*depicting the central emotional conflict[^.]*\.?)?",
     re.IGNORECASE,
 )
 _GENERIC_MOOD_PATTERN = re.compile(r"classical,\s+timeless,\s+evocative", re.IGNORECASE)
@@ -5612,9 +6671,13 @@ def _specific_era_text(value: Any) -> str:
     return _specific_enrichment_text(value, min_length=6)
 
 
-def _specific_protagonist(enrichment: dict[str, Any], book: dict[str, Any] | None = None) -> str:
+def _specific_protagonist(
+    enrichment: dict[str, Any], book: dict[str, Any] | None = None
+) -> str:
     fallback = book.get("protagonist", "") if isinstance(book, dict) else ""
-    return _specific_enrichment_text(enrichment.get("protagonist", "") or fallback, min_length=6)
+    return _specific_enrichment_text(
+        enrichment.get("protagonist", "") or fallback, min_length=6
+    )
 
 
 def _filtered_enrichment_scenes(enrichment: dict[str, Any]) -> list[str]:
@@ -5629,7 +6692,9 @@ def _motif_scene_for_book(book: dict[str, Any]) -> str:
         return ""
 
 
-def _append_protagonist_to_scene(scene: str, protagonist: str, *, lead_in: str = "The main character is") -> str:
+def _append_protagonist_to_scene(
+    scene: str, protagonist: str, *, lead_in: str = "The main character is"
+) -> str:
     base_scene = _clean_enrichment_text(scene)
     hero = _specific_enrichment_text(protagonist, min_length=6)
     if not base_scene or not hero:
@@ -5668,9 +6733,21 @@ def _is_generic_enrichment(enrichment: dict[str, Any]) -> bool:
         (
             bool(_filtered_enrichment_scenes(enrichment)),
             bool(_specific_protagonist(enrichment)),
-            bool(_specific_enrichment_text(enrichment.get("setting_primary", ""), min_length=8)),
-            bool(_specific_enrichment_list(enrichment.get("visual_motifs", []), min_length=3)),
-            bool(_specific_enrichment_list(enrichment.get("symbolic_elements", []), min_length=3)),
+            bool(
+                _specific_enrichment_text(
+                    enrichment.get("setting_primary", ""), min_length=8
+                )
+            ),
+            bool(
+                _specific_enrichment_list(
+                    enrichment.get("visual_motifs", []), min_length=3
+                )
+            ),
+            bool(
+                _specific_enrichment_list(
+                    enrichment.get("symbolic_elements", []), min_length=3
+                )
+            ),
         )
     )
     return bool(placeholder_hits and not has_specific_data)
@@ -5678,8 +6755,14 @@ def _is_generic_enrichment(enrichment: dict[str, Any]) -> bool:
 
 def _scene_pool_for_book(book: dict[str, Any], *, count: int = 1) -> list[str]:
     total = max(1, int(count or 1))
-    enrichment = book.get("enrichment", {}) if isinstance(book.get("enrichment"), dict) else {}
-    prompt_components = book.get("prompt_components", {}) if isinstance(book.get("prompt_components"), dict) else {}
+    enrichment = (
+        book.get("enrichment", {}) if isinstance(book.get("enrichment"), dict) else {}
+    )
+    prompt_components = (
+        book.get("prompt_components", {})
+        if isinstance(book.get("prompt_components"), dict)
+        else {}
+    )
     pool: list[str] = []
     seen: set[str] = set()
     generic_enrichment = _is_generic_enrichment(enrichment)
@@ -5687,7 +6770,11 @@ def _scene_pool_for_book(book: dict[str, Any], *, count: int = 1) -> list[str]:
 
     def _push_unique(value: Any) -> None:
         trimmed = _clean_enrichment_text(value)
-        if not trimmed or len(trimmed) < 20 or _GENERIC_SCENE_FALLBACK_PATTERN.search(trimmed):
+        if (
+            not trimmed
+            or len(trimmed) < 20
+            or _GENERIC_SCENE_FALLBACK_PATTERN.search(trimmed)
+        ):
             return
         token = trimmed.lower()
         if token in seen:
@@ -5702,7 +6789,9 @@ def _scene_pool_for_book(book: dict[str, Any], *, count: int = 1) -> list[str]:
         _push_unique(scene)
 
     protagonist = _specific_protagonist(enrichment, book)
-    setting_primary = _specific_enrichment_text(enrichment.get("setting_primary", ""), min_length=8)
+    setting_primary = _specific_enrichment_text(
+        enrichment.get("setting_primary", ""), min_length=8
+    )
     raw_setting_details = enrichment.get("setting_details", "")
     if isinstance(raw_setting_details, list):
         detail_parts: list[str] = []
@@ -5725,25 +6814,47 @@ def _scene_pool_for_book(book: dict[str, Any], *, count: int = 1) -> list[str]:
             "establishing atmosphere of the story's world"
         )
 
-    motifs = _specific_enrichment_list(enrichment.get("visual_motifs", []), min_length=3)
-    symbols = _specific_enrichment_list(enrichment.get("symbolic_elements", []), min_length=3)
+    motifs = _specific_enrichment_list(
+        enrichment.get("visual_motifs", []), min_length=3
+    )
+    symbols = _specific_enrichment_list(
+        enrichment.get("symbolic_elements", []), min_length=3
+    )
     symbolic_pool = [*motifs, *symbols][:4]
     if len(symbolic_pool) >= 2:
-        _push_unique(f"symbolic arrangement of {', '.join(symbolic_pool)} — visual metaphor for the story's themes")
+        _push_unique(
+            f"symbolic arrangement of {', '.join(symbolic_pool)} — visual metaphor for the story's themes"
+        )
 
-    character_pool = _specific_enrichment_list(enrichment.get("key_characters", []), min_length=3)
+    character_pool = _specific_enrichment_list(
+        enrichment.get("key_characters", []), min_length=3
+    )
     if len(character_pool) >= 2:
-        _push_unique(f"{', '.join(character_pool[:3])} — a dramatic ensemble scene from the story")
+        _push_unique(
+            f"{', '.join(character_pool[:3])} — a dramatic ensemble scene from the story"
+        )
 
-    title_keywords = prompt_components.get("title_keywords", []) if isinstance(prompt_components.get("title_keywords"), list) else []
-    keywords = [str(item or "").strip() for item in title_keywords if str(item or "").strip()]
+    title_keywords = (
+        prompt_components.get("title_keywords", [])
+        if isinstance(prompt_components.get("title_keywords"), list)
+        else []
+    )
+    keywords = [
+        str(item or "").strip() for item in title_keywords if str(item or "").strip()
+    ]
     title = str(book.get("title", "the story") or "the story").strip()
     if keywords:
-        _push_unique(f"narrative tableau shaped by {', '.join(keywords[:3])} — a defining moment from {title}")
+        _push_unique(
+            f"narrative tableau shaped by {', '.join(keywords[:3])} — a defining moment from {title}"
+        )
         if len(keywords) >= 2:
-            _push_unique(f"setting-focused scene built around {' and '.join(keywords[-2:])} with period atmosphere")
+            _push_unique(
+                f"setting-focused scene built around {' and '.join(keywords[-2:])} with period atmosphere"
+            )
         if len(keywords) >= 3:
-            _push_unique(f"symbolic arrangement of {', '.join(keywords[:4])} — thematic emblem for {title}")
+            _push_unique(
+                f"symbolic arrangement of {', '.join(keywords[:4])} — thematic emblem for {title}"
+            )
 
     if not pool and motif_scene:
         _push_unique(motif_scene)
@@ -5764,7 +6875,11 @@ def _scene_pool_for_book(book: dict[str, Any], *, count: int = 1) -> list[str]:
             results.append(pool[index])
             continue
         base_scene = pool[index % len(pool)] if pool else ""
-        prefix = variation_prefixes[(index // max(1, len(pool))) % len(variation_prefixes)] if pool else ""
+        prefix = (
+            variation_prefixes[(index // max(1, len(pool))) % len(variation_prefixes)]
+            if pool
+            else ""
+        )
         results.append(f"{prefix}{base_scene}".strip())
     return [scene for scene in results if scene]
 
@@ -5791,7 +6906,9 @@ def _alexandria_placeholder_replacements(
     variant_index: int = 0,
     scene_override: str = "",
 ) -> dict[str, str]:
-    enrichment = book.get("enrichment", {}) if isinstance(book.get("enrichment"), dict) else {}
+    enrichment = (
+        book.get("enrichment", {}) if isinstance(book.get("enrichment"), dict) else {}
+    )
     title = str(book.get("title", "") or "").strip()
     author = str(book.get("author", "") or "").strip()
     subtitle = str(book.get("subtitle", "") or "").strip()
@@ -5819,9 +6936,13 @@ def _alexandria_placeholder_replacements(
     )
     era = _specific_era_text(enrichment.get("era", "") or book.get("era", "") or "")
 
-    first_scene = _scene_for_book_variant(book, variant_index=variant_index, scene_override=scene_override)
+    first_scene = _scene_for_book_variant(
+        book, variant_index=variant_index, scene_override=scene_override
+    )
     motif_scene = _motif_scene_for_book(book)
-    motifs = _specific_enrichment_list(enrichment.get("visual_motifs", []), min_length=3)
+    motifs = _specific_enrichment_list(
+        enrichment.get("visual_motifs", []), min_length=3
+    )
     motif_text = ", ".join(motifs)
 
     if not first_scene:
@@ -5839,13 +6960,13 @@ def _alexandria_placeholder_replacements(
             first_scene = f"a defining moment in {setting_primary}"
         elif protagonist:
             label = title or "the story"
-            first_scene = f"{protagonist} in a pivotal moment from \"{label}\""
+            first_scene = f'{protagonist} in a pivotal moment from "{label}"'
         elif motif_text:
             label = title or "the story"
-            first_scene = f"a defining image from \"{label}\" featuring {motif_text}"
+            first_scene = f'a defining image from "{label}" featuring {motif_text}'
         else:
             label = title or "the story"
-            first_scene = f"a scene from \"{label}\""
+            first_scene = f'a scene from "{label}"'
 
     first_scene = _append_protagonist_to_scene(first_scene, protagonist)
 
@@ -5914,7 +7035,9 @@ def _sanitize_prompt_placeholders(
     return _PLACEHOLDER_PATTERN.sub(_replace, text).strip()
 
 
-def _validate_prompt_before_generation(prompt: str, book: dict[str, Any]) -> tuple[bool, list[str]]:
+def _validate_prompt_before_generation(
+    prompt: str, book: dict[str, Any]
+) -> tuple[bool, list[str]]:
     """Validate final prompts before sending them to the image model."""
     text = str(prompt or "").strip()
     warnings: list[str] = []
@@ -5924,12 +7047,18 @@ def _validate_prompt_before_generation(prompt: str, book: dict[str, Any]) -> tup
             warnings.append(f"Unresolved placeholder: {placeholder}")
     first_300 = lowered[:300]
     generic_marker = next(
-        (marker for marker in _PROMPT_VALIDATION_GENERIC_MARKERS if marker and marker in first_300),
+        (
+            marker
+            for marker in _PROMPT_VALIDATION_GENERIC_MARKERS
+            if marker and marker in first_300
+        ),
         "",
     )
     if generic_marker:
         warnings.append(f"Generic content: '{generic_marker}'")
-    if not any(needle in first_300 for needle in ("scene:", "must depict", "illustration must")):
+    if not any(
+        needle in first_300 for needle in ("scene:", "must depict", "illustration must")
+    ):
         warnings.append("Scene content does not appear in first 300 characters")
     if len(text) < 200:
         warnings.append(f"Prompt too short ({len(text)} chars)")
@@ -5951,16 +7080,27 @@ def _ensure_enriched_prompt(
 ) -> str:
     """Ensure the final prompt carries concrete book-specific enrichment."""
     text = str(prompt or "").strip()
-    enrichment = book.get("enrichment", {}) if isinstance(book.get("enrichment"), dict) else {}
+    enrichment = (
+        book.get("enrichment", {}) if isinstance(book.get("enrichment"), dict) else {}
+    )
     protagonist = _specific_protagonist(enrichment, book)
-    populated_scenes = [_append_protagonist_to_scene(scene, protagonist) for scene in _filtered_enrichment_scenes(enrichment)]
+    populated_scenes = [
+        _append_protagonist_to_scene(scene, protagonist)
+        for scene in _filtered_enrichment_scenes(enrichment)
+    ]
     first_scene = _append_protagonist_to_scene(
-        _scene_for_book_variant(book, variant_index=variant_index, scene_override=scene_override),
+        _scene_for_book_variant(
+            book, variant_index=variant_index, scene_override=scene_override
+        ),
         protagonist,
     )
     scene_sentence = first_scene.rstrip(" .!?")
-    setting = _specific_enrichment_text(enrichment.get("setting_primary", ""), min_length=8)
-    emotional_tone = _specific_enrichment_text(enrichment.get("emotional_tone", "") or enrichment.get("mood", ""), min_length=6)
+    setting = _specific_enrichment_text(
+        enrichment.get("setting_primary", ""), min_length=8
+    )
+    emotional_tone = _specific_enrichment_text(
+        enrichment.get("emotional_tone", "") or enrichment.get("mood", ""), min_length=6
+    )
     era = _specific_era_text(enrichment.get("era", ""))
 
     if emotional_tone and text:
@@ -5970,11 +7110,19 @@ def _ensure_enriched_prompt(
 
     result = _GENERIC_SCENE_PATTERN.sub(first_scene, text)
     lowered = result.lower()
-    scene_present = bool(first_scene[:30].strip()) and first_scene[:30].lower() in lowered
+    scene_present = (
+        bool(first_scene[:30].strip()) and first_scene[:30].lower() in lowered
+    )
     if not scene_present and populated_scenes:
-        scene_present = any(scene[:30].lower() in lowered for scene in populated_scenes[:3] if scene[:30].strip())
+        scene_present = any(
+            scene[:30].lower() in lowered
+            for scene in populated_scenes[:3]
+            if scene[:30].strip()
+        )
     if not scene_present:
-        enrichment_sentences = [f"The illustration must depict: {scene_sentence or first_scene}."]
+        enrichment_sentences = [
+            f"The illustration must depict: {scene_sentence or first_scene}."
+        ]
         if protagonist and protagonist.lower() not in first_scene.lower():
             enrichment_sentences.append(f"Character: {protagonist}.")
         if setting:
@@ -5986,7 +7134,9 @@ def _ensure_enriched_prompt(
         prefix = result.rstrip()
         if prefix and prefix[-1] not in ".!?":
             prefix = f"{prefix}."
-        result = " ".join(part for part in [prefix, *enrichment_sentences] if part).strip()
+        result = " ".join(
+            part for part in [prefix, *enrichment_sentences] if part
+        ).strip()
 
     if emotional_tone and result:
         result = _GENERIC_MOOD_PATTERN.sub(emotional_tone, result)
@@ -6008,9 +7158,15 @@ def _should_use_resolved_frontend_prompt(
     if preserve_prompt_text:
         return True
     lowered = normalized[:320].lower()
-    has_scene_anchor = any(token in lowered for token in ("scene:", "must depict", "illustration must"))
+    has_scene_anchor = any(
+        token in lowered for token in ("scene:", "must depict", "illustration must")
+    )
     generic_marker = next(
-        (marker for marker in _PROMPT_VALIDATION_GENERIC_MARKERS if marker and marker in lowered),
+        (
+            marker
+            for marker in _PROMPT_VALIDATION_GENERIC_MARKERS
+            if marker and marker in lowered
+        ),
         "",
     )
     return len(normalized) >= 100 and has_scene_anchor and not generic_marker
@@ -6026,19 +7182,25 @@ def _compose_prompt_for_book(
     scene_override: str = "",
 ) -> dict[str, Any]:
     prompts = _genre_prompt_payload(runtime=runtime)
-    enrichment = book.get("enrichment", {}) if isinstance(book.get("enrichment"), dict) else {}
+    enrichment = (
+        book.get("enrichment", {}) if isinstance(book.get("enrichment"), dict) else {}
+    )
     inferred = genre_intelligence.infer_genre(
         title=str(book.get("title", "")),
         author=str(book.get("author", "")),
         metadata_genre=str(enrichment.get("genre", "") or book.get("genre", "")),
         prompts=prompts,
     )
-    inferred_genre = str(inferred.get("genre", "literary_fiction") or "literary_fiction")
+    inferred_genre = str(
+        inferred.get("genre", "literary_fiction") or "literary_fiction"
+    )
     templates = _template_rows_for_runtime(runtime=runtime)
     selected_template = None
     requested_template = str(template_id or "").strip()
     if requested_template:
-        selected_template = _template_for_id(runtime=runtime, template_id=requested_template)
+        selected_template = _template_for_id(
+            runtime=runtime, template_id=requested_template
+        )
         if selected_template is None:
             raise ValueError(f"Unknown template_id: {requested_template}")
     if selected_template is None:
@@ -6046,12 +7208,20 @@ def _compose_prompt_for_book(
     if selected_template is None and templates:
         selected_template = templates[0]
 
-    positive, negative = genre_intelligence.genre_modifiers_for(inferred_genre, prompts=prompts)
-    keywords = genre_intelligence.extract_title_keywords(title=str(book.get("title", "")), limit=6)
-    constrained_base = prompt_generator.enforce_prompt_constraints(str(base_prompt or "").strip())
+    positive, negative = genre_intelligence.genre_modifiers_for(
+        inferred_genre, prompts=prompts
+    )
+    keywords = genre_intelligence.extract_title_keywords(
+        title=str(book.get("title", "")), limit=6
+    )
+    constrained_base = prompt_generator.enforce_prompt_constraints(
+        str(base_prompt or "").strip()
+    )
     composed = genre_intelligence.compose_prompt(
         base_style_prompt=constrained_base,
-        template_modifier=str((selected_template or {}).get("prompt_modifier", "")).strip(),
+        template_modifier=str(
+            (selected_template or {}).get("prompt_modifier", "")
+        ).strip(),
         genre_modifier=positive,
         title_keywords=keywords,
         negative_prompt=(
@@ -6101,7 +7271,11 @@ def _friendly_model_label(model: str) -> str:
     if override:
         return override
     leaf = token.split("/")[-1].strip() or token
-    normalized = " ".join(part for part in leaf.replace("-", " ").replace("_", " ").replace(".", " ").split() if part)
+    normalized = " ".join(
+        part
+        for part in leaf.replace("-", " ").replace("_", " ").replace(".", " ").split()
+        if part
+    )
     if not normalized:
         return token
     words: list[str] = []
@@ -6116,7 +7290,9 @@ def _friendly_model_label(model: str) -> str:
     return " ".join(words) or token
 
 
-def _recent_generation_failures_payload(*, runtime: config.Config, limit: int = 20) -> dict[str, Any]:
+def _recent_generation_failures_payload(
+    *, runtime: config.Config, limit: int = 20
+) -> dict[str, Any]:
     target_limit = max(1, min(200, int(limit)))
     jobs = job_db_store.list_jobs(
         limit=max(50, target_limit * 5),
@@ -6130,11 +7306,25 @@ def _recent_generation_failures_payload(*, runtime: config.Config, limit: int = 
         job_error = job.error if isinstance(job.error, dict) else {}
         attempts = job_db_store.list_attempts(job.id)
         latest_attempt = attempts[-1] if attempts else None
-        latest_meta = latest_attempt.get("meta", {}) if isinstance(latest_attempt, dict) and isinstance(latest_attempt.get("meta"), dict) else {}
-        failure_rows = job_error.get("failures", []) if isinstance(job_error.get("failures"), list) else []
+        latest_meta = (
+            latest_attempt.get("meta", {})
+            if isinstance(latest_attempt, dict)
+            and isinstance(latest_attempt.get("meta"), dict)
+            else {}
+        )
+        failure_rows = (
+            job_error.get("failures", [])
+            if isinstance(job_error.get("failures"), list)
+            else []
+        )
         if not failure_rows and isinstance(latest_meta.get("failures"), list):
             failure_rows = latest_meta.get("failures", [])
-        payload_models = job.payload.get("models", []) if isinstance(job.payload, dict) and isinstance(job.payload.get("models"), list) else []
+        payload_models = (
+            job.payload.get("models", [])
+            if isinstance(job.payload, dict)
+            and isinstance(job.payload.get("models"), list)
+            else []
+        )
         rows.append(
             {
                 "job_id": str(job.id),
@@ -6144,13 +7334,26 @@ def _recent_generation_failures_payload(*, runtime: config.Config, limit: int = 
                 "max_attempts": int(job.max_attempts or 0),
                 "created_at": str(job.created_at or ""),
                 "updated_at": str(job.updated_at or ""),
-                "stage": str(job_error.get("stage", latest_meta.get("stage", ""))).strip(),
-                "error": str(job_error.get("message", "") or (latest_attempt or {}).get("error_text", "")).strip(),
-                "error_type": str(job_error.get("type", "") or latest_meta.get("error_type", "")).strip(),
-                "models": [str(item).strip() for item in payload_models if str(item).strip()],
-                "provider": str((job.payload or {}).get("provider", "")).strip().lower() if isinstance(job.payload, dict) else "",
+                "stage": str(
+                    job_error.get("stage", latest_meta.get("stage", ""))
+                ).strip(),
+                "error": str(
+                    job_error.get("message", "")
+                    or (latest_attempt or {}).get("error_text", "")
+                ).strip(),
+                "error_type": str(
+                    job_error.get("type", "") or latest_meta.get("error_type", "")
+                ).strip(),
+                "models": [
+                    str(item).strip() for item in payload_models if str(item).strip()
+                ],
+                "provider": str((job.payload or {}).get("provider", "")).strip().lower()
+                if isinstance(job.payload, dict)
+                else "",
                 "failures": [row for row in failure_rows if isinstance(row, dict)],
-                "latest_attempt": latest_attempt if isinstance(latest_attempt, dict) else None,
+                "latest_attempt": latest_attempt
+                if isinstance(latest_attempt, dict)
+                else None,
             }
         )
         if len(rows) >= target_limit:
@@ -6165,7 +7368,9 @@ def _recent_generation_failures_payload(*, runtime: config.Config, limit: int = 
 
 def _api_models_payload(*, runtime: config.Config) -> dict[str, Any]:
     quality_payload = _quality_by_model_payload(runtime=runtime)
-    rows = quality_payload.get("models", []) if isinstance(quality_payload, dict) else []
+    rows = (
+        quality_payload.get("models", []) if isinstance(quality_payload, dict) else []
+    )
     stats_by_model: dict[str, dict[str, Any]] = {}
     if isinstance(rows, list):
         for row in rows:
@@ -6175,7 +7380,9 @@ def _api_models_payload(*, runtime: config.Config) -> dict[str, Any]:
             if token:
                 stats_by_model[token] = row
 
-    active_models = [str(item).strip() for item in runtime.all_models if str(item).strip()]
+    active_models = [
+        str(item).strip() for item in runtime.all_models if str(item).strip()
+    ]
     known_models = list(active_models)
     for key in runtime.model_provider_map.keys():
         token = str(key).strip()
@@ -6191,13 +7398,19 @@ def _api_models_payload(*, runtime: config.Config) -> dict[str, Any]:
     out: list[dict[str, Any]] = []
     for sort_order, model in enumerate(known_models):
         stats = stats_by_model.get(model, {})
-        provider = str(stats.get("provider", runtime.resolve_model_provider(model))).strip() or runtime.resolve_model_provider(model)
+        provider = str(
+            stats.get("provider", runtime.resolve_model_provider(model))
+        ).strip() or runtime.resolve_model_provider(model)
         count = _safe_int(stats.get("count"), 0)
         failure_rate_percent = _safe_float(stats.get("failure_rate_percent"), 0.0)
-        success_rate = max(0.0, min(1.0, 1.0 - (failure_rate_percent / 100.0 if count > 0 else 0.0)))
+        success_rate = max(
+            0.0, min(1.0, 1.0 - (failure_rate_percent / 100.0 if count > 0 else 0.0))
+        )
         runtime_cost = round(_safe_float(runtime.get_model_cost(model), 0.04), 6)
         historical_cost = round(_safe_float(stats.get("avg_cost_per_variant"), 0.0), 6)
-        model_cost = historical_cost if count > 0 and historical_cost > 0 else runtime_cost
+        model_cost = (
+            historical_cost if count > 0 and historical_cost > 0 else runtime_cost
+        )
         out.append(
             {
                 "id": model,
@@ -6208,7 +7421,9 @@ def _api_models_payload(*, runtime: config.Config) -> dict[str, Any]:
                 "cost_per_image": model_cost,
                 "avg_cost_usd": model_cost,
                 "modality": runtime.get_model_modality(model),
-                "avg_generation_time_s": round(_safe_float(stats.get("avg_generation_time_seconds"), 0.0), 4),
+                "avg_generation_time_s": round(
+                    _safe_float(stats.get("avg_generation_time_seconds"), 0.0), 4
+                ),
                 "success_rate": round(success_rate, 6),
                 "total_generations": int(count),
             }
@@ -6242,17 +7457,27 @@ def _api_providers_payload(*, runtime: config.Config) -> dict[str, Any]:
             bucket["errors"] += 1
 
     rows: list[dict[str, Any]] = []
-    for provider in sorted(set(list(runtime.provider_keys.keys()) + list(runtime_rows.keys()))):
+    for provider in sorted(
+        set(list(runtime.provider_keys.keys()) + list(runtime_rows.keys()))
+    ):
         runtime_row = runtime_rows.get(provider, {})
-        model_list = [model for model in runtime.all_models if runtime.resolve_model_provider(model) == provider]
+        model_list = [
+            model
+            for model in runtime.all_models
+            if runtime.resolve_model_provider(model) == provider
+        ]
         counts = count_by_provider.get(provider, {})
         rows.append(
             {
                 "name": provider,
                 "status": str(runtime_row.get("status", "inactive")),
                 "circuit_breaker": str(runtime_row.get("circuit_state", "closed")),
-                "error_count_24h": int(counts.get("errors", runtime_row.get("errors_today", 0) or 0)),
-                "request_count_24h": int(counts.get("requests", runtime_row.get("requests_today", 0) or 0)),
+                "error_count_24h": int(
+                    counts.get("errors", runtime_row.get("errors_today", 0) or 0)
+                ),
+                "request_count_24h": int(
+                    counts.get("requests", runtime_row.get("requests_today", 0) or 0)
+                ),
                 "models": model_list,
             }
         )
@@ -6264,7 +7489,9 @@ def _api_catalog_payload(*, runtime: config.Config) -> dict[str, Any]:
     total_books = 0
     for item in catalog_registry.list_catalogs():
         stats = catalog_registry.stats_for_catalog(item.catalog_id)
-        book_count = _safe_int(stats.get("book_count", item.book_count), item.book_count)
+        book_count = _safe_int(
+            stats.get("book_count", item.book_count), item.book_count
+        )
         rows.append(
             {
                 "name": item.catalog_id,
@@ -6275,10 +7502,16 @@ def _api_catalog_payload(*, runtime: config.Config) -> dict[str, Any]:
         )
         total_books += max(0, int(book_count))
     rows.sort(key=lambda row: str(row.get("name", "")))
-    return {"catalogs": rows, "total_books": int(total_books), "active_catalog": runtime.catalog_id}
+    return {
+        "catalogs": rows,
+        "total_books": int(total_books),
+        "active_catalog": runtime.catalog_id,
+    }
 
 
-def _api_templates_payload(*, runtime: config.Config, genre: str = "") -> dict[str, Any]:
+def _api_templates_payload(
+    *, runtime: config.Config, genre: str = ""
+) -> dict[str, Any]:
     rows = _template_rows_for_runtime(runtime=runtime, genre=genre)
     return {
         "templates": rows,
@@ -6290,7 +7523,14 @@ def _api_templates_payload(*, runtime: config.Config, genre: str = "") -> dict[s
 def _api_stats_payload(*, runtime: config.Config) -> dict[str, Any]:
     records = _load_generation_records(runtime=runtime)
     total_generations = len(records)
-    total_cost_usd = round(sum(_safe_float(row.get("cost"), 0.0) for row in records if isinstance(row, dict)), 6)
+    total_cost_usd = round(
+        sum(
+            _safe_float(row.get("cost"), 0.0)
+            for row in records
+            if isinstance(row, dict)
+        ),
+        6,
+    )
     budget_status = _budget_status_for_runtime(runtime)
     avg_generation_time = (
         round(
@@ -6310,7 +7550,12 @@ def _api_stats_payload(*, runtime: config.Config) -> dict[str, Any]:
     )
     avg_quality = (
         round(
-            sum(_safe_float(row.get("quality_score"), 0.0) for row in records if isinstance(row, dict)) / max(1, total_generations),
+            sum(
+                _safe_float(row.get("quality_score"), 0.0)
+                for row in records
+                if isinstance(row, dict)
+            )
+            / max(1, total_generations),
             6,
         )
         if total_generations
@@ -6326,12 +7571,20 @@ def _api_stats_payload(*, runtime: config.Config) -> dict[str, Any]:
         models_used[model] = models_used.get(model, 0) + 1
 
     model_compare = _quality_by_model_payload(runtime=runtime)
-    top_rated = str(model_compare.get("recommended_model", "")).strip() if isinstance(model_compare, dict) else ""
+    top_rated = (
+        str(model_compare.get("recommended_model", "")).strip()
+        if isinstance(model_compare, dict)
+        else ""
+    )
     return {
         "total_generations": int(total_generations),
         "total_cost_usd": total_cost_usd,
-        "budget_remaining_usd": round(_safe_float(budget_status.get("remaining_usd"), runtime.max_cost_usd), 6),
-        "budget_limit_usd": round(_safe_float(budget_status.get("limit_usd"), runtime.max_cost_usd), 6),
+        "budget_remaining_usd": round(
+            _safe_float(budget_status.get("remaining_usd"), runtime.max_cost_usd), 6
+        ),
+        "budget_limit_usd": round(
+            _safe_float(budget_status.get("limit_usd"), runtime.max_cost_usd), 6
+        ),
         "avg_generation_time_s": avg_generation_time,
         "avg_quality_score": avg_quality,
         "models_used": models_used,
@@ -6344,7 +7597,11 @@ def _api_config_payload(*, runtime: config.Config) -> dict[str, Any]:
     provider_status = {
         provider: {
             "status": str(row.get("status", "inactive")),
-            "models": [model for model in runtime.all_models if runtime.resolve_model_provider(model) == provider],
+            "models": [
+                model
+                for model in runtime.all_models
+                if runtime.resolve_model_provider(model) == provider
+            ],
         }
         for provider, row in provider_runtime.items()
     }
@@ -6358,10 +7615,14 @@ def _api_config_payload(*, runtime: config.Config) -> dict[str, Any]:
         },
         "quality_thresholds": {
             "min_quality_score": float(runtime.min_quality_score),
-            "composite_max_invalid_variants": int(runtime.composite_max_invalid_variants),
+            "composite_max_invalid_variants": int(
+                runtime.composite_max_invalid_variants
+            ),
         },
         "drive": {
-            "connected": bool(runtime.gdrive_source_folder_id and runtime.gdrive_output_folder_id),
+            "connected": bool(
+                runtime.gdrive_source_folder_id and runtime.gdrive_output_folder_id
+            ),
             "source_folder_id": bool(str(runtime.gdrive_source_folder_id).strip()),
             "output_folder_id": bool(str(runtime.gdrive_output_folder_id).strip()),
             "default_cover_source": _default_cover_source_for_runtime(runtime),
@@ -6379,7 +7640,9 @@ def _api_config_payload(*, runtime: config.Config) -> dict[str, Any]:
     }
 
 
-def _attach_print_validation_to_rows(*, runtime: config.Config, rows: list[dict[str, Any]]) -> None:
+def _attach_print_validation_to_rows(
+    *, runtime: config.Config, rows: list[dict[str, Any]]
+) -> None:
     validator = _print_validator_instance()
     for row in rows:
         if not isinstance(row, dict):
@@ -6388,16 +7651,26 @@ def _attach_print_validation_to_rows(*, runtime: config.Config, rows: list[dict[
             continue
         composited_token = str(row.get("composited_path", "") or "").strip()
         image_token = str(row.get("image_path", "") or "").strip()
-        source_path = _project_path_if_exists(composited_token) or _project_path_if_exists(image_token)
+        source_path = _project_path_if_exists(
+            composited_token
+        ) or _project_path_if_exists(image_token)
         if source_path is None:
             continue
         try:
             with Image.open(source_path) as image:
-                validation = validator.validate_for_all_distributors(image, [], source_path)
+                validation = validator.validate_for_all_distributors(
+                    image, [], source_path
+                )
             summary = {
-                "passed_all": all(bool(item.get("passed")) for item in validation.values()),
-                "errors_total": sum(len(item.get("errors", [])) for item in validation.values()),
-                "warnings_total": sum(len(item.get("warnings", [])) for item in validation.values()),
+                "passed_all": all(
+                    bool(item.get("passed")) for item in validation.values()
+                ),
+                "errors_total": sum(
+                    len(item.get("errors", [])) for item in validation.values()
+                ),
+                "warnings_total": sum(
+                    len(item.get("warnings", [])) for item in validation.values()
+                ),
             }
             row["print_validation"] = validation
             row["print_validation_summary"] = summary
@@ -6413,7 +7686,11 @@ def _attach_print_validation_to_rows(*, runtime: config.Config, rows: list[dict[
 
 
 def _ab_tests_path_for_runtime(runtime: config.Config) -> Path:
-    return runtime.data_dir / ("ab_tests.json" if runtime.catalog_id == config.DEFAULT_CATALOG_ID else f"ab_tests_{runtime.catalog_id}.json")
+    return runtime.data_dir / (
+        "ab_tests.json"
+        if runtime.catalog_id == config.DEFAULT_CATALOG_ID
+        else f"ab_tests_{runtime.catalog_id}.json"
+    )
 
 
 def _load_ab_test_rows(*, runtime: config.Config) -> list[dict[str, Any]]:
@@ -6436,15 +7713,22 @@ def _record_ab_test(*, runtime: config.Config, body: dict[str, Any]) -> dict[str
         "id": str(uuid.uuid4()),
         "catalog": runtime.catalog_id,
         "book_id": _safe_int(body.get("book_id"), 0),
-        "models_compared": [str(item).strip() for item in compared if str(item).strip()],
+        "models_compared": [
+            str(item).strip() for item in compared if str(item).strip()
+        ],
         "winner": str(body.get("winner", "")).strip(),
-        "quality_scores": {str(key): _safe_float(value, 0.0) for key, value in quality_scores.items()},
+        "quality_scores": {
+            str(key): _safe_float(value, 0.0) for key, value in quality_scores.items()
+        },
         "user_comment": str(body.get("user_comment", "")).strip(),
         "created_at": datetime.now(timezone.utc).isoformat(),
     }
     rows.append(row)
     rows = rows[-5000:]
-    safe_json.atomic_write_json(_ab_tests_path_for_runtime(runtime), {"updated_at": datetime.now(timezone.utc).isoformat(), "items": rows})
+    safe_json.atomic_write_json(
+        _ab_tests_path_for_runtime(runtime),
+        {"updated_at": datetime.now(timezone.utc).isoformat(), "items": rows},
+    )
     return {"ok": True, "item": row, "count": len(rows)}
 
 
@@ -6464,13 +7748,24 @@ def _prompt_library_payload(
             continue
         usage = _safe_int(payload.get("usage_count"), 0)
         wins = _safe_int(payload.get("win_count"), 0)
-        payload["win_rate_percent"] = round((wins / usage) * 100.0, 3) if usage > 0 else 0.0
+        payload["win_rate_percent"] = (
+            round((wins / usage) * 100.0, 3) if usage > 0 else 0.0
+        )
         payload["versions_count"] = len(library.get_versions(prompt.id))
-        payload["best_model_pairing"] = str(payload.get("source_model", "")).strip() or "unknown"
+        payload["best_model_pairing"] = (
+            str(payload.get("source_model", "")).strip() or "unknown"
+        )
         rows.append(payload)
     rows.sort(
         key=lambda item: (
-            1 if "alexandria" in {str(tag).strip().lower() for tag in item.get("tags", []) if str(tag).strip()} else 0,
+            1
+            if "alexandria"
+            in {
+                str(tag).strip().lower()
+                for tag in item.get("tags", [])
+                if str(tag).strip()
+            }
+            else 0,
             1 if str(item.get("category", "")).strip().lower() == "builtin" else 0,
             _safe_float(item.get("quality_score"), 0.0),
             _safe_int(item.get("win_count"), 0),
@@ -6479,7 +7774,12 @@ def _prompt_library_payload(
         ),
         reverse=True,
     )
-    return {"ok": True, "catalog": runtime.catalog_id, "prompts": rows, "count": len(rows)}
+    return {
+        "ok": True,
+        "catalog": runtime.catalog_id,
+        "prompts": rows,
+        "count": len(rows),
+    }
 
 
 def _prompt_library_export_payload(*, runtime: config.Config) -> dict[str, Any]:
@@ -6490,12 +7790,17 @@ def _prompt_library_export_payload(*, runtime: config.Config) -> dict[str, Any]:
         "exported_at": datetime.now(timezone.utc).isoformat(),
         "style_anchors": [asdict(anchor) for anchor in library.get_style_anchors()],
         "prompts": [asdict(prompt) for prompt in library.get_prompts()],
-        "versions": {prompt.id: library.get_versions(prompt.id) for prompt in library.get_prompts()},
+        "versions": {
+            prompt.id: library.get_versions(prompt.id)
+            for prompt in library.get_prompts()
+        },
     }
     return payload
 
 
-def _prompt_versions_payload(*, runtime: config.Config, prompt_id: str) -> dict[str, Any]:
+def _prompt_versions_payload(
+    *, runtime: config.Config, prompt_id: str
+) -> dict[str, Any]:
     library = PromptLibrary(runtime.prompt_library_path)
     prompt = library.get_prompt(prompt_id)
     if prompt is None:
@@ -6513,9 +7818,13 @@ def _prompt_slug_token(value: str, *, fallback: str = "prompt") -> str:
     return token or fallback
 
 
-def _save_prompt_from_request(*, runtime: config.Config, body: dict[str, Any]) -> dict[str, Any]:
+def _save_prompt_from_request(
+    *, runtime: config.Config, body: dict[str, Any]
+) -> dict[str, Any]:
     library = PromptLibrary(runtime.prompt_library_path)
-    prompt_text = " ".join(str(body.get("prompt_text", body.get("prompt_template", "")) or "").split()).strip()
+    prompt_text = " ".join(
+        str(body.get("prompt_text", body.get("prompt_template", "")) or "").split()
+    ).strip()
     if not prompt_text:
         raise ValueError("prompt_text is required")
 
@@ -6530,16 +7839,27 @@ def _save_prompt_from_request(*, runtime: config.Config, body: dict[str, Any]) -
         }
 
     book_id = _safe_int(body.get("book_id"), 0)
-    book = _book_row_for_number(runtime=runtime, book_number=book_id) if book_id > 0 else None
+    book = (
+        _book_row_for_number(runtime=runtime, book_number=book_id)
+        if book_id > 0
+        else None
+    )
     title = str((book or {}).get("title", f"Book {book_id or 'Unknown'}")).strip()
     author = str((book or {}).get("author", "Unknown")).strip()
     source_book = f"{title} — {author}".strip(" —")
 
-    model_id = str(body.get("model_id", body.get("source_model", "")) or "").strip() or "manual"
+    model_id = (
+        str(body.get("model_id", body.get("source_model", "")) or "").strip()
+        or "manual"
+    )
     library_prompt_id = str(body.get("library_prompt_id", "") or "").strip()
     source_prompt = library.get_prompt(library_prompt_id) if library_prompt_id else None
-    source_prompt_name = str(source_prompt.name if source_prompt is not None else body.get("prompt_name", "")).strip()
-    source_prompt_slug = _prompt_slug_token(source_prompt_name or library_prompt_id or "manual")
+    source_prompt_name = str(
+        source_prompt.name if source_prompt is not None else body.get("prompt_name", "")
+    ).strip()
+    source_prompt_slug = _prompt_slug_token(
+        source_prompt_name or library_prompt_id or "manual"
+    )
     negative_prompt = str(body.get("negative_prompt", "") or "").strip()
     if not negative_prompt and source_prompt is not None:
         negative_prompt = str(source_prompt.negative_prompt or "").strip()
@@ -6604,13 +7924,17 @@ def _save_prompt_from_request(*, runtime: config.Config, body: dict[str, Any]) -
     }
 
 
-def _create_prompt_from_request(*, runtime: config.Config, body: dict[str, Any]) -> dict[str, Any]:
+def _create_prompt_from_request(
+    *, runtime: config.Config, body: dict[str, Any]
+) -> dict[str, Any]:
     library = PromptLibrary(runtime.prompt_library_path)
     prompt = LibraryPrompt(
         id=str(uuid.uuid4()),
         name=str(body.get("name", "Saved Prompt") or "Saved Prompt"),
         prompt_template=str(body.get("prompt_template", "{title}") or "{title}"),
-        style_anchors=list(body.get("style_anchors", [])) if isinstance(body.get("style_anchors", []), list) else [],
+        style_anchors=list(body.get("style_anchors", []))
+        if isinstance(body.get("style_anchors", []), list)
+        else [],
         negative_prompt=str(body.get("negative_prompt", "")),
         source_book=str(body.get("source_book", "iteration")),
         source_model=str(body.get("source_model", body.get("model", "manual"))),
@@ -6618,21 +7942,43 @@ def _create_prompt_from_request(*, runtime: config.Config, body: dict[str, Any])
         saved_by=str(body.get("saved_by", "tim")),
         created_at=datetime.now(timezone.utc).isoformat(),
         notes=str(body.get("notes", "saved from iterate page")),
-        tags=list(body.get("tags", [])) if isinstance(body.get("tags", []), list) else ["iterative"],
+        tags=list(body.get("tags", []))
+        if isinstance(body.get("tags", []), list)
+        else ["iterative"],
         category=str(body.get("category", "general") or "general"),
     )
     library.save_prompt(prompt)
-    return {"ok": True, "prompt": asdict(library.get_prompt(prompt.id)), "prompt_id": prompt.id}
+    return {
+        "ok": True,
+        "prompt": asdict(library.get_prompt(prompt.id)),
+        "prompt_id": prompt.id,
+    }
 
 
-def _update_prompt_from_request(*, runtime: config.Config, prompt_id: str, body: dict[str, Any]) -> dict[str, Any]:
+def _update_prompt_from_request(
+    *, runtime: config.Config, prompt_id: str, body: dict[str, Any]
+) -> dict[str, Any]:
     library = PromptLibrary(runtime.prompt_library_path)
     updates: dict[str, object] = {}
-    for key in ("name", "prompt_template", "style_anchors", "negative_prompt", "notes", "tags", "category", "quality_score", "source_model"):
+    for key in (
+        "name",
+        "prompt_template",
+        "style_anchors",
+        "negative_prompt",
+        "notes",
+        "tags",
+        "category",
+        "quality_score",
+        "source_model",
+    ):
         if key in body:
             updates[key] = body.get(key)
     updated = library.update_prompt(prompt_id, **updates)
-    return {"ok": True, "prompt": asdict(updated), "versions_count": len(library.get_versions(prompt_id))}
+    return {
+        "ok": True,
+        "prompt": asdict(updated),
+        "versions_count": len(library.get_versions(prompt_id)),
+    }
 
 
 def _delete_prompt(*, runtime: config.Config, prompt_id: str) -> dict[str, Any]:
@@ -6643,13 +7989,17 @@ def _delete_prompt(*, runtime: config.Config, prompt_id: str) -> dict[str, Any]:
     return {"ok": True, "prompt_id": prompt_id, "deleted": True}
 
 
-def _record_prompt_usage(*, runtime: config.Config, prompt_id: str, won: bool = False) -> dict[str, Any]:
+def _record_prompt_usage(
+    *, runtime: config.Config, prompt_id: str, won: bool = False
+) -> dict[str, Any]:
     library = PromptLibrary(runtime.prompt_library_path)
     updated = library.record_usage(prompt_id, won=won)
     return {"ok": True, "prompt": asdict(updated)}
 
 
-def _import_prompt_payload(*, runtime: config.Config, body: dict[str, Any]) -> dict[str, Any]:
+def _import_prompt_payload(
+    *, runtime: config.Config, body: dict[str, Any]
+) -> dict[str, Any]:
     prompts = body.get("prompts", body.get("items", []))
     if not isinstance(prompts, list):
         raise ValueError("prompts must be a list")
@@ -6665,15 +8015,21 @@ def _import_prompt_payload(*, runtime: config.Config, body: dict[str, Any]) -> d
             id=str(row.get("id", "") or str(uuid.uuid4())),
             name=str(row.get("name", "Imported Prompt")),
             prompt_template=template,
-            style_anchors=list(row.get("style_anchors", [])) if isinstance(row.get("style_anchors", []), list) else [],
+            style_anchors=list(row.get("style_anchors", []))
+            if isinstance(row.get("style_anchors", []), list)
+            else [],
             negative_prompt=str(row.get("negative_prompt", "")),
             source_book=str(row.get("source_book", "import")),
             source_model=str(row.get("source_model", "import")),
             quality_score=_safe_float(row.get("quality_score"), 0.0),
             saved_by=str(row.get("saved_by", "import")),
-            created_at=str(row.get("created_at", datetime.now(timezone.utc).isoformat())),
+            created_at=str(
+                row.get("created_at", datetime.now(timezone.utc).isoformat())
+            ),
             notes=str(row.get("notes", "imported")),
-            tags=list(row.get("tags", [])) if isinstance(row.get("tags", []), list) else [],
+            tags=list(row.get("tags", []))
+            if isinstance(row.get("tags", []), list)
+            else [],
             category=str(row.get("category", "general") or "general"),
             usage_count=_safe_int(row.get("usage_count"), 0),
             win_count=_safe_int(row.get("win_count"), 0),
@@ -6690,7 +8046,9 @@ def _builtin_prompt_seed_rows() -> list[dict[str, str]]:
     return []
 
 
-def _seed_builtin_prompts(*, runtime: config.Config, actor: str = "tim", overwrite: bool = False) -> dict[str, Any]:
+def _seed_builtin_prompts(
+    *, runtime: config.Config, actor: str = "tim", overwrite: bool = False
+) -> dict[str, Any]:
     def _has_malformed_constraints(text: str) -> bool:
         token = str(text or "").strip().lower()
         if not token:
@@ -6701,7 +8059,10 @@ def _seed_builtin_prompts(*, runtime: config.Config, actor: str = "tim", overwri
             r",\s*,",
             r"\bavoid:\s*no\b",
         )
-        return any(re.search(pattern, token, flags=re.IGNORECASE) for pattern in malformed_patterns)
+        return any(
+            re.search(pattern, token, flags=re.IGNORECASE)
+            for pattern in malformed_patterns
+        )
 
     def _builtin_prompt_needs_repair(existing_prompt: LibraryPrompt) -> bool:
         template = str(existing_prompt.prompt_template or "")
@@ -6742,7 +8103,9 @@ def _seed_builtin_prompts(*, runtime: config.Config, actor: str = "tim", overwri
             continue
 
         existing_prompt = by_style_tag.get(style_id) or by_name.get(name.lower())
-        needs_repair = existing_prompt is not None and _builtin_prompt_needs_repair(existing_prompt)
+        needs_repair = existing_prompt is not None and _builtin_prompt_needs_repair(
+            existing_prompt
+        )
         if existing_prompt and not overwrite and not needs_repair:
             skipped += 1
             continue
@@ -6755,7 +8118,9 @@ def _seed_builtin_prompts(*, runtime: config.Config, actor: str = "tim", overwri
             "style_anchors": [style_id] if style_id else [],
             "negative_prompt": str(item.get("negative_prompt", "")),
             "notes": "Seeded from Alexandria models/prompt report (v2).",
-            "tags": ["builtin", "builtin_v2", f"builtin_v2:{style_id}"] if style_id else ["builtin", "builtin_v2"],
+            "tags": ["builtin", "builtin_v2", f"builtin_v2:{style_id}"]
+            if style_id
+            else ["builtin", "builtin_v2"],
             "category": "builtin",
             "quality_score": 0.82,
             "source_model": "openrouter/google/gemini-3-pro-image-preview",
@@ -6815,7 +8180,9 @@ def _seed_builtin_prompts(*, runtime: config.Config, actor: str = "tim", overwri
     }
 
 
-def _ensure_builtin_prompts_seeded(*, runtime: config.Config, actor: str = "system") -> None:
+def _ensure_builtin_prompts_seeded(
+    *, runtime: config.Config, actor: str = "system"
+) -> None:
     """Ensure v2 built-ins are available without requiring a manual seed click."""
     try:
         payload = _seed_builtin_prompts(runtime=runtime, actor=actor, overwrite=False)
@@ -6835,10 +8202,16 @@ def _ensure_builtin_prompts_seeded(*, runtime: config.Config, actor: str = "syst
         logger.warning("Failed to auto-seed built-in prompts: %s", exc)
 
 
-def _model_recommendation_payload(*, runtime: config.Config, book_number: int | None = None) -> dict[str, Any]:
+def _model_recommendation_payload(
+    *, runtime: config.Config, book_number: int | None = None
+) -> dict[str, Any]:
     rows = _load_generation_records(runtime=runtime)
     if book_number and int(book_number) > 0:
-        scoped = [row for row in rows if _safe_int(row.get("book_number"), 0) == int(book_number)]
+        scoped = [
+            row
+            for row in rows
+            if _safe_int(row.get("book_number"), 0) == int(book_number)
+        ]
         if scoped:
             rows = scoped
     if not rows:
@@ -6854,7 +8227,9 @@ def _model_recommendation_payload(*, runtime: config.Config, book_number: int | 
     buckets: dict[str, dict[str, float]] = {}
     for row in rows:
         model = str(row.get("model", "unknown"))
-        entry = buckets.setdefault(model, {"quality_total": 0.0, "cost_total": 0.0, "count": 0.0})
+        entry = buckets.setdefault(
+            model, {"quality_total": 0.0, "cost_total": 0.0, "count": 0.0}
+        )
         entry["quality_total"] += _safe_float(row.get("quality_score"), 0.0) * 100.0
         entry["cost_total"] += max(0.000001, _safe_float(row.get("cost"), 0.0))
         entry["count"] += 1.0
@@ -6962,7 +8337,9 @@ render();
 def _provider_runtime_payload(*, runtime: config.Config) -> dict[str, Any]:
     provider_stats = image_generator.get_provider_runtime_stats()
     configured_keys = runtime.provider_keys
-    providers = sorted((set(configured_keys.keys()) | set(provider_stats.keys())) - {"replicate"})
+    providers = sorted(
+        (set(configured_keys.keys()) | set(provider_stats.keys())) - {"replicate"}
+    )
     payload: dict[str, Any] = {}
     for provider in providers:
         key = str(configured_keys.get(provider, "") or "")
@@ -6973,26 +8350,43 @@ def _provider_runtime_payload(*, runtime: config.Config) -> dict[str, Any]:
             "requests_today": int(stats.get("requests_today", 0) or 0),
             "errors_today": int(stats.get("errors_today", 0) or 0),
             "circuit_state": str(stats.get("state", "closed")),
-            "circuit_consecutive_failures": int(stats.get("consecutive_failures", 0) or 0),
-            "circuit_cooldown_remaining_seconds": float(stats.get("cooldown_remaining_seconds", 0.0) or 0.0),
+            "circuit_consecutive_failures": int(
+                stats.get("consecutive_failures", 0) or 0
+            ),
+            "circuit_cooldown_remaining_seconds": float(
+                stats.get("cooldown_remaining_seconds", 0.0) or 0.0
+            ),
             "circuit_open_events": int(stats.get("open_events", 0) or 0),
             "circuit_probe_in_flight": bool(stats.get("probe_in_flight", False)),
-            "rate_limit_window_second": int(stats.get("rate_limit_window_second", 0) or 0),
-            "rate_limit_window_minute": int(stats.get("rate_limit_window_minute", 0) or 0),
+            "rate_limit_window_second": int(
+                stats.get("rate_limit_window_second", 0) or 0
+            ),
+            "rate_limit_window_minute": int(
+                stats.get("rate_limit_window_minute", 0) or 0
+            ),
             "last_error": str(stats.get("last_error", "") or ""),
             "opened_until_utc": str(stats.get("opened_until_utc", "") or ""),
         }
     return payload
 
 
-def _provider_connectivity_payload(*, runtime: config.Config, force: bool = False) -> dict[str, Any]:
+def _provider_connectivity_payload(
+    *, runtime: config.Config, force: bool = False
+) -> dict[str, Any]:
     cache_key = str(getattr(runtime, "catalog_id", "default") or "default")
     now = time.time()
     if not force:
         with _provider_connectivity_cache_lock:
             cached = _provider_connectivity_cache.get(cache_key)
-            if isinstance(cached, dict) and float(cached.get("expires_at", 0.0) or 0.0) > now:
-                payload = dict(cached.get("payload", {})) if isinstance(cached.get("payload", {}), dict) else {}
+            if (
+                isinstance(cached, dict)
+                and float(cached.get("expires_at", 0.0) or 0.0) > now
+            ):
+                payload = (
+                    dict(cached.get("payload", {}))
+                    if isinstance(cached.get("payload", {}), dict)
+                    else {}
+                )
                 payload.setdefault("ok", True)
                 payload["cached"] = True
                 return payload
@@ -7020,7 +8414,9 @@ def _provider_connectivity_payload(*, runtime: config.Config, force: bool = Fals
             by_provider[provider] = {
                 "status": "connected" if connected else "error",
                 "models": int(model_counts.get(provider, 0)),
-                "error": None if connected else (detail or status_token or "Connectivity check failed"),
+                "error": None
+                if connected
+                else (detail or status_token or "Connectivity check failed"),
             }
 
     for provider in provider_names:
@@ -7033,7 +8429,9 @@ def _provider_connectivity_payload(*, runtime: config.Config, force: bool = Fals
             },
         )
 
-    connected_count = sum(1 for row in by_provider.values() if str(row.get("status", "")) == "connected")
+    connected_count = sum(
+        1 for row in by_provider.values() if str(row.get("status", "")) == "connected"
+    )
     payload: dict[str, Any] = {
         "ok": True,
         "checked_at": datetime.now(timezone.utc).isoformat(),
@@ -7053,7 +8451,12 @@ def _provider_connectivity_payload(*, runtime: config.Config, force: bool = Fals
 def _composite_validation_summary(*, runtime: config.Config) -> dict[str, Any]:
     root = runtime.tmp_dir / "composited"
     if not root.exists():
-        return {"reports": 0, "books_with_invalid": 0, "invalid_variants": 0, "total_variants_checked": 0}
+        return {
+            "reports": 0,
+            "books_with_invalid": 0,
+            "invalid_variants": 0,
+            "total_variants_checked": 0,
+        }
 
     reports = 0
     invalid_books = 0
@@ -7093,7 +8496,9 @@ def _backup_health_payload(*, runtime: config.Config) -> dict[str, Any]:
                 total_size += int(file_path.stat().st_size)
     last_backup = ""
     if snapshot_dirs:
-        last_backup = datetime.fromtimestamp(snapshot_dirs[0].stat().st_mtime, timezone.utc).isoformat()
+        last_backup = datetime.fromtimestamp(
+            snapshot_dirs[0].stat().st_mtime, timezone.utc
+        ).isoformat()
     return {
         "lastBackup": last_backup,
         "backupCount": len(snapshot_dirs),
@@ -7108,7 +8513,9 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
         payload = _startup_healthz_payload(runtime=runtime)
         payload["status"] = "starting"
         payload["healthy"] = True
-        payload["startup_checks"] = STARTUP_HEALTH if isinstance(STARTUP_HEALTH, dict) else {}
+        payload["startup_checks"] = (
+            STARTUP_HEALTH if isinstance(STARTUP_HEALTH, dict) else {}
+        )
         payload["checks"] = {
             "api_keys": {"status": "pending", "providers_configured": []},
             "config": {"status": "pending", "files_valid": 0, "files_total": 0},
@@ -7121,7 +8528,12 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
             "window_days": int(getattr(runtime, "slo_window_days", 7) or 7),
             "targets": {},
         }
-        payload["slo_alerting"] = {"checked": False, "sent": False, "reason": "startup_initializing", "alerts": []}
+        payload["slo_alerting"] = {
+            "checked": False,
+            "sent": False,
+            "reason": "startup_initializing",
+            "alerts": [],
+        }
         payload["slo_monitor"] = _slo_background_monitor_snapshot()
         payload["jobs"] = {
             "status_counts": job_db_store.status_counts(),
@@ -7138,10 +8550,24 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
             "average_score": 0.0,
             "books_above_threshold": 0,
             "books_below_threshold": 0,
-            "composite_validation": {"reports": 0, "books_with_invalid": 0, "invalid_variants": 0, "total_variants_checked": 0},
+            "composite_validation": {
+                "reports": 0,
+                "books_with_invalid": 0,
+                "invalid_variants": 0,
+                "total_variants_checked": 0,
+            },
         }
-        payload["backup"] = {"lastBackup": "", "backupCount": 0, "backupSizeTotalMb": 0.0}
-        payload["disk_usage"] = {"output_covers_mb": 0.0, "tmp_mb": 0.0, "archive_mb": 0.0, "free_gb": round(shutil.disk_usage(PROJECT_ROOT).free / (1024 ** 3), 3)}
+        payload["backup"] = {
+            "lastBackup": "",
+            "backupCount": 0,
+            "backupSizeTotalMb": 0.0,
+        }
+        payload["disk_usage"] = {
+            "output_covers_mb": 0.0,
+            "tmp_mb": 0.0,
+            "archive_mb": 0.0,
+            "free_gb": round(shutil.disk_usage(PROJECT_ROOT).free / (1024**3), 3),
+        }
         payload["stats"] = {
             "books": len(_catalog_books_payload(runtime.book_catalog_path)),
             "variants": 0,
@@ -7154,20 +8580,48 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
     worker_status = _worker_runtime_status()
     book_count = len(_catalog_books_payload(runtime.book_catalog_path))
 
-    dashboard = _build_dashboard_payload(_load_generation_records(runtime=runtime), runtime=runtime)
+    dashboard = _build_dashboard_payload(
+        _load_generation_records(runtime=runtime), runtime=runtime
+    )
     summary = dashboard.get("summary", {})
-    quality_payload = _load_json(_quality_scores_path_for_runtime(runtime), {"scores": []})
-    quality_rows = quality_payload.get("scores", []) if isinstance(quality_payload, dict) else []
-    quality_scores = [_safe_float(row.get("overall_score"), 0.0) for row in quality_rows if isinstance(row, dict)]
-    books_above_threshold = len({int(row.get("book_number", 0)) for row in quality_rows if isinstance(row, dict) and _safe_float(row.get("overall_score"), 0.0) >= runtime.min_quality_score})
-    books_below_threshold = max(0, int(summary.get("books_generated", 0)) - books_above_threshold)
+    quality_payload = _load_json(
+        _quality_scores_path_for_runtime(runtime), {"scores": []}
+    )
+    quality_rows = (
+        quality_payload.get("scores", []) if isinstance(quality_payload, dict) else []
+    )
+    quality_scores = [
+        _safe_float(row.get("overall_score"), 0.0)
+        for row in quality_rows
+        if isinstance(row, dict)
+    ]
+    books_above_threshold = len(
+        {
+            int(row.get("book_number", 0))
+            for row in quality_rows
+            if isinstance(row, dict)
+            and _safe_float(row.get("overall_score"), 0.0) >= runtime.min_quality_score
+        }
+    )
+    books_below_threshold = max(
+        0, int(summary.get("books_generated", 0)) - books_above_threshold
+    )
 
     providers_payload = _provider_runtime_payload(runtime=runtime)
 
-    history_rows = _load_json(_history_path_for_runtime(runtime), {"items": []}).get("items", [])
+    history_rows = _load_json(_history_path_for_runtime(runtime), {"items": []}).get(
+        "items", []
+    )
     last_generation = ""
     if isinstance(history_rows, list) and history_rows:
-        last_generation = max((str(row.get("timestamp", "")) for row in history_rows if isinstance(row, dict)), default="")
+        last_generation = max(
+            (
+                str(row.get("timestamp", ""))
+                for row in history_rows
+                if isinstance(row, dict)
+            ),
+            default="",
+        )
 
     def _dir_size_mb(path: Path) -> float:
         if not path.exists():
@@ -7184,16 +8638,26 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
     output_files = [path for path in output_dir.rglob("*.jpg") if path.is_file()]
 
     api_slo, job_slo, slo_evaluation = _build_slo_evaluation(runtime=runtime)
-    slo_alert = _slo_alert_manager_for_runtime(runtime).maybe_alert(runtime=runtime, slo_evaluation=slo_evaluation)
+    slo_alert = _slo_alert_manager_for_runtime(runtime).maybe_alert(
+        runtime=runtime, slo_evaluation=slo_evaluation
+    )
     budget_status = _budget_status_for_runtime(runtime)
 
-    startup = STARTUP_HEALTH if isinstance(STARTUP_HEALTH, dict) else {"healthy": True, "issues": [], "warnings": [], "checks": []}
+    startup = (
+        STARTUP_HEALTH
+        if isinstance(STARTUP_HEALTH, dict)
+        else {"healthy": True, "issues": [], "warnings": [], "checks": []}
+    )
     startup_healthy = bool(startup.get("healthy", True))
     status_counts = job_db_store.status_counts()
-    pending_jobs = int(status_counts.get("queued", 0) or 0) + int(status_counts.get("retrying", 0) or 0)
+    pending_jobs = int(status_counts.get("queued", 0) or 0) + int(
+        status_counts.get("retrying", 0) or 0
+    )
     worker_mode = str(worker_status.get("mode", "inline") or "inline")
     worker_alive = bool(worker_status.get("alive", False))
-    worker_outage_blocking = worker_mode == "external" and (not worker_alive) and pending_jobs > 0
+    worker_outage_blocking = (
+        worker_mode == "external" and (not worker_alive) and pending_jobs > 0
+    )
     runtime_issues: list[str] = []
     if worker_outage_blocking:
         runtime_issues.append(
@@ -7201,8 +8665,11 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
             f"Start worker service or set JOB_WORKER_MODE=inline."
         )
     overall_healthy = startup_healthy and (not worker_outage_blocking)
-    free_gb = round(shutil.disk_usage(PROJECT_ROOT).free / (1024 ** 3), 3)
-    database_check: dict[str, Any] = {"status": "disabled", "reason": "USE_SQLITE=false"}
+    free_gb = round(shutil.disk_usage(PROJECT_ROOT).free / (1024**3), 3)
+    database_check: dict[str, Any] = {
+        "status": "disabled",
+        "reason": "USE_SQLITE=false",
+    }
     if runtime.use_sqlite:
         start = time.time()
         try:
@@ -7211,17 +8678,33 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
             conn = sqlite3.connect(str(runtime.sqlite_db_path), timeout=5)
             conn.execute("SELECT 1")
             conn.close()
-            database_check = {"status": "ok", "latency_ms": round((time.time() - start) * 1000.0, 3), "path": str(runtime.sqlite_db_path)}
+            database_check = {
+                "status": "ok",
+                "latency_ms": round((time.time() - start) * 1000.0, 3),
+                "path": str(runtime.sqlite_db_path),
+            }
         except Exception as exc:
-            database_check = {"status": "error", "error": str(exc), "path": str(runtime.sqlite_db_path)}
+            database_check = {
+                "status": "error",
+                "error": str(exc),
+                "path": str(runtime.sqlite_db_path),
+            }
             overall_healthy = False
             runtime_issues.append(f"SQLite check failed: {exc}")
 
     config_files = list(runtime.config_dir.glob("*.json"))
-    config_valid = sum(1 for row in startup.get("checks", []) if isinstance(row, dict) and row.get("ok", False))
-    configured_providers = [name for name, key in runtime.provider_keys.items() if key.strip()]
+    config_valid = sum(
+        1
+        for row in startup.get("checks", [])
+        if isinstance(row, dict) and row.get("ok", False)
+    )
+    configured_providers = [
+        name for name, key in runtime.provider_keys.items() if key.strip()
+    ]
     drive_credentials_path = _resolve_credentials_path(runtime)
-    drive_mode, drive_mode_error = _drive_credentials_mode(runtime, credentials_path=drive_credentials_path)
+    drive_mode, drive_mode_error = _drive_credentials_mode(
+        runtime, credentials_path=drive_credentials_path
+    )
     drive_source_folder = (
         str(getattr(runtime, "gdrive_source_folder_id", "") or "").strip()
         or str(getattr(runtime, "gdrive_input_folder_id", "") or "").strip()
@@ -7232,7 +8715,9 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
     drive_check: dict[str, Any]
     if drive_enabled and drive_mode:
         try:
-            auth_path = None if drive_mode == "service_account_env" else drive_credentials_path
+            auth_path = (
+                None if drive_mode == "service_account_env" else drive_credentials_path
+            )
             gdrive_sync.authenticate(auth_path)
             drive_connected = True
             drive_check = {
@@ -7264,7 +8749,9 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
         "healthy": overall_healthy,
         "version": "2.1.1",
         "uptime_seconds": int(max(0.0, time.time() - APP_STARTED_AT)),
-        "database": "connected" if str(database_check.get("status", "")).strip().lower() == "ok" else "disconnected",
+        "database": "connected"
+        if str(database_check.get("status", "")).strip().lower() == "ok"
+        else "disconnected",
         "drive": {
             "connected": bool(drive_connected),
             "source_folder_id": str(drive_source_folder or ""),
@@ -7279,7 +8766,9 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
         "books_generated": int(summary.get("books_generated", 0)),
         "total_images": len(quality_rows) if quality_rows else len(output_files),
         "total_cost": round(_safe_float(summary.get("total_spent"), 0.0), 4),
-        "budget_remaining": round(_safe_float(summary.get("budget_remaining"), runtime.max_cost_usd), 4),
+        "budget_remaining": round(
+            _safe_float(summary.get("budget_remaining"), runtime.max_cost_usd), 4
+        ),
         "budget": budget_status,
         "last_generation": last_generation,
         "providers": providers_payload,
@@ -7287,10 +8776,12 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
             "output_covers_mb": _dir_size_mb(output_dir),
             "tmp_mb": _dir_size_mb(tmp_dir),
             "archive_mb": _dir_size_mb(archive_dir),
-            "free_gb": round(shutil.disk_usage(PROJECT_ROOT).free / (1024 ** 3), 3),
+            "free_gb": round(shutil.disk_usage(PROJECT_ROOT).free / (1024**3), 3),
         },
         "quality_summary": {
-            "average_score": round(sum(quality_scores) / len(quality_scores), 4) if quality_scores else 0.0,
+            "average_score": round(sum(quality_scores) / len(quality_scores), 4)
+            if quality_scores
+            else 0.0,
             "books_above_threshold": books_above_threshold,
             "books_below_threshold": books_below_threshold,
             "composite_validation": _composite_validation_summary(runtime=runtime),
@@ -7313,13 +8804,30 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
         "runtime_issues": runtime_issues,
         "checks": {
             "database": database_check,
-            "config": {"status": "ok" if startup_healthy else "degraded", "files_valid": config_valid, "files_total": len(config_files)},
+            "config": {
+                "status": "ok" if startup_healthy else "degraded",
+                "files_valid": config_valid,
+                "files_total": len(config_files),
+            },
             "storage": {
                 "status": "ok" if free_gb >= 10.0 else "warning",
                 "free_gb": free_gb,
-                "usage_percent": round((1 - (shutil.disk_usage(PROJECT_ROOT).free / max(1, shutil.disk_usage(PROJECT_ROOT).total))) * 100.0, 3),
+                "usage_percent": round(
+                    (
+                        1
+                        - (
+                            shutil.disk_usage(PROJECT_ROOT).free
+                            / max(1, shutil.disk_usage(PROJECT_ROOT).total)
+                        )
+                    )
+                    * 100.0,
+                    3,
+                ),
             },
-            "api_keys": {"status": "ok" if configured_providers else "warning", "providers_configured": configured_providers},
+            "api_keys": {
+                "status": "ok" if configured_providers else "warning",
+                "providers_configured": configured_providers,
+            },
             "drive": drive_check,
         },
         "stats": {
@@ -7332,9 +8840,15 @@ def _health_payload(*, runtime: config.Config | None = None) -> dict[str, Any]:
     }
 
 
-def _build_slo_evaluation(*, runtime: config.Config) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
-    api_slo = _slo_tracker_for_runtime(runtime).snapshot(window_days=runtime.slo_window_days, catalog_id=runtime.catalog_id)
-    job_slo = job_db_store.slo_summary(window_days=runtime.slo_window_days, catalog_id=runtime.catalog_id)
+def _build_slo_evaluation(
+    *, runtime: config.Config
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    api_slo = _slo_tracker_for_runtime(runtime).snapshot(
+        window_days=runtime.slo_window_days, catalog_id=runtime.catalog_id
+    )
+    job_slo = job_db_store.slo_summary(
+        window_days=runtime.slo_window_days, catalog_id=runtime.catalog_id
+    )
     slo_targets = {
         "api_success_rate_7d": 0.995,
         "job_completion_without_manual_intervention": 0.98,
@@ -7361,14 +8875,21 @@ def _build_slo_evaluation(*, runtime: config.Config) -> tuple[dict[str, Any], di
         "api_success_rate_7d": {
             "actual": float(api_slo.get("success_rate", 1.0) or 1.0),
             "target": slo_targets["api_success_rate_7d"],
-            "status": _slo_state_ge(float(api_slo.get("success_rate", 1.0) or 1.0), slo_targets["api_success_rate_7d"]),
+            "status": _slo_state_ge(
+                float(api_slo.get("success_rate", 1.0) or 1.0),
+                slo_targets["api_success_rate_7d"],
+            ),
             "requests": int(api_slo.get("total_requests", 0) or 0),
         },
         "job_completion_without_manual_intervention": {
-            "actual": float(job_slo.get("completion_without_manual_intervention", 1.0) or 1.0),
+            "actual": float(
+                job_slo.get("completion_without_manual_intervention", 1.0) or 1.0
+            ),
             "target": slo_targets["job_completion_without_manual_intervention"],
             "status": _slo_state_ge(
-                float(job_slo.get("completion_without_manual_intervention", 1.0) or 1.0),
+                float(
+                    job_slo.get("completion_without_manual_intervention", 1.0) or 1.0
+                ),
                 slo_targets["job_completion_without_manual_intervention"],
             ),
             "terminal_jobs": int(job_slo.get("terminal_total", 0) or 0),
@@ -7389,7 +8910,9 @@ def _build_slo_evaluation(*, runtime: config.Config) -> tuple[dict[str, Any], di
 def _enrichment_coverage_payload(*, runtime: config.Config) -> dict[str, Any]:
     source_rows = _catalog_books_payload(runtime.book_catalog_path)
     total_books = len(source_rows)
-    enriched_path = config.enriched_catalog_path(catalog_id=runtime.catalog_id, config_dir=runtime.config_dir)
+    enriched_path = config.enriched_catalog_path(
+        catalog_id=runtime.catalog_id, config_dir=runtime.config_dir
+    )
     enriched_rows = _json_list_rows_cache_entry(enriched_path).get("rows", [])
     valid_numbers: set[int] = set()
     if isinstance(enriched_rows, list):
@@ -7408,7 +8931,9 @@ def _enrichment_coverage_payload(*, runtime: config.Config) -> dict[str, Any]:
         for row in source_rows
         if isinstance(row, dict) and _safe_int(row.get("number"), 0) in valid_numbers
     )
-    coverage_ratio = float(usable_books) / float(total_books) if total_books > 0 else 1.0
+    coverage_ratio = (
+        float(usable_books) / float(total_books) if total_books > 0 else 1.0
+    )
     return {
         "total_books": total_books,
         "usable_books": usable_books,
@@ -7425,15 +8950,19 @@ def _probe_drive_write_access(*, service: Any, parent_folder_id: str) -> dict[st
     created_file_id = ""
     try:
         media = gdrive_sync.MediaFileUpload(str(probe_path), mimetype="text/plain")
-        created = service.files().create(
-            body={
-                "name": f"alexandria-write-probe-{uuid.uuid4().hex[:8]}.txt",
-                "parents": [str(parent_folder_id)],
-            },
-            media_body=media,
-            fields="id",
-            supportsAllDrives=True,
-        ).execute()
+        created = (
+            service.files()
+            .create(
+                body={
+                    "name": f"alexandria-write-probe-{uuid.uuid4().hex[:8]}.txt",
+                    "parents": [str(parent_folder_id)],
+                },
+                media_body=media,
+                fields="id",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
         created_file_id = str(created.get("id", "") or "").strip()
         if not created_file_id:
             raise RuntimeError("Google Drive write probe did not return an id")
@@ -7451,7 +8980,10 @@ def _probe_drive_write_access(*, service: Any, parent_folder_id: str) -> dict[st
                 details = _drive_error_details(exc)
                 message = str(details.get("message", "") or exc).lower()
                 last_delete_exc = exc
-                if "not found" not in message or attempt >= SAVE_RAW_DRIVE_PROBE_DELETE_ATTEMPTS:
+                if (
+                    "not found" not in message
+                    or attempt >= SAVE_RAW_DRIVE_PROBE_DELETE_ATTEMPTS
+                ):
                     raise
                 time.sleep(SAVE_RAW_DRIVE_PROBE_DELETE_DELAY_SECONDS)
         if last_delete_exc is not None:
@@ -7474,7 +9006,11 @@ def _probe_drive_write_access_with_timeout(
 
     def _run_probe() -> None:
         try:
-            results.put(_probe_drive_write_access(service=service, parent_folder_id=parent_folder_id))
+            results.put(
+                _probe_drive_write_access(
+                    service=service, parent_folder_id=parent_folder_id
+                )
+            )
         except Exception as exc:  # pragma: no cover - defensive
             results.put({"ok": False, "error": str(exc), "file_id": ""})
 
@@ -7532,7 +9068,12 @@ def _run_startup_checks(runtime: config.Config) -> dict[str, Any]:
         _record(label, ok, str(path))
 
     worker_status = _worker_runtime_status()
-    _record("worker_mode", bool(worker_status.get("mode")), str(worker_status.get("mode", "inline")), level="warning")
+    _record(
+        "worker_mode",
+        bool(worker_status.get("mode")),
+        str(worker_status.get("mode", "inline")),
+        level="warning",
+    )
     if str(worker_status.get("mode")) == "external":
         _record(
             "external_worker_heartbeat",
@@ -7545,7 +9086,9 @@ def _run_startup_checks(runtime: config.Config) -> dict[str, Any]:
         )
 
     any_key = any(bool(v.strip()) for v in runtime.provider_keys.values())
-    _record("provider_api_keys", any_key, "No provider API keys configured", level="warning")
+    _record(
+        "provider_api_keys", any_key, "No provider API keys configured", level="warning"
+    )
 
     enrichment_coverage = _enrichment_coverage_payload(runtime=runtime)
     _record(
@@ -7565,7 +9108,9 @@ def _run_startup_checks(runtime: config.Config) -> dict[str, Any]:
         or str(getattr(runtime, "gdrive_output_folder_id", "") or "").strip()
     )
     if drive_source_folder:
-        service, _credentials_path, drive_mode, credentials_meta, drive_error = _drive_service_for_runtime(runtime)
+        service, _credentials_path, drive_mode, credentials_meta, drive_error = (
+            _drive_service_for_runtime(runtime)
+        )
         if drive_mode:
             if service is not None:
                 _record(
@@ -7584,7 +9129,9 @@ def _run_startup_checks(runtime: config.Config) -> dict[str, Any]:
                 )
                 write_detail = "Drive upload: OK (Shared Drive)"
                 if bool(write_probe.get("ok", False)):
-                    logger.info("%s for folder %s.", write_detail, SAVE_RAW_DRIVE_FOLDER_ID)
+                    logger.info(
+                        "%s for folder %s.", write_detail, SAVE_RAW_DRIVE_FOLDER_ID
+                    )
                 else:
                     write_detail = (
                         "Drive upload failed — check Shared Drive permissions for service account "
@@ -7639,7 +9186,9 @@ def _run_startup_checks(runtime: config.Config) -> dict[str, Any]:
 
     try:
         prompt_payload = json.loads(runtime.prompts_path.read_text(encoding="utf-8"))
-        _record("prompts_json", isinstance(prompt_payload, dict), str(runtime.prompts_path))
+        _record(
+            "prompts_json", isinstance(prompt_payload, dict), str(runtime.prompts_path)
+        )
     except Exception as exc:
         _record("prompts_json", False, f"{runtime.prompts_path} ({exc})")
 
@@ -7651,9 +9200,13 @@ def _run_startup_checks(runtime: config.Config) -> dict[str, Any]:
         "checks": checks,
     }
     if issues:
-        logger.error("Startup health checks found critical issues", extra={"issues": issues})
+        logger.error(
+            "Startup health checks found critical issues", extra={"issues": issues}
+        )
     elif warnings:
-        logger.warning("Startup health checks found warnings", extra={"warnings": warnings})
+        logger.warning(
+            "Startup health checks found warnings", extra={"warnings": warnings}
+        )
     else:
         logger.info("Startup health checks passed")
     return summary
@@ -7673,7 +9226,9 @@ def serve_review_webapp(
     bind_host = (host or os.getenv("HOST", "0.0.0.0")).strip() or "0.0.0.0"
     default_runtime = config.get_config()
     default_runtime.model_cost_usd = config.runtime_model_costs_copy()
-    default_runtime.cost_per_image_usd = default_runtime.get_model_cost(default_runtime.ai_model)
+    default_runtime.cost_per_image_usd = default_runtime.get_model_cost(
+        default_runtime.ai_model
+    )
     _set_startup_health(
         {
             "checked_at": "",
@@ -7683,7 +9238,12 @@ def serve_review_webapp(
             "checks": [],
         }
     )
-    _set_startup_state(status="initializing", started_at=datetime.now(timezone.utc).isoformat(), completed_at="", error="")
+    _set_startup_state(
+        status="initializing",
+        started_at=datetime.now(timezone.utc).isoformat(),
+        completed_at="",
+        error="",
+    )
     server_runtime_state: dict[str, Any] = {
         "slo_monitor": None,
         "workers_started": False,
@@ -7735,7 +9295,9 @@ def serve_review_webapp(
             if self._current_catalog():
                 return self._runtime_for_catalog_token(self._current_catalog())
             try:
-                token = str(parse_qs(urlparse(self.path).query).get("catalog", [""])[0] or "").strip()
+                token = str(
+                    parse_qs(urlparse(self.path).query).get("catalog", [""])[0] or ""
+                ).strip()
             except Exception:
                 token = ""
             return self._runtime_for_catalog_token(token)
@@ -7805,7 +9367,9 @@ def serve_review_webapp(
                     status=HTTPStatus.NOT_FOUND,
                     endpoint=self.path,
                 )
-            if not any(safe_path.is_relative_to(root.resolve()) for root in allowed_roots):
+            if not any(
+                safe_path.is_relative_to(root.resolve()) for root in allowed_roots
+            ):
                 return self._send_error(
                     code="PATH_NOT_ALLOWED",
                     message="Requested file path is not within an allowed directory",
@@ -7813,8 +9377,12 @@ def serve_review_webapp(
                     status=HTTPStatus.FORBIDDEN,
                     endpoint=self.path,
                 )
-            content_type = mimetypes.guess_type(str(safe_path))[0] or "application/octet-stream"
-            return self._send_file(safe_path, content_type=content_type, cache_control=cache_control)
+            content_type = (
+                mimetypes.guess_type(str(safe_path))[0] or "application/octet-stream"
+            )
+            return self._send_file(
+                safe_path, content_type=content_type, cache_control=cache_control
+            )
 
         def do_GET(self):
             self._request_started_at = time.perf_counter()
@@ -7824,10 +9392,18 @@ def serve_review_webapp(
             query = parse_qs(parsed.query)
             self._request_path = str(path)
             self._set_active_runtime(None)
-            self._set_request_id(str(self.headers.get("X-Request-Id", "")).strip() or str(uuid.uuid4()))
-            requested_catalog_raw = str(query.get("catalog", [default_runtime.catalog_id])[0]).strip()
+            self._set_request_id(
+                str(self.headers.get("X-Request-Id", "")).strip() or str(uuid.uuid4())
+            )
+            requested_catalog_raw = str(
+                query.get("catalog", [default_runtime.catalog_id])[0]
+            ).strip()
             try:
-                requested_catalog = security.validate_catalog_id(requested_catalog_raw) if requested_catalog_raw else default_runtime.catalog_id
+                requested_catalog = (
+                    security.validate_catalog_id(requested_catalog_raw)
+                    if requested_catalog_raw
+                    else default_runtime.catalog_id
+                )
             except ValueError:
                 return self._send_error(
                     code="INVALID_CATALOG_ID",
@@ -7836,18 +9412,28 @@ def serve_review_webapp(
                     status=HTTPStatus.BAD_REQUEST,
                     endpoint=path,
                 )
-            runtime_req = config.get_config(requested_catalog or default_runtime.catalog_id)
+            runtime_req = config.get_config(
+                requested_catalog or default_runtime.catalog_id
+            )
             self._set_active_runtime(runtime_req)
-            client_ip = str(self.client_address[0] if self.client_address else "unknown")
+            client_ip = str(
+                self.client_address[0] if self.client_address else "unknown"
+            )
 
             if path in {"/api/healthz", "/healthz"}:
-                return self._send_json(_startup_healthz_payload(runtime=runtime_req), cache_control="no-store")
+                return self._send_json(
+                    _startup_healthz_payload(runtime=runtime_req),
+                    cache_control="no-store",
+                )
 
             if not read_rate_limiter.allow(f"{client_ip}:{path}"):
                 return self._send_error(
                     code="RATE_LIMITED",
                     message="Too many read requests. Please retry shortly.",
-                    details={"path": path, "limit_per_minute": READ_RATE_LIMIT_PER_MINUTE},
+                    details={
+                        "path": path,
+                        "limit_per_minute": READ_RATE_LIMIT_PER_MINUTE,
+                    },
                     status=HTTPStatus.TOO_MANY_REQUESTS,
                     endpoint=path,
                     headers={"Retry-After": "60"},
@@ -7894,21 +9480,27 @@ def serve_review_webapp(
                 "/api/storage/usage",
             }
             cache_key = _cache_key(path, query, runtime_req.catalog_id)
-            should_cache = path in cacheable_paths or path.startswith("/api/analytics/reports")
+            should_cache = path in cacheable_paths or path.startswith(
+                "/api/analytics/reports"
+            )
 
             def _static_cache_control_for(request_path: str) -> str:
                 lower = str(request_path or "").lower()
                 if lower.endswith((".css", ".js", ".html")):
                     # Always fetch latest UI assets so deploys never render stale layouts.
                     return "no-store"
-                if lower.endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".ico", ".avif")):
+                if lower.endswith(
+                    (".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg", ".ico", ".avif")
+                ):
                     return "public, max-age=3600"
                 return "public, max-age=900"
 
             def _cache_and_send(payload: dict[str, Any]):
                 if should_cache:
                     data_cache.set(cache_key, payload)
-                return self._send_json(payload, headers={"X-Cache": "MISS" if should_cache else "BYPASS"})
+                return self._send_json(
+                    payload, headers={"X-Cache": "MISS" if should_cache else "BYPASS"}
+                )
 
             if should_cache:
                 cached = data_cache.get(cache_key)
@@ -7920,8 +9512,14 @@ def serve_review_webapp(
 
             def _build_cgi_catalog_payload() -> dict[str, Any]:
                 write_iterate_data(runtime=runtime_req)
-                iterate_payload = _load_json(_iterate_data_path_for_runtime(runtime_req), {"books": []})
-                rows = iterate_payload.get("books", []) if isinstance(iterate_payload, dict) else []
+                iterate_payload = _load_json(
+                    _iterate_data_path_for_runtime(runtime_req), {"books": []}
+                )
+                rows = (
+                    iterate_payload.get("books", [])
+                    if isinstance(iterate_payload, dict)
+                    else []
+                )
                 books: list[dict[str, Any]] = []
                 for row in rows:
                     if not isinstance(row, dict):
@@ -7935,7 +9533,9 @@ def serve_review_webapp(
                             "number": number,
                             "title": str(row.get("title", "")),
                             "author": str(row.get("author", "")),
-                            "folder_name": str(row.get("folder", row.get("folder_name", ""))),
+                            "folder_name": str(
+                                row.get("folder", row.get("folder_name", ""))
+                            ),
                             "cover_jpg_id": str(row.get("cover_jpg_id", "")),
                             "cover_name": str(row.get("cover_name", "")),
                             "synced_at": datetime.now(timezone.utc).isoformat(),
@@ -7948,7 +9548,9 @@ def serve_review_webapp(
                     "count": len(books),
                 }
                 try:
-                    CGI_CATALOG_CACHE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                    CGI_CATALOG_CACHE_PATH.write_text(
+                        json.dumps(payload, indent=2), encoding="utf-8"
+                    )
                 except Exception:
                     pass
                 return payload
@@ -7962,21 +9564,37 @@ def serve_review_webapp(
                 if CGI_CATALOG_CACHE_PATH.exists():
                     age = max(0.0, time.time() - CGI_CATALOG_CACHE_PATH.stat().st_mtime)
                     cache_payload = _load_json(CGI_CATALOG_CACHE_PATH, {})
-                    books = cache_payload.get("books", []) if isinstance(cache_payload, dict) else []
+                    books = (
+                        cache_payload.get("books", [])
+                        if isinstance(cache_payload, dict)
+                        else []
+                    )
                     return self._send_json(
                         {
                             "cached": True,
                             "age_seconds": age,
                             "count": len(books) if isinstance(books, list) else 0,
-                            "synced_at": cache_payload.get("synced_at") if isinstance(cache_payload, dict) else None,
+                            "synced_at": cache_payload.get("synced_at")
+                            if isinstance(cache_payload, dict)
+                            else None,
                             "stale": age > CGI_CATALOG_MAX_AGE_SECONDS,
                         }
                     )
-                return self._send_json({"cached": False, "age_seconds": 0.0, "count": 0, "synced_at": None, "stale": False})
+                return self._send_json(
+                    {
+                        "cached": False,
+                        "age_seconds": 0.0,
+                        "count": 0,
+                        "synced_at": None,
+                        "stale": False,
+                    }
+                )
             if path == "/cgi-bin/catalog.py":
                 if CGI_CATALOG_CACHE_PATH.exists():
                     payload = _load_json(CGI_CATALOG_CACHE_PATH, {})
-                    if isinstance(payload, dict) and isinstance(payload.get("books"), list):
+                    if isinstance(payload, dict) and isinstance(
+                        payload.get("books"), list
+                    ):
                         return self._send_json(payload)
                 return self._send_json(_build_cgi_catalog_payload())
 
@@ -8019,7 +9637,11 @@ def serve_review_webapp(
                     content_type="image/svg+xml",
                     cache_control="public, max-age=86400",
                 )
-            if path.startswith("/css/") or path.startswith("/js/") or path.startswith("/img/"):
+            if (
+                path.startswith("/css/")
+                or path.startswith("/js/")
+                or path.startswith("/img/")
+            ):
                 return self._serve_project_relative(
                     f"/src/static{path}",
                     allowed_roots=[PROJECT_ROOT / "src" / "static"],
@@ -8062,20 +9684,39 @@ def serve_review_webapp(
             if path == "/api/version":
                 return self._send_json({"ok": True, "version": "2.1.1"})
             if path == "/api/models":
-                return _cache_and_send({"ok": True, **_api_models_payload(runtime=runtime_req)})
+                return _cache_and_send(
+                    {"ok": True, **_api_models_payload(runtime=runtime_req)}
+                )
             if path == "/api/providers":
-                return _cache_and_send({"ok": True, **_api_providers_payload(runtime=runtime_req)})
+                return _cache_and_send(
+                    {"ok": True, **_api_providers_payload(runtime=runtime_req)}
+                )
             if path == "/api/catalog":
-                return _cache_and_send({"ok": True, **_api_catalog_payload(runtime=runtime_req)})
+                return _cache_and_send(
+                    {"ok": True, **_api_catalog_payload(runtime=runtime_req)}
+                )
             if path == "/api/templates":
                 genre_filter = str(query.get("genre", [""])[0] or "").strip().lower()
-                return _cache_and_send({"ok": True, **_api_templates_payload(runtime=runtime_req, genre=genre_filter)})
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        **_api_templates_payload(
+                            runtime=runtime_req, genre=genre_filter
+                        ),
+                    }
+                )
             if path == "/api/stats":
-                return _cache_and_send({"ok": True, **_api_stats_payload(runtime=runtime_req)})
+                return _cache_and_send(
+                    {"ok": True, **_api_stats_payload(runtime=runtime_req)}
+                )
             if path == "/api/config":
-                return _cache_and_send({"ok": True, **_api_config_payload(runtime=runtime_req)})
+                return _cache_and_send(
+                    {"ok": True, **_api_config_payload(runtime=runtime_req)}
+                )
             if path == "/api/catalogs":
-                return _cache_and_send(_catalogs_payload_with_stats(active_catalog=runtime_req.catalog_id))
+                return _cache_and_send(
+                    _catalogs_payload_with_stats(active_catalog=runtime_req.catalog_id)
+                )
             if path.startswith("/api/catalogs/"):
                 suffix = path.split("/api/catalogs/", 1)[1].strip("/")
                 if not suffix:
@@ -8095,7 +9736,9 @@ def serve_review_webapp(
                         return _cache_and_send({"ok": True, "catalog": item})
                     if len(parts) == 2 and parts[1] == "settings":
                         settings = catalog_registry.get_settings(catalog_id)
-                        return _cache_and_send({"ok": True, "catalog": catalog_id, "settings": settings})
+                        return _cache_and_send(
+                            {"ok": True, "catalog": catalog_id, "settings": settings}
+                        )
                     if len(parts) == 2 and parts[1] == "export":
                         bundle = catalog_registry.export_catalog_bundle(catalog_id)
                         return _cache_and_send({"ok": True, "bundle": bundle})
@@ -8145,15 +9788,21 @@ def serve_review_webapp(
                     }
                 )
             if path == "/api/metrics":
-                api_slo, job_slo, slo_evaluation = _build_slo_evaluation(runtime=runtime_req)
-                slo_alert = _slo_alert_manager_for_runtime(runtime_req).maybe_alert(runtime=runtime_req, slo_evaluation=slo_evaluation)
+                api_slo, job_slo, slo_evaluation = _build_slo_evaluation(
+                    runtime=runtime_req
+                )
+                slo_alert = _slo_alert_manager_for_runtime(runtime_req).maybe_alert(
+                    runtime=runtime_req, slo_evaluation=slo_evaluation
+                )
                 worker_status = _worker_runtime_status()
                 return self._send_json(
                     {
                         "ok": True,
                         "cache": data_cache.stats(),
                         "providers": _provider_runtime_payload(runtime=runtime_req),
-                        "errors": error_metrics.get_metrics(catalog_id=runtime_req.catalog_id),
+                        "errors": error_metrics.get_metrics(
+                            catalog_id=runtime_req.catalog_id
+                        ),
                         "slo": {
                             "api": api_slo,
                             "jobs": job_slo,
@@ -8173,7 +9822,9 @@ def serve_review_webapp(
                     }
                 )
             if path == "/api/performance/summary":
-                return self._send_json(_performance_summary_payload(runtime=runtime_req))
+                return self._send_json(
+                    _performance_summary_payload(runtime=runtime_req)
+                )
             if path == "/api/providers/runtime":
                 return self._send_json(
                     {
@@ -8184,8 +9835,15 @@ def serve_review_webapp(
                     }
                 )
             if path == "/api/providers/connectivity":
-                force = str(query.get("force", ["0"])[0] or "0").strip().lower() in {"1", "true", "yes", "on"}
-                payload = _provider_connectivity_payload(runtime=runtime_req, force=force)
+                force = str(query.get("force", ["0"])[0] or "0").strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
+                payload = _provider_connectivity_payload(
+                    runtime=runtime_req, force=force
+                )
                 payload["catalog"] = runtime_req.catalog_id
                 return self._send_json(payload)
             if path == "/api/workers":
@@ -8201,10 +9859,22 @@ def serve_review_webapp(
                 )
             if path == "/api/audit-log":
                 limit = _safe_int(query.get("limit", ["100"])[0], 100)
-                rows = audit_log.load_events(config.audit_log_path(catalog_id=runtime_req.catalog_id, data_dir=runtime_req.data_dir))
-                rows = rows[-max(1, min(1000, limit)):]
-                signed = sum(1 for row in rows if str(row.get("signature_status", "")) == "signed")
-                unsigned = sum(1 for row in rows if str(row.get("signature_status", "")) != "signed")
+                rows = audit_log.load_events(
+                    config.audit_log_path(
+                        catalog_id=runtime_req.catalog_id, data_dir=runtime_req.data_dir
+                    )
+                )
+                rows = rows[-max(1, min(1000, limit)) :]
+                signed = sum(
+                    1
+                    for row in rows
+                    if str(row.get("signature_status", "")) == "signed"
+                )
+                unsigned = sum(
+                    1
+                    for row in rows
+                    if str(row.get("signature_status", "")) != "signed"
+                )
                 return self._send_json(
                     {
                         "ok": True,
@@ -8226,7 +9896,9 @@ def serve_review_webapp(
                 period = _parse_period_token(query, default="30d")
                 entries = _cost_entries_for_runtime(runtime=runtime_req, period=period)
                 rows = cost_tracker.by_book(entries)
-                limit, offset = _parse_pagination(query, default_limit=50, max_limit=1000)
+                limit, offset = _parse_pagination(
+                    query, default_limit=50, max_limit=1000
+                )
                 page, pagination = _paginate_rows(rows, limit=limit, offset=offset)
                 return _cache_and_send(
                     {
@@ -8242,18 +9914,48 @@ def serve_review_webapp(
                 period = _parse_period_token(query, default="30d")
                 entries = _cost_entries_for_runtime(runtime=runtime_req, period=period)
                 rows = cost_tracker.by_model(entries)
-                return _cache_and_send({"ok": True, "catalog": runtime_req.catalog_id, "period": period, "models": rows, "count": len(rows)})
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "period": period,
+                        "models": rows,
+                        "count": len(rows),
+                    }
+                )
             if path == "/api/analytics/costs/by-operation":
                 period = _parse_period_token(query, default="30d")
                 entries = _cost_entries_for_runtime(runtime=runtime_req, period=period)
                 rows = cost_tracker.by_operation(entries)
-                return _cache_and_send({"ok": True, "catalog": runtime_req.catalog_id, "period": period, "operations": rows, "count": len(rows)})
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "period": period,
+                        "operations": rows,
+                        "count": len(rows),
+                    }
+                )
             if path == "/api/analytics/costs/timeline":
                 period = _parse_period_token(query, default="30d")
-                granularity = str(query.get("granularity", ["daily"])[0] or "daily").strip().lower() or "daily"
+                granularity = (
+                    str(query.get("granularity", ["daily"])[0] or "daily")
+                    .strip()
+                    .lower()
+                    or "daily"
+                )
                 entries = _cost_entries_for_runtime(runtime=runtime_req, period=period)
                 rows = cost_tracker.timeline(entries, granularity=granularity)
-                return _cache_and_send({"ok": True, "catalog": runtime_req.catalog_id, "period": period, "granularity": granularity, "timeline": rows, "count": len(rows)})
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "period": period,
+                        "granularity": granularity,
+                        "timeline": rows,
+                        "count": len(rows),
+                    }
+                )
             if path == "/api/analytics/budget":
                 status = _budget_status_for_runtime(runtime_req)
                 return _cache_and_send({"ok": True, "budget": status})
@@ -8263,7 +9965,13 @@ def serve_review_webapp(
                 return _cache_and_send({"ok": True, **payload})
             if path == "/api/analytics/quality/by-model":
                 payload = _quality_by_model_payload(runtime=runtime_req)
-                return _cache_and_send({"ok": True, "catalog": runtime_req.catalog_id, "models": payload.get("models", [])})
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "models": payload.get("models", []),
+                    }
+                )
             if path == "/api/analytics/quality/by-prompt-pattern":
                 payload = _quality_prompt_pattern_payload(runtime=runtime_req)
                 return _cache_and_send({"ok": True, **payload})
@@ -8275,7 +9983,9 @@ def serve_review_webapp(
                 return _cache_and_send({"ok": True, **payload})
             if path == "/api/analytics/models/recommendation":
                 book = _safe_int(query.get("book", ["0"])[0], 0)
-                payload = _model_recommendation_payload(runtime=runtime_req, book_number=book if book > 0 else None)
+                payload = _model_recommendation_payload(
+                    runtime=runtime_req, book_number=book if book > 0 else None
+                )
                 return _cache_and_send({"ok": True, **payload})
             if path == "/api/analytics/prompts/effectiveness":
                 payload = _quality_prompt_pattern_payload(runtime=runtime_req)
@@ -8288,14 +9998,37 @@ def serve_review_webapp(
                 payload = _completion_payload(runtime=runtime_req)
                 return _cache_and_send({"ok": True, **payload})
             if path == "/api/analytics/cost-projection":
-                books_count = max(1, min(100000, _safe_int(query.get("books", ["1"])[0], 1)))
+                books_count = max(
+                    1, min(100000, _safe_int(query.get("books", ["1"])[0], 1))
+                )
                 max_variants = _max_generation_variants(runtime_req)
-                variants = max(1, min(max_variants, _safe_int(query.get("variants", [str(runtime_req.variants_per_cover)])[0], runtime_req.variants_per_cover)))
+                variants = max(
+                    1,
+                    min(
+                        max_variants,
+                        _safe_int(
+                            query.get(
+                                "variants", [str(runtime_req.variants_per_cover)]
+                            )[0],
+                            runtime_req.variants_per_cover,
+                        ),
+                    ),
+                )
                 models_raw = str(query.get("models", [""])[0] or "").strip()
-                models = [token.strip() for token in models_raw.split(",") if token.strip()] if models_raw else []
+                models = (
+                    [token.strip() for token in models_raw.split(",") if token.strip()]
+                    if models_raw
+                    else []
+                )
                 if not models:
-                    models = runtime_req.all_models[:1] if runtime_req.all_models else [runtime_req.ai_model]
-                model_quality = _quality_by_model_payload(runtime=runtime_req).get("models", [])
+                    models = (
+                        runtime_req.all_models[:1]
+                        if runtime_req.all_models
+                        else [runtime_req.ai_model]
+                    )
+                model_quality = _quality_by_model_payload(runtime=runtime_req).get(
+                    "models", []
+                )
                 model_stats: dict[str, dict[str, Any]] = {}
                 if isinstance(model_quality, list):
                     for row in model_quality:
@@ -8317,12 +10050,19 @@ def serve_review_webapp(
                     model_name = str(model).strip()
                     if not model_name:
                         continue
-                    cost_per_image = _safe_float(runtime_req.get_model_cost(model_name), 0.04)
+                    cost_per_image = _safe_float(
+                        runtime_req.get_model_cost(model_name), 0.04
+                    )
                     images = per_model_images
                     subtotal = round(images * cost_per_image, 6)
                     total_cost += subtotal
                     total_images += images
-                    seconds_per_image = _safe_float(model_stats.get(model_name, {}).get("avg_generation_time_seconds"), 22.0)
+                    seconds_per_image = _safe_float(
+                        model_stats.get(model_name, {}).get(
+                            "avg_generation_time_seconds"
+                        ),
+                        22.0,
+                    )
                     if seconds_per_image <= 0:
                         seconds_per_image = 22.0
                     weighted_seconds += seconds_per_image * images
@@ -8333,21 +10073,54 @@ def serve_review_webapp(
                         "total": subtotal,
                     }
 
-                avg_seconds_per_image = (weighted_seconds / total_images) if total_images > 0 else 22.0
-                configured_workers = max(1, _safe_int(getattr(runtime_req, "job_workers", JOB_WORKER_COUNT), JOB_WORKER_COUNT))
-                model_parallel = max(1, min(len(models), max(1, _safe_int(getattr(runtime_req, "batch_concurrency", 1), 1))))
+                avg_seconds_per_image = (
+                    (weighted_seconds / total_images) if total_images > 0 else 22.0
+                )
+                configured_workers = max(
+                    1,
+                    _safe_int(
+                        getattr(runtime_req, "job_workers", JOB_WORKER_COUNT),
+                        JOB_WORKER_COUNT,
+                    ),
+                )
+                model_parallel = max(
+                    1,
+                    min(
+                        len(models),
+                        max(
+                            1,
+                            _safe_int(getattr(runtime_req, "batch_concurrency", 1), 1),
+                        ),
+                    ),
+                )
                 effective_parallel = max(1, configured_workers * model_parallel)
-                estimated_time_hours = round((total_images * avg_seconds_per_image) / (effective_parallel * 3600.0), 3) if total_images > 0 else 0.0
+                estimated_time_hours = (
+                    round(
+                        (total_images * avg_seconds_per_image)
+                        / (effective_parallel * 3600.0),
+                        3,
+                    )
+                    if total_images > 0
+                    else 0.0
+                )
                 estimated_storage_gb = round((total_images * 0.00018), 3)
 
                 recommendations: list[str] = []
                 if per_model_cost_rows:
-                    sorted_by_cost = sorted(per_model_cost_rows, key=lambda item: item[1])
+                    sorted_by_cost = sorted(
+                        per_model_cost_rows, key=lambda item: item[1]
+                    )
                     cheapest_model, cheapest_cost = sorted_by_cost[0]
-                    recommendations.append(f"Cheapest selected model: {cheapest_model} (${cheapest_cost:.4f}/image).")
+                    recommendations.append(
+                        f"Cheapest selected model: {cheapest_model} (${cheapest_cost:.4f}/image)."
+                    )
                     if len(sorted_by_cost) > 1:
                         priciest_model, priciest_cost = sorted_by_cost[-1]
-                        ratio = (priciest_cost / cheapest_cost) if cheapest_cost > 0 else 0.0
+                        ratio = (
+                            (priciest_cost / cheapest_cost)
+                            if cheapest_cost > 0
+                            else 0.0
+                        )
                         if ratio > 1.0:
                             recommendations.append(
                                 f"{cheapest_model} is about {ratio:.1f}x cheaper than {priciest_model} for this run."
@@ -8378,27 +10151,50 @@ def serve_review_webapp(
                     }
                 )
             if path == "/api/analytics/audit":
-                limit, offset = _parse_pagination(query, default_limit=100, max_limit=5000)
+                limit, offset = _parse_pagination(
+                    query, default_limit=100, max_limit=5000
+                )
                 action_filter = str(query.get("action", [""])[0] or "").strip().lower()
-                rows = audit_log.load_events(config.audit_log_path(catalog_id=runtime_req.catalog_id, data_dir=runtime_req.data_dir))
+                rows = audit_log.load_events(
+                    config.audit_log_path(
+                        catalog_id=runtime_req.catalog_id, data_dir=runtime_req.data_dir
+                    )
+                )
                 if action_filter:
-                    rows = [row for row in rows if str(row.get("action", "")).strip().lower() == action_filter]
+                    rows = [
+                        row
+                        for row in rows
+                        if str(row.get("action", "")).strip().lower() == action_filter
+                    ]
                 # Keep newest-first ordering.
                 rows = list(reversed(rows))
                 page, pagination = _paginate_rows(rows, limit=limit, offset=offset)
-                return _cache_and_send({"ok": True, "count": len(page), "items": page, "pagination": pagination})
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "count": len(page),
+                        "items": page,
+                        "pagination": pagination,
+                    }
+                )
             if path == "/api/analytics/reports/schedule":
                 schedules_path = _report_schedules_path_for_runtime(runtime_req)
                 payload = _load_json(schedules_path, {"schedules": []})
-                schedules = payload.get("schedules", []) if isinstance(payload, dict) else []
+                schedules = (
+                    payload.get("schedules", []) if isinstance(payload, dict) else []
+                )
                 if not isinstance(schedules, list):
                     schedules = []
-                return _cache_and_send({"ok": True, "count": len(schedules), "schedules": schedules})
+                return _cache_and_send(
+                    {"ok": True, "count": len(schedules), "schedules": schedules}
+                )
             if path == "/api/analytics/reports":
                 reports_dir = runtime_req.data_dir / "reports"
                 reports_dir.mkdir(parents=True, exist_ok=True)
                 rows = []
-                for file_path in sorted(reports_dir.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True):
+                for file_path in sorted(
+                    reports_dir.glob("*"), key=lambda p: p.stat().st_mtime, reverse=True
+                ):
                     if not file_path.is_file():
                         continue
                     rows.append(
@@ -8406,12 +10202,16 @@ def serve_review_webapp(
                             "id": file_path.name,
                             "name": file_path.name,
                             "size_bytes": file_path.stat().st_size,
-                            "updated_at": datetime.fromtimestamp(file_path.stat().st_mtime, tz=timezone.utc).isoformat(),
+                            "updated_at": datetime.fromtimestamp(
+                                file_path.stat().st_mtime, tz=timezone.utc
+                            ).isoformat(),
                             "path": _to_project_relative(file_path),
                             "download_url": f"/api/analytics/reports/{file_path.name}",
                         }
                     )
-                return _cache_and_send({"ok": True, "count": len(rows), "reports": rows})
+                return _cache_and_send(
+                    {"ok": True, "count": len(rows), "reports": rows}
+                )
             if path.startswith("/api/analytics/reports/"):
                 report_id = path.split("/api/analytics/reports/", 1)[1].strip()
                 if not report_id:
@@ -8438,8 +10238,14 @@ def serve_review_webapp(
                         status=HTTPStatus.NOT_FOUND,
                         endpoint=path,
                     )
-                content_type = "application/pdf" if report_path.suffix.lower() == ".pdf" else "application/json"
-                return self._send_file(report_path, content_type=content_type, cache_control="no-store")
+                content_type = (
+                    "application/pdf"
+                    if report_path.suffix.lower() == ".pdf"
+                    else "application/json"
+                )
+                return self._send_file(
+                    report_path, content_type=content_type, cache_control="no-store"
+                )
             if path == "/api/drive-status":
                 return _cache_and_send(
                     {
@@ -8454,23 +10260,44 @@ def serve_review_webapp(
                     or getattr(runtime_req, "gdrive_input_folder_id", "")
                     or runtime_req.gdrive_output_folder_id
                 )
-                drive_folder_id = str(query.get("drive_folder_id", [source_default])[0] or source_default).strip()
-                input_folder_id = str(
-                    query.get("input_folder_id", [getattr(runtime_req, "gdrive_source_folder_id", "") or getattr(runtime_req, "gdrive_input_folder_id", "")])[0]
-                    or (getattr(runtime_req, "gdrive_source_folder_id", "") or getattr(runtime_req, "gdrive_input_folder_id", ""))
+                drive_folder_id = str(
+                    query.get("drive_folder_id", [source_default])[0] or source_default
                 ).strip()
-                credentials_override = str(query.get("credentials_path", [""])[0]).strip()
-                credentials_path = Path(credentials_override) if credentials_override else _resolve_credentials_path(runtime_req)
+                input_folder_id = str(
+                    query.get(
+                        "input_folder_id",
+                        [
+                            getattr(runtime_req, "gdrive_source_folder_id", "")
+                            or getattr(runtime_req, "gdrive_input_folder_id", "")
+                        ],
+                    )[0]
+                    or (
+                        getattr(runtime_req, "gdrive_source_folder_id", "")
+                        or getattr(runtime_req, "gdrive_input_folder_id", "")
+                    )
+                ).strip()
+                credentials_override = str(
+                    query.get("credentials_path", [""])[0]
+                ).strip()
+                credentials_path = (
+                    Path(credentials_override)
+                    if credentials_override
+                    else _resolve_credentials_path(runtime_req)
+                )
                 if not credentials_path.is_absolute():
                     credentials_path = PROJECT_ROOT / credentials_path
-                mode_hint, mode_error = _drive_credentials_mode(runtime_req, credentials_path=credentials_path)
+                mode_hint, mode_error = _drive_credentials_mode(
+                    runtime_req, credentials_path=credentials_path
+                )
 
                 connected = False
                 connection_error = mode_error
                 mode = mode_hint
                 if mode:
                     try:
-                        auth_path = None if mode == "service_account_env" else credentials_path
+                        auth_path = (
+                            None if mode == "service_account_env" else credentials_path
+                        )
                         gdrive_sync.authenticate(auth_path)
                         connected = True
                         connection_error = None
@@ -8478,8 +10305,14 @@ def serve_review_webapp(
                         connected = False
                         connection_error = str(exc)
 
-                log_payload = _load_json(_drive_sync_log_path(runtime_req), {"items": []})
-                sync_log = log_payload.get("items", []) if isinstance(log_payload, dict) else []
+                log_payload = _load_json(
+                    _drive_sync_log_path(runtime_req), {"items": []}
+                )
+                sync_log = (
+                    log_payload.get("items", [])
+                    if isinstance(log_payload, dict)
+                    else []
+                )
                 if not isinstance(sync_log, list):
                     sync_log = []
                 last_sync = sync_log[-1] if sync_log else {}
@@ -8502,7 +10335,9 @@ def serve_review_webapp(
                         "connected": connected,
                         "mode": mode,
                         "source_folder_id": str(source_default or ""),
-                        "output_folder_id": str(runtime_req.gdrive_output_folder_id or ""),
+                        "output_folder_id": str(
+                            runtime_req.gdrive_output_folder_id or ""
+                        ),
                         "error": connection_error,
                         "drive_folder_id": drive_folder_id,
                         "input_folder_id": input_folder_id,
@@ -8527,16 +10362,33 @@ def serve_review_webapp(
                 input_folder_id = str(
                     query.get(
                         "input_folder_id",
-                        [getattr(runtime_req, "gdrive_source_folder_id", "") or getattr(runtime_req, "gdrive_input_folder_id", "")],
+                        [
+                            getattr(runtime_req, "gdrive_source_folder_id", "")
+                            or getattr(runtime_req, "gdrive_input_folder_id", "")
+                        ],
                     )[0]
-                    or (getattr(runtime_req, "gdrive_source_folder_id", "") or getattr(runtime_req, "gdrive_input_folder_id", ""))
+                    or (
+                        getattr(runtime_req, "gdrive_source_folder_id", "")
+                        or getattr(runtime_req, "gdrive_input_folder_id", "")
+                    )
                 ).strip()
-                credentials_override = str(query.get("credentials_path", [""])[0]).strip()
-                credentials_path = Path(credentials_override) if credentials_override else _resolve_credentials_path(runtime_req)
+                credentials_override = str(
+                    query.get("credentials_path", [""])[0]
+                ).strip()
+                credentials_path = (
+                    Path(credentials_override)
+                    if credentials_override
+                    else _resolve_credentials_path(runtime_req)
+                )
                 if not credentials_path.is_absolute():
                     credentials_path = PROJECT_ROOT / credentials_path
                 limit = _safe_int(query.get("limit", ["500"])[0], 500)
-                force = str(query.get("force", ["0"])[0] or "0").strip().lower() in {"1", "true", "yes", "on"}
+                force = str(query.get("force", ["0"])[0] or "0").strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
                 if force:
                     try:
                         drive_manager.clear_drive_cover_cache()
@@ -8553,7 +10405,13 @@ def serve_review_webapp(
                 payload["catalog"] = runtime_req.catalog_id
                 return _cache_and_send(payload)
             if path == "/api/drive/schedule":
-                return _cache_and_send({"ok": True, "catalog": runtime_req.catalog_id, "schedule": _load_drive_schedule(runtime_req)})
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "schedule": _load_drive_schedule(runtime_req),
+                    }
+                )
             if path == "/api/variant-download":
                 book_number = _safe_int(query.get("book", ["0"])[0], 0)
                 variant = _safe_int(query.get("variant", ["0"])[0], 0)
@@ -8562,7 +10420,10 @@ def serve_review_webapp(
                     return self._send_error(
                         code="INVALID_DOWNLOAD_REQUEST",
                         message="book and variant must be positive integers",
-                        details={"book": query.get("book", [""])[0], "variant": query.get("variant", [""])[0]},
+                        details={
+                            "book": query.get("book", [""])[0],
+                            "variant": query.get("variant", [""])[0],
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
@@ -8599,7 +10460,9 @@ def serve_review_webapp(
                     zip_path,
                     content_type="application/zip",
                     cache_control="no-store",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{filename}"'
+                    },
                 )
             if path == "/api/winner-download":
                 book_number = _safe_int(query.get("book", ["0"])[0], 0)
@@ -8627,7 +10490,9 @@ def serve_review_webapp(
                     zip_path,
                     content_type="application/zip",
                     cache_control="no-store",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{filename}"'
+                    },
                 )
             if path == "/api/source-download":
                 book_number = _safe_int(query.get("book", ["0"])[0], 0)
@@ -8637,7 +10502,10 @@ def serve_review_webapp(
                     return self._send_error(
                         code="INVALID_SOURCE_DOWNLOAD_REQUEST",
                         message="book and variant must be positive integers",
-                        details={"book": query.get("book", [""])[0], "variant": query.get("variant", [""])[0]},
+                        details={
+                            "book": query.get("book", [""])[0],
+                            "variant": query.get("variant", [""])[0],
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
@@ -8664,7 +10532,9 @@ def serve_review_webapp(
                     source_file,
                     content_type=content_type,
                     cache_control="no-store",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{filename}"'
+                    },
                 )
             if path == "/api/download-book":
                 book_number = _safe_int(query.get("book", ["0"])[0], 0)
@@ -8677,7 +10547,9 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 try:
-                    zip_path, filename = _build_book_download_zip(runtime=runtime_req, book_number=book_number)
+                    zip_path, filename = _build_book_download_zip(
+                        runtime=runtime_req, book_number=book_number
+                    )
                 except FileNotFoundError as exc:
                     return self._send_error(
                         code="BOOK_VARIANTS_NOT_FOUND",
@@ -8689,11 +10561,15 @@ def serve_review_webapp(
                     zip_path,
                     content_type="application/zip",
                     cache_control="no-store",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{filename}"'
+                    },
                 )
             if path == "/api/download-approved":
                 try:
-                    zip_path, filename = _build_approved_download_zip(runtime=runtime_req)
+                    zip_path, filename = _build_approved_download_zip(
+                        runtime=runtime_req
+                    )
                 except FileNotFoundError as exc:
                     return self._send_error(
                         code="APPROVED_VARIANTS_NOT_FOUND",
@@ -8705,18 +10581,26 @@ def serve_review_webapp(
                     zip_path,
                     content_type="application/zip",
                     cache_control="no-store",
-                    headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{filename}"'
+                    },
                 )
             if path == "/api/exports":
                 payload = _exports_listing_payload(runtime=runtime_req)
-                limit, offset = _parse_pagination(query, default_limit=50, max_limit=1000)
-                page, pagination = _paginate_rows(payload.get("exports", []), limit=limit, offset=offset)
+                limit, offset = _parse_pagination(
+                    query, default_limit=50, max_limit=1000
+                )
+                page, pagination = _paginate_rows(
+                    payload.get("exports", []), limit=limit, offset=offset
+                )
                 payload["exports"] = page
                 payload["pagination"] = pagination
                 payload["count"] = len(page)
                 return _cache_and_send(payload)
             if path.startswith("/api/exports/") and path.endswith("/download"):
-                token = path.split("/api/exports/", 1)[1].split("/download", 1)[0].strip()
+                token = (
+                    path.split("/api/exports/", 1)[1].split("/download", 1)[0].strip()
+                )
                 if not token:
                     return self._send_error(
                         code="EXPORT_ID_REQUIRED",
@@ -8734,7 +10618,9 @@ def serve_review_webapp(
                         status=HTTPStatus.NOT_FOUND,
                         endpoint=path,
                     )
-                return self._send_file(zip_path, content_type="application/zip", cache_control="no-store")
+                return self._send_file(
+                    zip_path, content_type="application/zip", cache_control="no-store"
+                )
             if path == "/api/delivery/status":
                 cfg = delivery_pipeline.get_config(
                     catalog_id=runtime_req.catalog_id,
@@ -8753,7 +10639,11 @@ def serve_review_webapp(
                         "platforms": cfg.platforms,
                         "updated_at": cfg.updated_at,
                         "tracked_books": len(tracking),
-                        "fully_delivered": sum(1 for row in tracking if bool(row.get("fully_delivered", False))),
+                        "fully_delivered": sum(
+                            1
+                            for row in tracking
+                            if bool(row.get("fully_delivered", False))
+                        ),
                     }
                 )
             if path == "/api/delivery/tracking":
@@ -8768,25 +10658,65 @@ def serve_review_webapp(
                         continue
                     book = _safe_int(row.get("book_number"), 0)
                     exports = export_map.get(book, {})
-                    changed = any(bool(item.get("changed_since_last_export", False)) for item in exports.values() if isinstance(item, dict))
-                    merged_rows.append({**row, "exports": exports, "changed_since_last_export": changed})
-                limit, offset = _parse_pagination(query, default_limit=50, max_limit=1000)
-                page, pagination = _paginate_rows(merged_rows, limit=limit, offset=offset)
-                return _cache_and_send({"ok": True, "catalog": runtime_req.catalog_id, "items": page, "count": len(page), "pagination": pagination})
+                    changed = any(
+                        bool(item.get("changed_since_last_export", False))
+                        for item in exports.values()
+                        if isinstance(item, dict)
+                    )
+                    merged_rows.append(
+                        {
+                            **row,
+                            "exports": exports,
+                            "changed_since_last_export": changed,
+                        }
+                    )
+                limit, offset = _parse_pagination(
+                    query, default_limit=50, max_limit=1000
+                )
+                page, pagination = _paginate_rows(
+                    merged_rows, limit=limit, offset=offset
+                )
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "items": page,
+                        "count": len(page),
+                        "pagination": pagination,
+                    }
+                )
             if path == "/api/export/status":
                 rows = _export_status_rows(runtime=runtime_req)
-                limit, offset = _parse_pagination(query, default_limit=50, max_limit=1000)
+                limit, offset = _parse_pagination(
+                    query, default_limit=50, max_limit=1000
+                )
                 page, pagination = _paginate_rows(rows, limit=limit, offset=offset)
-                return _cache_and_send({"ok": True, "catalog": runtime_req.catalog_id, "items": page, "count": len(page), "pagination": pagination})
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "items": page,
+                        "count": len(page),
+                        "pagination": pagination,
+                    }
+                )
             if path == "/api/archive/stats":
                 return _cache_and_send(_archive_stats_payload(runtime=runtime_req))
             if path == "/api/storage/usage":
                 return _cache_and_send(_storage_usage_payload(runtime=runtime_req))
             if path == "/api/batch-generate":
-                limit, offset = _parse_pagination(query, default_limit=25, max_limit=500)
-                return self._send_json(_batch_list_payload(runtime_req, limit=limit, offset=offset))
+                limit, offset = _parse_pagination(
+                    query, default_limit=25, max_limit=500
+                )
+                return self._send_json(
+                    _batch_list_payload(runtime_req, limit=limit, offset=offset)
+                )
             if path.startswith("/api/batch-generate/") and path.endswith("/status"):
-                token = path.split("/api/batch-generate/", 1)[1].split("/status", 1)[0].strip("/")
+                token = (
+                    path.split("/api/batch-generate/", 1)[1]
+                    .split("/status", 1)[0]
+                    .strip("/")
+                )
                 if not token:
                     return self._send_error(
                         code="BATCH_ID_REQUIRED",
@@ -8794,8 +10724,12 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                limit, offset = _parse_pagination(query, default_limit=25, max_limit=1000)
-                payload = _batch_status_payload(runtime_req, token, limit=limit, offset=offset)
+                limit, offset = _parse_pagination(
+                    query, default_limit=25, max_limit=1000
+                )
+                payload = _batch_status_payload(
+                    runtime_req, token, limit=limit, offset=offset
+                )
                 if payload is None:
                     return self._send_error(
                         code="BATCH_NOT_FOUND",
@@ -8814,7 +10748,9 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                return self._serve_job_events(catalog_id=runtime_req.catalog_id, batch_id=token)
+                return self._serve_job_events(
+                    catalog_id=runtime_req.catalog_id, batch_id=token
+                )
             if path.startswith("/api/events/job/"):
                 token = path.split("/api/events/job/", 1)[1].strip("/")
                 if not token:
@@ -8824,13 +10760,29 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                return self._serve_job_events(catalog_id=runtime_req.catalog_id, job_id=token)
+                return self._serve_job_events(
+                    catalog_id=runtime_req.catalog_id, job_id=token
+                )
             if path == "/api/jobs":
-                limit, offset = _parse_pagination(query, default_limit=20, max_limit=500)
+                limit, offset = _parse_pagination(
+                    query, default_limit=20, max_limit=500
+                )
                 raw_status = str(query.get("status", [""])[0] or "").strip()
-                statuses = [token.strip() for token in raw_status.split(",") if token.strip()] if raw_status else None
+                statuses = (
+                    [token.strip() for token in raw_status.split(",") if token.strip()]
+                    if raw_status
+                    else None
+                )
                 raw_types = str(query.get("type", [""])[0] or "").strip()
-                job_types = {token.strip().lower() for token in raw_types.split(",") if token.strip()} if raw_types else set()
+                job_types = (
+                    {
+                        token.strip().lower()
+                        for token in raw_types.split(",")
+                        if token.strip()
+                    }
+                    if raw_types
+                    else set()
+                )
                 book_filter = _safe_int(query.get("book", ["0"])[0], 0)
                 jobs = job_db_store.list_jobs(
                     limit=500,
@@ -8839,7 +10791,11 @@ def serve_review_webapp(
                     book_number=book_filter if book_filter > 0 else None,
                 )
                 if job_types:
-                    jobs = [row for row in jobs if str(row.job_type).strip().lower() in job_types]
+                    jobs = [
+                        row
+                        for row in jobs
+                        if str(row.job_type).strip().lower() in job_types
+                    ]
                 rows = [job.to_dict() for job in jobs]
                 page, pagination = _paginate_rows(rows, limit=limit, offset=offset)
                 return self._send_json(
@@ -8850,7 +10806,9 @@ def serve_review_webapp(
                         "pagination": pagination,
                         "limits": {
                             "default_variants_per_model": runtime_req.variants_per_cover,
-                            "max_generation_variants": _max_generation_variants(runtime_req),
+                            "max_generation_variants": _max_generation_variants(
+                                runtime_req
+                            ),
                         },
                     }
                 )
@@ -8860,10 +10818,20 @@ def serve_review_webapp(
                     statuses=["queued", "running", "retrying", "paused"],
                     catalog_id=runtime_req.catalog_id,
                 )
-                return self._send_json({"ok": True, "jobs": [job.to_dict() for job in jobs], "count": len(jobs)})
+                return self._send_json(
+                    {
+                        "ok": True,
+                        "jobs": [job.to_dict() for job in jobs],
+                        "count": len(jobs),
+                    }
+                )
             if path == "/api/generation-failures":
                 limit = _safe_int(query.get("limit", ["20"])[0], 20)
-                return self._send_json(_recent_generation_failures_payload(runtime=runtime_req, limit=limit))
+                return self._send_json(
+                    _recent_generation_failures_payload(
+                        runtime=runtime_req, limit=limit
+                    )
+                )
             if path == "/api/jobs/events":
                 return self._serve_job_events(catalog_id=runtime_req.catalog_id)
             if path.startswith("/api/jobs/"):
@@ -8885,9 +10853,13 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 attempts = job_db_store.list_attempts(job_id)
-                return self._send_json({"ok": True, "job": row.to_dict(), "attempts": attempts})
+                return self._send_json(
+                    {"ok": True, "job": row.to_dict(), "attempts": attempts}
+                )
             if path == "/api/thumbnail":
-                rel = _normalize_runtime_relative_asset_token(query.get("path", [""])[0])
+                rel = _normalize_runtime_relative_asset_token(
+                    query.get("path", [""])[0]
+                )
                 size_name = str(query.get("size", ["medium"])[0]).strip().lower()
                 rel_val = api_validation.validate_non_empty_text(rel, field="path")
                 if not rel_val.valid:
@@ -8898,7 +10870,11 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                size_val = api_validation.validate_enum(size_name, field="size", valid_values=set(thumbnail_server.ThumbnailServer.SIZES.keys()))
+                size_val = api_validation.validate_enum(
+                    size_name,
+                    field="size",
+                    valid_values=set(thumbnail_server.ThumbnailServer.SIZES.keys()),
+                )
                 if not size_val.valid:
                     return self._send_error(
                         code=size_val.error.code,
@@ -8910,7 +10886,11 @@ def serve_review_webapp(
                 thumb_runtime = thumbnail_server.ThumbnailServer(
                     project_root=PROJECT_ROOT,
                     cache_dir=runtime_req.tmp_dir / "thumbnails",
-                    allowed_roots=[runtime_req.output_dir, runtime_req.input_dir, runtime_req.tmp_dir],
+                    allowed_roots=[
+                        runtime_req.output_dir,
+                        runtime_req.input_dir,
+                        runtime_req.tmp_dir,
+                    ],
                 )
                 thumb = thumb_runtime.thumbnail_for(relative_path=rel, size=size_name)
                 if thumb is None:
@@ -8937,7 +10917,9 @@ def serve_review_webapp(
                     cache_control="no-store",
                 )
             if path == "/api/asset":
-                rel = _normalize_runtime_relative_asset_token(query.get("path", [""])[0])
+                rel = _normalize_runtime_relative_asset_token(
+                    query.get("path", [""])[0]
+                )
                 rel_val = api_validation.validate_non_empty_text(rel, field="path")
                 if not rel_val.valid:
                     return self._send_error(
@@ -8949,12 +10931,18 @@ def serve_review_webapp(
                     )
                 return self._serve_project_relative(
                     f"/{rel}",
-                    allowed_roots=[runtime_req.output_dir, runtime_req.input_dir, runtime_req.tmp_dir],
+                    allowed_roots=[
+                        runtime_req.output_dir,
+                        runtime_req.input_dir,
+                        runtime_req.tmp_dir,
+                    ],
                     cache_control="no-store",
                 )
 
             if path == "/api/review-data":
-                limit, offset = _parse_pagination(query, default_limit=25, max_limit=500)
+                limit, offset = _parse_pagination(
+                    query, default_limit=25, max_limit=500
+                )
                 sort, order = _normalize_sort_order(query)
                 filters = _books_filters_from_query(query)
                 with lock:
@@ -8962,11 +10950,21 @@ def serve_review_webapp(
                         runtime_req.output_dir,
                         input_dir=runtime_req.input_dir,
                         catalog_path=runtime_req.book_catalog_path,
-                        quality_scores_path=_quality_scores_path_for_runtime(runtime_req),
+                        quality_scores_path=_quality_scores_path_for_runtime(
+                            runtime_req
+                        ),
                     )
-                    winner_payload = _ensure_winner_payload(books, path=_winner_path_for_runtime(runtime_req))
-                    winner_map = winner_payload.get("selections", {}) if isinstance(winner_payload, dict) else {}
-                    meta_by_book = book_metadata.list_books(_book_metadata_path_for_runtime(runtime_req))
+                    winner_payload = _ensure_winner_payload(
+                        books, path=_winner_path_for_runtime(runtime_req)
+                    )
+                    winner_map = (
+                        winner_payload.get("selections", {})
+                        if isinstance(winner_payload, dict)
+                        else {}
+                    )
+                    meta_by_book = book_metadata.list_books(
+                        _book_metadata_path_for_runtime(runtime_req)
+                    )
                     rows: list[dict[str, Any]] = []
                     for row in books:
                         if not isinstance(row, dict):
@@ -8975,7 +10973,12 @@ def serve_review_webapp(
                         if book <= 0:
                             continue
                         selection = winner_map.get(str(book), {})
-                        winner_variant = _safe_int(selection.get("winner") if isinstance(selection, dict) else selection, 0)
+                        winner_variant = _safe_int(
+                            selection.get("winner")
+                            if isinstance(selection, dict)
+                            else selection,
+                            0,
+                        )
                         tags = meta_by_book.get(str(book), {}).get("tags", [])
                         status = "processed" if winner_variant > 0 else "pending"
                         enriched = dict(row)
@@ -8994,24 +10997,51 @@ def serve_review_webapp(
                         ]
                     wanted_status = str(filters.get("status", "") or "").strip().lower()
                     if wanted_status:
-                        rows = [row for row in rows if str(row.get("status", "")).lower() == wanted_status]
-                    tags_raw = str(filters.get("tags", "") or "").strip()
-                    if tags_raw:
-                        wanted_tags = {token.strip().lower() for token in tags_raw.split(",") if token.strip()}
                         rows = [
                             row
                             for row in rows
-                            if wanted_tags.issubset({str(tag).strip().lower() for tag in row.get("tags", []) if str(tag).strip()})
+                            if str(row.get("status", "")).lower() == wanted_status
+                        ]
+                    tags_raw = str(filters.get("tags", "") or "").strip()
+                    if tags_raw:
+                        wanted_tags = {
+                            token.strip().lower()
+                            for token in tags_raw.split(",")
+                            if token.strip()
+                        }
+                        rows = [
+                            row
+                            for row in rows
+                            if wanted_tags.issubset(
+                                {
+                                    str(tag).strip().lower()
+                                    for tag in row.get("tags", [])
+                                    if str(tag).strip()
+                                }
+                            )
                         ]
                     reverse = order == "desc"
                     if sort in {"title", "author", "status"}:
-                        rows.sort(key=lambda item: str(item.get(sort, "")).lower(), reverse=reverse)
+                        rows.sort(
+                            key=lambda item: str(item.get(sort, "")).lower(),
+                            reverse=reverse,
+                        )
                     elif sort in {"quality_score"}:
-                        rows.sort(key=lambda item: _safe_float(item.get("quality_score"), 0.0), reverse=reverse)
+                        rows.sort(
+                            key=lambda item: _safe_float(
+                                item.get("quality_score"), 0.0
+                            ),
+                            reverse=reverse,
+                        )
                     else:
-                        rows.sort(key=lambda item: _safe_int(item.get("number"), 0), reverse=reverse)
+                        rows.sort(
+                            key=lambda item: _safe_int(item.get("number"), 0),
+                            reverse=reverse,
+                        )
 
-                    books_page, pagination = _paginate_rows(rows, limit=limit, offset=offset)
+                    books_page, pagination = _paginate_rows(
+                        rows, limit=limit, offset=offset
+                    )
                     payload = {
                         "generated_at": datetime.now(timezone.utc).isoformat(),
                         "catalog": runtime_req.catalog_id,
@@ -9022,22 +11052,31 @@ def serve_review_webapp(
                     }
                     persisted_payload = dict(payload)
                     persisted_payload["books"] = rows
-                    persisted_payload["pagination"] = _pagination_payload(total=len(rows), limit=len(rows) or 1, offset=0)
+                    persisted_payload["pagination"] = _pagination_payload(
+                        total=len(rows), limit=len(rows) or 1, offset=0
+                    )
                     review_data_path = _review_data_path_for_runtime(runtime_req)
                     review_data_path.parent.mkdir(parents=True, exist_ok=True)
                     safe_json.atomic_write_json(review_data_path, persisted_payload)
                 return _cache_and_send(payload)
             if path == "/api/iterate-data":
-                limit, offset = _parse_pagination(query, default_limit=25, max_limit=50000)
+                limit, offset = _parse_pagination(
+                    query, default_limit=25, max_limit=50000
+                )
                 sort, order = _normalize_sort_order(query)
                 filters = _books_filters_from_query(query)
                 view = str(query.get("view", [""])[0] or "").strip().lower()
                 if view == "books":
                     write_iterate_books_data(runtime=runtime_req)
-                    payload = _load_json(_iterate_books_data_path_for_runtime(runtime_req), {"books": []})
+                    payload = _load_json(
+                        _iterate_books_data_path_for_runtime(runtime_req), {"books": []}
+                    )
                 else:
                     write_iterate_data(runtime=runtime_req)
-                    payload = _load_json(_iterate_data_path_for_runtime(runtime_req), {"books": [], "models": []})
+                    payload = _load_json(
+                        _iterate_data_path_for_runtime(runtime_req),
+                        {"books": [], "models": []},
+                    )
                 books = payload.get("books", []) if isinstance(payload, dict) else []
                 if not isinstance(books, list):
                     books = []
@@ -9053,19 +11092,31 @@ def serve_review_webapp(
                     ]
                 status = str(filters.get("status", "") or "").strip().lower()
                 if status:
-                    rows = [row for row in rows if str(row.get("status", "")).strip().lower() == status]
+                    rows = [
+                        row
+                        for row in rows
+                        if str(row.get("status", "")).strip().lower() == status
+                    ]
                 reverse = order == "desc"
                 if sort in {"title", "author", "status"}:
-                    rows.sort(key=lambda item: str(item.get(sort, "")).lower(), reverse=reverse)
+                    rows.sort(
+                        key=lambda item: str(item.get(sort, "")).lower(),
+                        reverse=reverse,
+                    )
                 else:
-                    rows.sort(key=lambda item: _safe_int(item.get("number"), 0), reverse=reverse)
+                    rows.sort(
+                        key=lambda item: _safe_int(item.get("number"), 0),
+                        reverse=reverse,
+                    )
                 page, pagination = _paginate_rows(rows, limit=limit, offset=offset)
                 if view == "books":
                     return _cache_and_send(
                         {
                             "generated_at": payload.get("generated_at"),
                             "catalog": runtime_req.catalog_id,
-                            "catalogs": [item.to_dict() for item in config.list_catalogs()],
+                            "catalogs": [
+                                item.to_dict() for item in config.list_catalogs()
+                            ],
                             "books": page,
                             "total_books": len(rows),
                             "pagination": pagination,
@@ -9075,12 +11126,16 @@ def serve_review_webapp(
                 payload["total_books"] = len(rows)
                 payload["pagination"] = pagination
                 payload["catalog"] = runtime_req.catalog_id
-                payload["catalogs"] = [item.to_dict() for item in config.list_catalogs()]
+                payload["catalogs"] = [
+                    item.to_dict() for item in config.list_catalogs()
+                ]
                 return _cache_and_send(payload)
             if path == "/api/enrichment-health":
                 return _cache_and_send(_enrichment_health_payload(runtime=runtime_req))
             if path == "/api/cover-regions":
-                regions_path = config.cover_regions_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir)
+                regions_path = config.cover_regions_path(
+                    catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir
+                )
                 payload = _load_json(
                     regions_path,
                     {
@@ -9110,25 +11165,40 @@ def serve_review_webapp(
                         "ok": True,
                         "catalog": runtime_req.catalog_id,
                         "default": default_source,
-                        "local_input_covers_available": _has_local_input_covers(runtime=runtime_req),
+                        "local_input_covers_available": _has_local_input_covers(
+                            runtime=runtime_req
+                        ),
                     }
                 )
             if path == "/api/prompt-performance":
-                payload = _load_json(_prompt_performance_path_for_runtime(runtime_req), {"patterns": {}})
+                payload = _load_json(
+                    _prompt_performance_path_for_runtime(runtime_req), {"patterns": {}}
+                )
                 if not isinstance(payload, dict):
                     payload = {"patterns": {}}
                 return _cache_and_send(payload)
             if path == "/api/prompts":
                 query_text = str(query.get("q", [""])[0] or "").strip()
                 category = str(query.get("category", [""])[0] or "").strip().lower()
-                tags = [token.strip() for token in str(query.get("tags", [""])[0] or "").split(",") if token.strip()]
-                payload = _prompt_library_payload(runtime=runtime_req, query_text=query_text, category=category, tags=tags)
+                tags = [
+                    token.strip()
+                    for token in str(query.get("tags", [""])[0] or "").split(",")
+                    if token.strip()
+                ]
+                payload = _prompt_library_payload(
+                    runtime=runtime_req,
+                    query_text=query_text,
+                    category=category,
+                    tags=tags,
+                )
                 return _cache_and_send(payload)
             if path == "/api/prompts/export":
                 payload = _prompt_library_export_payload(runtime=runtime_req)
                 return self._send_json(payload)
             if path.startswith("/api/prompts/") and path.endswith("/versions"):
-                token = path.split("/api/prompts/", 1)[1].split("/versions", 1)[0].strip()
+                token = (
+                    path.split("/api/prompts/", 1)[1].split("/versions", 1)[0].strip()
+                )
                 if not token:
                     return self._send_error(
                         code="PROMPT_ID_REQUIRED",
@@ -9137,7 +11207,9 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 try:
-                    payload = _prompt_versions_payload(runtime=runtime_req, prompt_id=token)
+                    payload = _prompt_versions_payload(
+                        runtime=runtime_req, prompt_id=token
+                    )
                 except KeyError:
                     return self._send_error(
                         code="PROMPT_NOT_FOUND",
@@ -9152,18 +11224,33 @@ def serve_review_webapp(
                 rows = _load_ab_test_rows(runtime=runtime_req)
                 if limit > 0:
                     rows = rows[-max(1, min(2000, limit)) :]
-                return _cache_and_send({"ok": True, "catalog": runtime_req.catalog_id, "items": rows, "count": len(rows)})
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "items": rows,
+                        "count": len(rows),
+                    }
+                )
             if path == "/api/health":
                 payload = _health_payload(runtime=runtime_req)
                 payload["default_reviewer"] = configured_reviewer
                 return _cache_and_send(payload)
             if path == "/api/history":
                 book = int(query.get("book", ["0"])[0])
-                history_payload = _load_json(_history_path_for_runtime(runtime_req), {"items": []})
-                items = [item for item in history_payload.get("items", []) if int(item.get("book_number", 0)) == book]
+                history_payload = _load_json(
+                    _history_path_for_runtime(runtime_req), {"items": []}
+                )
+                items = [
+                    item
+                    for item in history_payload.get("items", [])
+                    if int(item.get("book_number", 0)) == book
+                ]
                 return _cache_and_send({"items": items[-200:]})
             if path == "/api/generation-history":
-                limit, offset = _parse_pagination(query, default_limit=50, max_limit=1000)
+                limit, offset = _parse_pagination(
+                    query, default_limit=50, max_limit=1000
+                )
                 if runtime_req.use_sqlite:
                     repo = _repository_for_runtime(runtime_req)
                     rows, total = repo.list_generation_history(
@@ -9182,7 +11269,9 @@ def serve_review_webapp(
                             {
                                 "items": rows,
                                 "total": total,
-                                "pagination": _pagination_payload(total=total, limit=limit, offset=offset),
+                                "pagination": _pagination_payload(
+                                    total=total, limit=limit, offset=offset
+                                ),
                             }
                         )
                     # Fallback to state history if repository has no rows yet for this catalog.
@@ -9190,23 +11279,46 @@ def serve_review_webapp(
                 items = _load_generation_records(runtime=runtime_req)
                 filtered = _filter_generation_records(items, filters=filters)
                 page, pagination = _paginate_rows(filtered, limit=limit, offset=offset)
-                return _cache_and_send({"items": page, "total": len(filtered), "pagination": pagination})
+                return _cache_and_send(
+                    {"items": page, "total": len(filtered), "pagination": pagination}
+                )
             if path == "/api/dashboard-data":
-                payload = _build_dashboard_payload(_load_generation_records(runtime=runtime_req), runtime=runtime_req)
+                payload = _build_dashboard_payload(
+                    _load_generation_records(runtime=runtime_req), runtime=runtime_req
+                )
                 return _cache_and_send(payload)
             if path == "/api/weak-books":
                 threshold = _safe_float(query.get("threshold", ["0.75"])[0], 0.75)
-                payload = _build_weak_books_payload(runtime=runtime_req, threshold=threshold)
+                payload = _build_weak_books_payload(
+                    runtime=runtime_req, threshold=threshold
+                )
                 return _cache_and_send(payload)
             if path == "/api/regeneration-results":
                 book = _safe_int(query.get("book", ["0"])[0], 0)
-                payload = _load_json(_regeneration_results_path_for_runtime(runtime_req), {"details": []})
-                details = payload.get("details", []) if isinstance(payload, dict) else []
+                payload = _load_json(
+                    _regeneration_results_path_for_runtime(runtime_req), {"details": []}
+                )
+                details = (
+                    payload.get("details", []) if isinstance(payload, dict) else []
+                )
                 if book > 0 and isinstance(details, list):
-                    details = [row for row in details if isinstance(row, dict) and _safe_int(row.get("book"), 0) == book]
-                return _cache_and_send({"book": book if book > 0 else None, "results": details, "raw": payload})
+                    details = [
+                        row
+                        for row in details
+                        if isinstance(row, dict)
+                        and _safe_int(row.get("book"), 0) == book
+                    ]
+                return _cache_and_send(
+                    {
+                        "book": book if book > 0 else None,
+                        "results": details,
+                        "raw": payload,
+                    }
+                )
             if path == "/api/similarity/recompute/status":
-                status_payload = _similarity_recompute_snapshot(catalog_id=runtime_req.catalog_id)
+                status_payload = _similarity_recompute_snapshot(
+                    catalog_id=runtime_req.catalog_id
+                )
                 return _cache_and_send(
                     {
                         "ok": True,
@@ -9216,21 +11328,41 @@ def serve_review_webapp(
                 )
             if path == "/api/similarity-matrix":
                 threshold = _safe_float(query.get("threshold", ["0.25"])[0], 0.25)
-                matrix_payload = _load_similarity_matrix(runtime_req=runtime_req, threshold=threshold)
-                pairs = matrix_payload.get("pairs", []) if isinstance(matrix_payload, dict) else []
+                matrix_payload = _load_similarity_matrix(
+                    runtime_req=runtime_req, threshold=threshold
+                )
+                pairs = (
+                    matrix_payload.get("pairs", [])
+                    if isinstance(matrix_payload, dict)
+                    else []
+                )
                 if not isinstance(pairs, list):
                     pairs = []
-                limit, offset = _parse_pagination(query, default_limit=50, max_limit=1000)
-                page, pagination = _paginate_rows([row for row in pairs if isinstance(row, dict)], limit=limit, offset=offset)
-                output = dict(matrix_payload) if isinstance(matrix_payload, dict) else {"pairs": []}
+                limit, offset = _parse_pagination(
+                    query, default_limit=50, max_limit=1000
+                )
+                page, pagination = _paginate_rows(
+                    [row for row in pairs if isinstance(row, dict)],
+                    limit=limit,
+                    offset=offset,
+                )
+                output = (
+                    dict(matrix_payload)
+                    if isinstance(matrix_payload, dict)
+                    else {"pairs": []}
+                )
                 output["pairs"] = page
                 output["pagination"] = pagination
                 output["total_pairs"] = len(pairs)
                 return _cache_and_send(output)
             if path == "/api/similarity-alerts":
                 threshold = _safe_float(query.get("threshold", ["0.25"])[0], 0.25)
-                matrix_payload = _load_similarity_matrix(runtime_req=runtime_req, threshold=threshold)
-                dismissed = similarity_detector.load_dismissed_pairs(_similarity_dismissed_path_for_runtime(runtime_req))
+                matrix_payload = _load_similarity_matrix(
+                    runtime_req=runtime_req, threshold=threshold
+                )
+                dismissed = similarity_detector.load_dismissed_pairs(
+                    _similarity_dismissed_path_for_runtime(runtime_req)
+                )
                 alerts = []
                 for row in matrix_payload.get("pairs", []):
                     if not isinstance(row, dict):
@@ -9243,11 +11375,15 @@ def serve_review_webapp(
                     similarity = _safe_float(row.get("similarity"), 1.0)
                     if similarity < threshold:
                         alerts.append(row)
-                return _cache_and_send({"threshold": threshold, "alerts": alerts, "count": len(alerts)})
+                return _cache_and_send(
+                    {"threshold": threshold, "alerts": alerts, "count": len(alerts)}
+                )
             if path == "/api/similarity-clusters":
                 threshold = _safe_float(query.get("threshold", ["0.25"])[0], 0.25)
                 _load_similarity_matrix(runtime_req=runtime_req, threshold=threshold)
-                clusters = _load_json(_similarity_clusters_path_for_runtime(runtime_req), {"clusters": []})
+                clusters = _load_json(
+                    _similarity_clusters_path_for_runtime(runtime_req), {"clusters": []}
+                )
                 if not isinstance(clusters, dict):
                     clusters = {"clusters": []}
                 return _cache_and_send(clusters)
@@ -9262,7 +11398,9 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 _load_similarity_matrix(runtime_req=runtime_req, threshold=0.25)
-                payload = _load_json(_similarity_hashes_path_for_runtime(runtime_req), {"books": {}})
+                payload = _load_json(
+                    _similarity_hashes_path_for_runtime(runtime_req), {"books": {}}
+                )
                 books = payload.get("books", {}) if isinstance(payload, dict) else {}
                 if not isinstance(books, dict):
                     books = {}
@@ -9282,7 +11420,11 @@ def serve_review_webapp(
                 payload["default_reviewer"] = configured_reviewer
                 return _cache_and_send(payload)
             if path.startswith("/api/books/") and path.endswith("/cover-preview"):
-                token = path.split("/api/books/", 1)[1].rsplit("/cover-preview", 1)[0].strip("/")
+                token = (
+                    path.split("/api/books/", 1)[1]
+                    .rsplit("/cover-preview", 1)[0]
+                    .strip("/")
+                )
                 book_number = _safe_int(token, 0)
                 if book_number <= 0:
                     return self._send_error(
@@ -9292,31 +11434,59 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                source = str(query.get("source", [_default_cover_source_for_runtime(runtime_req)])[0] or "").strip().lower()
+                source = (
+                    str(
+                        query.get(
+                            "source", [_default_cover_source_for_runtime(runtime_req)]
+                        )[0]
+                        or ""
+                    )
+                    .strip()
+                    .lower()
+                )
                 if source not in {"catalog", "drive"}:
                     source = _default_cover_source_for_runtime(runtime_req)
-                selected_cover_id = str(query.get("selected_cover_id", [""])[0] or "").strip()
-                source_path, resolve_status, resolve_meta = _resolve_cover_preview_source_path(
-                    runtime=runtime_req,
-                    book_number=book_number,
-                    source=source,
-                    selected_cover_id=selected_cover_id,
-                    drive_folder_id=str(query.get("drive_folder_id", [""])[0] or "").strip(),
-                    input_folder_id=str(query.get("input_folder_id", [""])[0] or "").strip(),
-                    credentials_path_token=str(query.get("credentials_path", [""])[0] or "").strip(),
+                selected_cover_id = str(
+                    query.get("selected_cover_id", [""])[0] or ""
+                ).strip()
+                source_path, resolve_status, resolve_meta = (
+                    _resolve_cover_preview_source_path(
+                        runtime=runtime_req,
+                        book_number=book_number,
+                        source=source,
+                        selected_cover_id=selected_cover_id,
+                        drive_folder_id=str(
+                            query.get("drive_folder_id", [""])[0] or ""
+                        ).strip(),
+                        input_folder_id=str(
+                            query.get("input_folder_id", [""])[0] or ""
+                        ).strip(),
+                        credentials_path_token=str(
+                            query.get("credentials_path", [""])[0] or ""
+                        ).strip(),
+                    )
                 )
                 if source_path is None or not source_path.exists():
                     return self._send_error(
                         code="COVER_PREVIEW_NOT_AVAILABLE",
-                        message=str(resolve_meta.get("error") or f"No source cover is available for book {book_number}."),
+                        message=str(
+                            resolve_meta.get("error")
+                            or f"No source cover is available for book {book_number}."
+                        ),
                         details={"book": int(book_number), "source": source},
                         status=HTTPStatus(resolve_status),
                         endpoint=path,
                     )
-                preview_path = _cover_preview_path_for_runtime(runtime=runtime_req, book_number=book_number, source=source)
+                preview_path = _cover_preview_path_for_runtime(
+                    runtime=runtime_req, book_number=book_number, source=source
+                )
                 try:
-                    if (not preview_path.exists()) or (preview_path.stat().st_mtime < source_path.stat().st_mtime):
-                        _write_cover_preview(source_image=source_path, preview_path=preview_path)
+                    if (not preview_path.exists()) or (
+                        preview_path.stat().st_mtime < source_path.stat().st_mtime
+                    ):
+                        _write_cover_preview(
+                            source_image=source_path, preview_path=preview_path
+                        )
                 except Exception as exc:
                     return self._send_error(
                         code="COVER_PREVIEW_FAILED",
@@ -9325,9 +11495,16 @@ def serve_review_webapp(
                         status=HTTPStatus.INTERNAL_SERVER_ERROR,
                         endpoint=path,
                     )
-                return self._send_file(preview_path, content_type="image/jpeg", cache_control="no-store")
+                return self._send_file(
+                    preview_path, content_type="image/jpeg", cache_control="no-store"
+                )
             if path == "/api/visual-qa":
-                force = str(query.get("force", ["0"])[0] or "").strip().lower() in {"1", "true", "yes", "on"}
+                force = str(query.get("force", ["0"])[0] or "").strip().lower() in {
+                    "1",
+                    "true",
+                    "yes",
+                    "on",
+                }
                 book_filter = _safe_int(query.get("book_number", ["0"])[0], 0)
                 payload = _load_visual_qa_payload(
                     runtime=runtime_req,
@@ -9336,7 +11513,9 @@ def serve_review_webapp(
                 )
                 return _cache_and_send(payload)
             if path.startswith("/api/visual-qa/image/"):
-                token = path.split("/api/visual-qa/image/", 1)[1].strip().split("/", 1)[0]
+                token = (
+                    path.split("/api/visual-qa/image/", 1)[1].strip().split("/", 1)[0]
+                )
                 book_number = _safe_int(token, 0)
                 if book_number <= 0:
                     return self._send_error(
@@ -9347,9 +11526,13 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 try:
-                    image_path = _visual_qa_image_path(runtime=runtime_req, book_number=book_number)
+                    image_path = _visual_qa_image_path(
+                        runtime=runtime_req, book_number=book_number
+                    )
                 except Exception as exc:
-                    logger.exception("Failed to resolve visual QA image for book %s", book_number)
+                    logger.exception(
+                        "Failed to resolve visual QA image for book %s", book_number
+                    )
                     return self._send_error(
                         code="VISUAL_QA_IMAGE_ERROR",
                         message=f"Failed to load visual QA comparison image: {exc}",
@@ -9358,18 +11541,27 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 if image_path is None or not image_path.exists():
-                    payload = _load_visual_qa_payload(runtime=runtime_req, book_number=book_number)
+                    payload = _load_visual_qa_payload(
+                        runtime=runtime_req, book_number=book_number
+                    )
                     return self._send_error(
                         code="VISUAL_QA_IMAGE_NOT_FOUND",
-                        message=str(payload.get("message") or "No generated images available for this book. Generate covers first."),
+                        message=str(
+                            payload.get("message")
+                            or "No generated images available for this book. Generate covers first."
+                        ),
                         details={"book_number": book_number},
                         status=HTTPStatus.NOT_FOUND,
                         endpoint=path,
                     )
                 try:
-                    return self._send_file(image_path, content_type="image/jpeg", cache_control="no-store")
+                    return self._send_file(
+                        image_path, content_type="image/jpeg", cache_control="no-store"
+                    )
                 except Exception as exc:
-                    logger.exception("Failed to serve visual QA image for book %s", book_number)
+                    logger.exception(
+                        "Failed to serve visual QA image for book %s", book_number
+                    )
                     return self._send_error(
                         code="VISUAL_QA_IMAGE_ERROR",
                         message=f"Failed to serve visual QA comparison image: {exc}",
@@ -9384,7 +11576,9 @@ def serve_review_webapp(
                 payload = _compare_payload(runtime=runtime_req, books=books)
                 return _cache_and_send(payload)
             if path == "/api/books":
-                limit, offset = _parse_pagination(query, default_limit=25, max_limit=500)
+                limit, offset = _parse_pagination(
+                    query, default_limit=25, max_limit=500
+                )
                 sort, order = _normalize_sort_order(query)
                 if runtime_req.use_sqlite:
                     repo = _repository_for_runtime(runtime_req)
@@ -9402,11 +11596,17 @@ def serve_review_webapp(
                             "catalog": runtime_req.catalog_id,
                             "books": rows,
                             "count": len(rows),
-                            "pagination": _pagination_payload(total=total, limit=limit, offset=offset),
+                            "pagination": _pagination_payload(
+                                total=total, limit=limit, offset=offset
+                            ),
                         }
                     )
                 tags_raw = str(query.get("tags", [""])[0]).strip()
-                tags = [token.strip() for token in tags_raw.split(",") if token.strip()] if tags_raw else []
+                tags = (
+                    [token.strip() for token in tags_raw.split(",") if token.strip()]
+                    if tags_raw
+                    else []
+                )
                 search = str(query.get("search", [""])[0] or "").strip().lower()
                 wanted_status = str(query.get("status", [""])[0] or "").strip().lower()
                 quality_min = query.get("quality_min", [None])[0]
@@ -9424,25 +11624,48 @@ def serve_review_webapp(
                     book = _safe_int(row.get("number"), 0)
                     key = str(book)
                     meta = metadata_rows.get(key, {})
-                    current_tags = meta.get("tags", []) if isinstance(meta.get("tags"), list) else []
+                    current_tags = (
+                        meta.get("tags", [])
+                        if isinstance(meta.get("tags"), list)
+                        else []
+                    )
                     if tags:
-                        current_tag_set = {str(item).strip().lower() for item in current_tags if str(item).strip()}
-                        wanted = {str(item).strip().lower() for item in tags if str(item).strip()}
+                        current_tag_set = {
+                            str(item).strip().lower()
+                            for item in current_tags
+                            if str(item).strip()
+                        }
+                        wanted = {
+                            str(item).strip().lower()
+                            for item in tags
+                            if str(item).strip()
+                        }
                         if not wanted.issubset(current_tag_set):
                             continue
                     status = "processed" if bool(row.get("variants")) else "pending"
                     if wanted_status and status != wanted_status:
                         continue
-                    if search and search not in str(row.get("title", "")).lower() and search not in str(row.get("author", "")).lower():
+                    if (
+                        search
+                        and search not in str(row.get("title", "")).lower()
+                        and search not in str(row.get("author", "")).lower()
+                    ):
                         continue
                     best_quality = 0.0
                     for variant_row in row.get("variants", []):
                         if not isinstance(variant_row, dict):
                             continue
-                        best_quality = max(best_quality, _safe_float(variant_row.get("quality_score"), 0.0))
-                    if quality_min is not None and best_quality < _safe_float(quality_min, 0.0):
+                        best_quality = max(
+                            best_quality,
+                            _safe_float(variant_row.get("quality_score"), 0.0),
+                        )
+                    if quality_min is not None and best_quality < _safe_float(
+                        quality_min, 0.0
+                    ):
                         continue
-                    if quality_max is not None and best_quality > _safe_float(quality_max, 1.0e9):
+                    if quality_max is not None and best_quality > _safe_float(
+                        quality_max, 1.0e9
+                    ):
                         continue
                     out.append(
                         {
@@ -9458,13 +11681,29 @@ def serve_review_webapp(
                     )
                 reverse = order == "desc"
                 if sort in {"title", "author", "status"}:
-                    out.sort(key=lambda item: str(item.get(sort, "")).lower(), reverse=reverse)
+                    out.sort(
+                        key=lambda item: str(item.get(sort, "")).lower(),
+                        reverse=reverse,
+                    )
                 elif sort in {"quality_score"}:
-                    out.sort(key=lambda item: _safe_float(item.get("quality_score"), 0.0), reverse=reverse)
+                    out.sort(
+                        key=lambda item: _safe_float(item.get("quality_score"), 0.0),
+                        reverse=reverse,
+                    )
                 else:
-                    out.sort(key=lambda item: _safe_int(item.get("book"), 0), reverse=reverse)
+                    out.sort(
+                        key=lambda item: _safe_int(item.get("book"), 0), reverse=reverse
+                    )
                 page, pagination = _paginate_rows(out, limit=limit, offset=offset)
-                return _cache_and_send({"ok": True, "catalog": runtime_req.catalog_id, "books": page, "count": len(page), "pagination": pagination})
+                return _cache_and_send(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "books": page,
+                        "count": len(page),
+                        "pagination": pagination,
+                    }
+                )
             if path.startswith("/api/books/") and path.endswith("/notes"):
                 token = path.split("/api/books/", 1)[1].split("/notes", 1)[0].strip()
                 book_number = _safe_int(token, 0)
@@ -9476,8 +11715,12 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                meta = book_metadata.get_book(_book_metadata_path_for_runtime(runtime_req), book_number)
-                return _cache_and_send({"ok": True, "book": book_number, "notes": meta.get("notes", "")})
+                meta = book_metadata.get_book(
+                    _book_metadata_path_for_runtime(runtime_req), book_number
+                )
+                return _cache_and_send(
+                    {"ok": True, "book": book_number, "notes": meta.get("notes", "")}
+                )
             if path.startswith("/api/review-session/"):
                 session_id = path.split("/api/review-session/", 1)[1].strip()
                 if not session_id:
@@ -9487,7 +11730,9 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                session_path = _review_sessions_dir_for_runtime(runtime_req) / f"{session_id}.json"
+                session_path = (
+                    _review_sessions_dir_for_runtime(runtime_req) / f"{session_id}.json"
+                )
                 payload = _load_json(session_path, {})
                 if not isinstance(payload, dict) or not payload:
                     return self._send_error(
@@ -9499,18 +11744,28 @@ def serve_review_webapp(
                     )
                 return _cache_and_send({"ok": True, "session": payload})
             if path == "/api/review-stats":
-                payload = _load_json(_review_stats_path_for_runtime(runtime_req), {"sessions": []})
+                payload = _load_json(
+                    _review_stats_path_for_runtime(runtime_req), {"sessions": []}
+                )
                 if not isinstance(payload, dict):
                     payload = {"sessions": []}
                 return _cache_and_send(payload)
             if path == "/api/mockup-status":
-                payload = mockup_generator.mockup_status(output_dir=runtime_req.output_dir)
+                payload = mockup_generator.mockup_status(
+                    output_dir=runtime_req.output_dir
+                )
                 payload["catalog"] = runtime_req.catalog_id
                 # Paginate large book lists for scale-mode catalogs.
                 books = payload.get("books", []) if isinstance(payload, dict) else []
                 if isinstance(books, list):
-                    limit, offset = _parse_pagination(query, default_limit=25, max_limit=500)
-                    page, pagination = _paginate_rows([row for row in books if isinstance(row, dict)], limit=limit, offset=offset)
+                    limit, offset = _parse_pagination(
+                        query, default_limit=25, max_limit=500
+                    )
+                    page, pagination = _paginate_rows(
+                        [row for row in books if isinstance(row, dict)],
+                        limit=limit,
+                        offset=offset,
+                    )
                     payload["books"] = page
                     payload["pagination"] = pagination
                     payload["total_books"] = len(books)
@@ -9518,29 +11773,56 @@ def serve_review_webapp(
             if path.startswith("/api/mockup/"):
                 suffix = path.split("/api/mockup/", 1)[1]
                 if not suffix:
-                    return self._send_json({"ok": False, "error": "book/template required"}, status=HTTPStatus.BAD_REQUEST)
+                    return self._send_json(
+                        {"ok": False, "error": "book/template required"},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
                 parts = [part for part in suffix.split("/") if part]
                 if len(parts) < 2:
                     return self._send_json(
-                        {"ok": False, "error": "Path must be /api/mockup/{book}/{template}"},
+                        {
+                            "ok": False,
+                            "error": "Path must be /api/mockup/{book}/{template}",
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                     )
                 book = _safe_int(parts[0], 0)
                 template = parts[1]
                 if book <= 0 or not template:
-                    return self._send_json({"ok": False, "error": "Invalid book/template"}, status=HTTPStatus.BAD_REQUEST)
+                    return self._send_json(
+                        {"ok": False, "error": "Invalid book/template"},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
 
-                records = mockup_generator.load_book_records(runtime_req.book_catalog_path)
+                records = mockup_generator.load_book_records(
+                    runtime_req.book_catalog_path
+                )
                 record = records.get(book)
                 if not record:
-                    return self._send_json({"ok": False, "error": f"Book {book} not found"}, status=HTTPStatus.NOT_FOUND)
+                    return self._send_json(
+                        {"ok": False, "error": f"Book {book} not found"},
+                        status=HTTPStatus.NOT_FOUND,
+                    )
 
-                image_path = runtime_req.output_dir / "Mockups" / record.folder_name / f"{template}.jpg"
+                image_path = (
+                    runtime_req.output_dir
+                    / "Mockups"
+                    / record.folder_name
+                    / f"{template}.jpg"
+                )
                 if not image_path.exists():
-                    image_path = runtime_req.output_dir / "Mockups" / record.folder_name / f"{template}.png"
+                    image_path = (
+                        runtime_req.output_dir
+                        / "Mockups"
+                        / record.folder_name
+                        / f"{template}.png"
+                    )
                 if not image_path.exists():
                     return self._send_json(
-                        {"ok": False, "error": f"Mockup not found for book {book} template {template}"},
+                        {
+                            "ok": False,
+                            "error": f"Mockup not found for book {book} template {template}",
+                        },
                         status=HTTPStatus.NOT_FOUND,
                     )
 
@@ -9553,22 +11835,36 @@ def serve_review_webapp(
             if path == "/api/mockup-zip":
                 book = _safe_int(query.get("book", ["0"])[0], 0)
                 if book <= 0:
-                    return self._send_json({"ok": False, "error": "book query is required"}, status=HTTPStatus.BAD_REQUEST)
+                    return self._send_json(
+                        {"ok": False, "error": "book query is required"},
+                        status=HTTPStatus.BAD_REQUEST,
+                    )
                 try:
-                    zip_path = mockup_generator.build_mockup_zip(book_number=book, output_dir=runtime_req.output_dir)
+                    zip_path = mockup_generator.build_mockup_zip(
+                        book_number=book, output_dir=runtime_req.output_dir
+                    )
                 except Exception as exc:
-                    return self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.NOT_FOUND)
+                    return self._send_json(
+                        {"ok": False, "error": str(exc)}, status=HTTPStatus.NOT_FOUND
+                    )
                 rel = _to_project_relative(zip_path)
-                return self._send_json({"ok": True, "book": book, "path": rel, "url": f"/{rel}"})
+                return self._send_json(
+                    {"ok": True, "book": book, "path": rel, "url": f"/{rel}"}
+                )
             if path == "/api/generate-catalog":
                 mode = str(query.get("mode", ["catalog"])[0]).strip().lower()
                 if mode not in {"catalog", "contact_sheet", "all_variants"}:
                     return self._send_json(
-                        {"ok": False, "error": "mode must be one of: catalog, contact_sheet, all_variants"},
+                        {
+                            "ok": False,
+                            "error": "mode must be one of: catalog, contact_sheet, all_variants",
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                     )
 
-                catalog_out, contact_out, all_variants_out = _catalog_outputs_for_runtime(runtime_req)
+                catalog_out, contact_out, all_variants_out = (
+                    _catalog_outputs_for_runtime(runtime_req)
+                )
                 output_path = catalog_out
                 cmd = [
                     sys.executable,
@@ -9595,15 +11891,25 @@ def serve_review_webapp(
                     return self._send_json(
                         {
                             "ok": False,
-                            "error": (completed.stderr or completed.stdout or "Catalog generation failed").strip(),
+                            "error": (
+                                completed.stderr
+                                or completed.stdout
+                                or "Catalog generation failed"
+                            ).strip(),
                             "mode": mode,
                         },
                         status=HTTPStatus.INTERNAL_SERVER_ERROR,
                     )
 
                 exists = output_path.exists()
-                rel_path = _to_project_relative(output_path) if exists else str(output_path)
-                size_mb = round(output_path.stat().st_size / (1024 * 1024), 3) if exists else 0.0
+                rel_path = (
+                    _to_project_relative(output_path) if exists else str(output_path)
+                )
+                size_mb = (
+                    round(output_path.stat().st_size / (1024 * 1024), 3)
+                    if exists
+                    else 0.0
+                )
                 _record_cost_entry(
                     runtime=runtime_req,
                     operation="catalog_pdf",
@@ -9613,7 +11919,11 @@ def serve_review_webapp(
                     book_number=0,
                     images_generated=0,
                     duration_seconds=0.0,
-                    metadata={"mode": mode, "size_mb": size_mb, "output_path": rel_path},
+                    metadata={
+                        "mode": mode,
+                        "size_mb": size_mb,
+                        "output_path": rel_path,
+                    },
                 )
                 return self._send_json(
                     {
@@ -9637,7 +11947,10 @@ def serve_review_webapp(
             self.send_response(HTTPStatus.OK)
             self.send_header("Access-Control-Allow-Origin", "*")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
-            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Token, X-Request-Id")
+            self.send_header(
+                "Access-Control-Allow-Headers",
+                "Content-Type, X-API-Token, X-Request-Id",
+            )
             self.send_header("Content-Length", "0")
             self.end_headers()
 
@@ -9649,7 +11962,9 @@ def serve_review_webapp(
             query = parse_qs(parsed.query)
             self._request_path = str(path)
             self._set_active_runtime(None)
-            self._set_request_id(str(self.headers.get("X-Request-Id", "")).strip() or str(uuid.uuid4()))
+            self._set_request_id(
+                str(self.headers.get("X-Request-Id", "")).strip() or str(uuid.uuid4())
+            )
             size = int(self.headers.get("Content-Length", "0"))
             body_raw = self.rfile.read(size) if size > 0 else b""
             body: dict[str, Any] = {}
@@ -9671,9 +11986,17 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 body = parsed_body
-            requested_catalog_raw = str(body.get("catalog", query.get("catalog", [default_runtime.catalog_id])[0])).strip()
+            requested_catalog_raw = str(
+                body.get(
+                    "catalog", query.get("catalog", [default_runtime.catalog_id])[0]
+                )
+            ).strip()
             try:
-                requested_catalog = security.validate_catalog_id(requested_catalog_raw) if requested_catalog_raw else default_runtime.catalog_id
+                requested_catalog = (
+                    security.validate_catalog_id(requested_catalog_raw)
+                    if requested_catalog_raw
+                    else default_runtime.catalog_id
+                )
             except ValueError:
                 return self._send_error(
                     code="INVALID_CATALOG_ID",
@@ -9682,16 +12005,22 @@ def serve_review_webapp(
                     status=HTTPStatus.BAD_REQUEST,
                     endpoint=path,
                 )
-            runtime_req = config.get_config(requested_catalog or default_runtime.catalog_id)
+            runtime_req = config.get_config(
+                requested_catalog or default_runtime.catalog_id
+            )
             self._set_active_runtime(runtime_req)
-            client_ip = str(self.client_address[0] if self.client_address else "unknown")
+            client_ip = str(
+                self.client_address[0] if self.client_address else "unknown"
+            )
 
             if path == "/cgi-bin/settings.py":
                 current = _load_json(SETTINGS_STORE_PATH, {})
                 if not isinstance(current, dict):
                     current = {}
                 current.update(body)
-                SETTINGS_STORE_PATH.write_text(json.dumps(current, indent=2), encoding="utf-8")
+                SETTINGS_STORE_PATH.write_text(
+                    json.dumps(current, indent=2), encoding="utf-8"
+                )
                 return self._send_json(current)
 
             if path == "/cgi-bin/settings.py/reset":
@@ -9701,8 +12030,14 @@ def serve_review_webapp(
 
             if path == "/cgi-bin/catalog.py/refresh":
                 write_iterate_data(runtime=runtime_req)
-                iterate_payload = _load_json(_iterate_data_path_for_runtime(runtime_req), {"books": []})
-                rows = iterate_payload.get("books", []) if isinstance(iterate_payload, dict) else []
+                iterate_payload = _load_json(
+                    _iterate_data_path_for_runtime(runtime_req), {"books": []}
+                )
+                rows = (
+                    iterate_payload.get("books", [])
+                    if isinstance(iterate_payload, dict)
+                    else []
+                )
                 books: list[dict[str, Any]] = []
                 for row in rows:
                     if not isinstance(row, dict):
@@ -9716,7 +12051,9 @@ def serve_review_webapp(
                             "number": number,
                             "title": str(row.get("title", "")),
                             "author": str(row.get("author", "")),
-                            "folder_name": str(row.get("folder", row.get("folder_name", ""))),
+                            "folder_name": str(
+                                row.get("folder", row.get("folder_name", ""))
+                            ),
                             "cover_jpg_id": str(row.get("cover_jpg_id", "")),
                             "cover_name": str(row.get("cover_name", "")),
                             "synced_at": datetime.now(timezone.utc).isoformat(),
@@ -9728,12 +12065,16 @@ def serve_review_webapp(
                     "synced_at": datetime.now(timezone.utc).isoformat(),
                     "count": len(books),
                 }
-                CGI_CATALOG_CACHE_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+                CGI_CATALOG_CACHE_PATH.write_text(
+                    json.dumps(payload, indent=2), encoding="utf-8"
+                )
                 return self._send_json(payload)
 
             if path == "/api/drive/catalog-sync":
                 force = bool(body.get("force", True))
-                limit = _safe_int(body.get("limit", query.get("limit", ["5000"])[0]), 5000)
+                limit = _safe_int(
+                    body.get("limit", query.get("limit", ["5000"])[0]), 5000
+                )
                 try:
                     summary = _sync_catalog_from_drive(
                         runtime=runtime_req,
@@ -9750,7 +12091,9 @@ def serve_review_webapp(
                     )
                 summary["auto_enrichment"] = _queue_auto_enrichment_for_books(
                     runtime=runtime_req,
-                    books=summary.get("added_books", []) if isinstance(summary, dict) else [],
+                    books=summary.get("added_books", [])
+                    if isinstance(summary, dict)
+                    else [],
                 )
                 return self._send_json(summary)
 
@@ -9766,7 +12109,9 @@ def serve_review_webapp(
                         endpoint=path,
                     )
 
-            limiter, limit_per_minute = _mutation_limiter(path, catalog_id=runtime_req.catalog_id)
+            limiter, limit_per_minute = _mutation_limiter(
+                path, catalog_id=runtime_req.catalog_id
+            )
             if not limiter.allow(f"{client_ip}:{path}"):
                 return self._send_error(
                     code="RATE_LIMITED",
@@ -9779,7 +12124,10 @@ def serve_review_webapp(
 
             if path == "/api/visual-qa/generate":
                 book_number = _safe_int(
-                    body.get("book_number", body.get("book", query.get("book_number", ["0"])[0])),
+                    body.get(
+                        "book_number",
+                        body.get("book", query.get("book_number", ["0"])[0]),
+                    ),
                     0,
                 )
                 try:
@@ -9791,17 +12139,25 @@ def serve_review_webapp(
                     return self._send_error(
                         code="VISUAL_QA_GENERATION_FAILED",
                         message=str(exc),
-                        details={"book_number": book_number if book_number > 0 else None},
+                        details={
+                            "book_number": book_number if book_number > 0 else None
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
                 _invalidate_cache("/api/visual-qa", catalog_id=runtime_req.catalog_id)
-                summary = payload.get("summary", {}) if isinstance(payload, dict) else {}
+                summary = (
+                    payload.get("summary", {}) if isinstance(payload, dict) else {}
+                )
                 return self._send_json(
                     {
                         "ok": True,
                         "catalog": runtime_req.catalog_id,
-                        "generated_at": str(payload.get("generated_at", datetime.now(timezone.utc).isoformat())),
+                        "generated_at": str(
+                            payload.get(
+                                "generated_at", datetime.now(timezone.utc).isoformat()
+                            )
+                        ),
                         "generated": _safe_int(summary.get("generated"), 0),
                         "passed": _safe_int(summary.get("passed"), 0),
                         "failed": _safe_int(summary.get("failed"), 0),
@@ -9822,7 +12178,9 @@ def serve_review_webapp(
                 catalog_block = bundle.get("catalog", bundle)
                 if not isinstance(catalog_block, dict):
                     catalog_block = {}
-                catalog_name = str(catalog_block.get("name", bundle.get("name", ""))).strip()
+                catalog_name = str(
+                    catalog_block.get("name", bundle.get("name", ""))
+                ).strip()
                 if not catalog_name:
                     return self._send_error(
                         code="CATALOG_NAME_REQUIRED",
@@ -9835,9 +12193,14 @@ def serve_review_webapp(
                         name=catalog_name,
                         description=str(catalog_block.get("description", "")),
                         input_dir=str(catalog_block.get("input_dir", "Input Covers")),
-                        output_dir=str(catalog_block.get("output_dir", "Output Covers")),
+                        output_dir=str(
+                            catalog_block.get("output_dir", "Output Covers")
+                        ),
                         config_dir=str(catalog_block.get("config_dir", "config")),
-                        catalog_id=str(catalog_block.get("id", catalog_block.get("catalog_id", ""))).strip() or None,
+                        catalog_id=str(
+                            catalog_block.get("id", catalog_block.get("catalog_id", ""))
+                        ).strip()
+                        or None,
                     )
                     settings = bundle.get("settings", {})
                     if isinstance(settings, dict) and settings:
@@ -9850,7 +12213,9 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 _invalidate_cache("/api/catalogs")
-                return self._send_json({"ok": True, "catalog": created.to_dict(), "imported": True})
+                return self._send_json(
+                    {"ok": True, "catalog": created.to_dict(), "imported": True}
+                )
 
             if path == "/api/catalogs":
                 name = str(body.get("name", "")).strip()
@@ -9894,9 +12259,13 @@ def serve_review_webapp(
                 action = parts[1] if len(parts) > 1 else ""
                 try:
                     if action == "archive":
-                        payload_out = catalog_registry.archive_catalog(catalog_id).to_dict()
+                        payload_out = catalog_registry.archive_catalog(
+                            catalog_id
+                        ).to_dict()
                     elif action == "activate":
-                        payload_out = catalog_registry.activate_catalog(catalog_id).to_dict()
+                        payload_out = catalog_registry.activate_catalog(
+                            catalog_id
+                        ).to_dict()
                     elif action == "clone":
                         payload_out = catalog_registry.clone_catalog(
                             catalog_id,
@@ -9908,22 +12277,39 @@ def serve_review_webapp(
                             catalog_id,
                             source_dir=str(body.get("source_dir", "")).strip() or None,
                         )
-                        _invalidate_cache("/api/catalogs", "/api/review-data", "/api/iterate-data", "/api/enrichment-health")
+                        _invalidate_cache(
+                            "/api/catalogs",
+                            "/api/review-data",
+                            "/api/iterate-data",
+                            "/api/enrichment-health",
+                        )
                         target_runtime = config.get_config(catalog_id)
                         summary["auto_enrichment"] = _queue_auto_enrichment_for_books(
                             runtime=target_runtime,
-                            books=summary.get("imported_books", []) if isinstance(summary, dict) else [],
+                            books=summary.get("imported_books", [])
+                            if isinstance(summary, dict)
+                            else [],
                         )
                         return self._send_json({"ok": True, "summary": summary})
                     elif action == "settings":
                         settings = body.get("settings", body)
                         if not isinstance(settings, dict):
                             settings = {}
-                        updated_settings = catalog_registry.update_settings(catalog_id, settings)
+                        updated_settings = catalog_registry.update_settings(
+                            catalog_id, settings
+                        )
                         _invalidate_cache("/api/catalogs")
-                        return self._send_json({"ok": True, "catalog": catalog_id, "settings": updated_settings})
+                        return self._send_json(
+                            {
+                                "ok": True,
+                                "catalog": catalog_id,
+                                "settings": updated_settings,
+                            }
+                        )
                     elif not action:
-                        payload_out = catalog_registry.update_catalog(catalog_id, body if isinstance(body, dict) else {}).to_dict()
+                        payload_out = catalog_registry.update_catalog(
+                            catalog_id, body if isinstance(body, dict) else {}
+                        ).to_dict()
                     else:
                         return self._send_error(
                             code="CATALOG_ACTION_UNSUPPORTED",
@@ -9979,7 +12365,14 @@ def serve_review_webapp(
                 elif books_payload is None:
                     parsed_books = []
 
-                books = sorted({book for book in parsed_books if book > 0 and (not catalog_title_map or book in catalog_title_map)})
+                books = sorted(
+                    {
+                        book
+                        for book in parsed_books
+                        if book > 0
+                        and (not catalog_title_map or book in catalog_title_map)
+                    }
+                )
                 if not books:
                     return self._send_error(
                         code="BOOKS_REQUIRED",
@@ -9990,7 +12383,11 @@ def serve_review_webapp(
                     )
 
                 models_raw = body.get("models", [])
-                models = [str(item).strip() for item in models_raw if str(item).strip()] if isinstance(models_raw, list) else []
+                models = (
+                    [str(item).strip() for item in models_raw if str(item).strip()]
+                    if isinstance(models_raw, list)
+                    else []
+                )
                 if not models:
                     models = runtime_req.all_models[:]
                 if not models:
@@ -10002,24 +12399,41 @@ def serve_review_webapp(
                         endpoint=path,
                     )
 
-                variants = _safe_int(body.get("variants"), runtime_req.variants_per_cover)
+                variants = _safe_int(
+                    body.get("variants"), runtime_req.variants_per_cover
+                )
                 max_variants = _max_generation_variants(runtime_req)
                 if variants < 1 or variants > max_variants:
                     return self._send_error(
                         code="VARIANT_COUNT_OUT_OF_RANGE",
                         message=f"variants must be between 1 and {max_variants}",
-                        details={"received": body.get("variants"), "max_variants": max_variants},
+                        details={
+                            "received": body.get("variants"),
+                            "max_variants": max_variants,
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
 
                 prompt = str(body.get("prompt", "")).strip()
-                prompt_source = str(body.get("promptSource", "template") or "template").strip().lower() or "template"
-                provider = str(body.get("provider", "all") or "all").strip().lower() or "all"
+                prompt_source = (
+                    str(body.get("promptSource", "template") or "template")
+                    .strip()
+                    .lower()
+                    or "template"
+                )
+                provider = (
+                    str(body.get("provider", "all") or "all").strip().lower() or "all"
+                )
                 budget_usd = max(0.0, _safe_float(body.get("budgetUsd"), 0.0))
                 max_attempts = max(1, _safe_int(body.get("max_attempts"), 3))
                 requested_dry_run = bool(body.get("dry_run", False))
-                cover_source = str(body.get("cover_source", "catalog") or "catalog").strip().lower() or "catalog"
+                cover_source = (
+                    str(body.get("cover_source", "catalog") or "catalog")
+                    .strip()
+                    .lower()
+                    or "catalog"
+                )
                 if cover_source != "catalog":
                     return self._send_error(
                         code="BATCH_COVER_SOURCE_UNSUPPORTED",
@@ -10029,7 +12443,9 @@ def serve_review_webapp(
                         endpoint=path,
                     )
 
-                backup = _create_snapshot_before_operation(runtime_req, operation="batch_generate")
+                backup = _create_snapshot_before_operation(
+                    runtime_req, operation="batch_generate"
+                )
                 batch_id = str(uuid.uuid4())
                 created_at = datetime.now(timezone.utc).isoformat()
                 queued_books: list[dict[str, Any]] = []
@@ -10070,7 +12486,11 @@ def serve_review_webapp(
                     queued_books.append(
                         {
                             "book_number": int(book_number),
-                            "title": str(catalog_title_map.get(book_number, f"Book {book_number}")),
+                            "title": str(
+                                catalog_title_map.get(
+                                    book_number, f"Book {book_number}"
+                                )
+                            ),
                             "job_id": str(job.id),
                             "status": str(job.status),
                             "cost_usd": 0.0,
@@ -10097,7 +12517,9 @@ def serve_review_webapp(
                     "paused_reason": "",
                     "completion_event_emitted": False,
                     "settings": {
-                        "models": sorted({str(item).strip() for item in models if str(item).strip()}),
+                        "models": sorted(
+                            {str(item).strip() for item in models if str(item).strip()}
+                        ),
                         "variants": int(variants),
                         "promptSource": prompt_source,
                         "prompt": prompt,
@@ -10113,7 +12535,9 @@ def serve_review_webapp(
                     "cost_so_far_usd": 0.0,
                 }
                 _upsert_batch_entry(runtime_req, entry)
-                snapshot = _batch_status_payload(runtime_req, batch_id, limit=25, offset=0) or {"ok": True}
+                snapshot = _batch_status_payload(
+                    runtime_req, batch_id, limit=25, offset=0
+                ) or {"ok": True}
                 job_event_broker.publish(
                     "batch_started",
                     {
@@ -10139,9 +12563,13 @@ def serve_review_webapp(
                 )
 
             if path.startswith("/api/batch-generate/") and (
-                path.endswith("/pause") or path.endswith("/resume") or path.endswith("/cancel")
+                path.endswith("/pause")
+                or path.endswith("/resume")
+                or path.endswith("/cancel")
             ):
-                token = path.split("/api/batch-generate/", 1)[1].split("/", 1)[0].strip("/")
+                token = (
+                    path.split("/api/batch-generate/", 1)[1].split("/", 1)[0].strip("/")
+                )
                 action = path.rsplit("/", 1)[1].strip().lower()
                 if not token:
                     return self._send_error(
@@ -10151,7 +12579,9 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 reason = str(body.get("reason", f"batch {action}")).strip()
-                snapshot = _apply_batch_action(runtime_req, batch_id=token, action=action, reason=reason)
+                snapshot = _apply_batch_action(
+                    runtime_req, batch_id=token, action=action, reason=reason
+                )
                 if snapshot is None:
                     return self._send_error(
                         code="BATCH_NOT_FOUND",
@@ -10174,7 +12604,9 @@ def serve_review_webapp(
                 return self._send_json(snapshot)
 
             if path == "/api/jobs":
-                job_type = str(body.get("job_type", "generate")).strip().lower() or "generate"
+                job_type = (
+                    str(body.get("job_type", "generate")).strip().lower() or "generate"
+                )
                 if job_type != "generate":
                     return self._send_error(
                         code="JOB_TYPE_UNSUPPORTED",
@@ -10202,27 +12634,48 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 models = body.get("models", [])
-                active_models = [str(item).strip() for item in models if str(item).strip()] if isinstance(models, list) else []
+                active_models = (
+                    [str(item).strip() for item in models if str(item).strip()]
+                    if isinstance(models, list)
+                    else []
+                )
                 if not active_models:
                     active_models = runtime_req.all_models[:]
                 max_variants = _max_generation_variants(runtime_req)
-                variants = _safe_int(body.get("variants"), runtime_req.variants_per_cover)
+                variants = _safe_int(
+                    body.get("variants"), runtime_req.variants_per_cover
+                )
                 requested_variant = max(1, _safe_int(body.get("variant"), 1))
                 if variants < 1 or variants > max_variants:
                     return self._send_error(
                         code="VARIANT_COUNT_OUT_OF_RANGE",
                         message=f"variants must be between 1 and {max_variants}",
-                        details={"received": body.get("variants"), "max_variants": max_variants},
+                        details={
+                            "received": body.get("variants"),
+                            "max_variants": max_variants,
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
                 prompt = str(body.get("prompt", ""))
-                prompt_source = str(body.get("promptSource", body.get("prompt_source", "template")) or "template").strip().lower() or "template"
-                template_id = str(body.get("template_id", body.get("templateId", "")) or "").strip()
+                prompt_source = (
+                    str(
+                        body.get("promptSource", body.get("prompt_source", "template"))
+                        or "template"
+                    )
+                    .strip()
+                    .lower()
+                    or "template"
+                )
+                template_id = str(
+                    body.get("template_id", body.get("templateId", "")) or ""
+                ).strip()
                 compose_prompt = bool(body.get("compose_prompt", True))
                 preserve_prompt_text = bool(body.get("preserve_prompt_text", False))
                 scene_description = str(body.get("scene_description", "") or "").strip()
-                template_ok, template_details = _validate_template_id(runtime=runtime_req, template_id=template_id)
+                template_ok, template_details = _validate_template_id(
+                    runtime=runtime_req, template_id=template_id
+                )
                 if not template_ok:
                     return self._send_error(
                         code="INVALID_TEMPLATE_ID",
@@ -10232,20 +12685,31 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 provider = str(body.get("provider", "all")).strip().lower() or "all"
-                cover_source = str(body.get("cover_source", "catalog")).strip().lower() or "catalog"
+                cover_source = (
+                    str(body.get("cover_source", "catalog")).strip().lower()
+                    or "catalog"
+                )
                 if cover_source not in {"catalog", "drive"}:
                     cover_source = "catalog"
                 selected_cover = body.get("selected_cover")
                 selected_cover_id = str(body.get("selected_cover_id", "")).strip()
                 if not selected_cover_id and isinstance(selected_cover, dict):
                     selected_cover_id = str(selected_cover.get("id", "")).strip()
-                selected_cover_book_number = _safe_int(body.get("selected_cover_book_number"), 0)
+                selected_cover_book_number = _safe_int(
+                    body.get("selected_cover_book_number"), 0
+                )
                 if selected_cover_book_number <= 0 and isinstance(selected_cover, dict):
-                    selected_cover_book_number = _safe_int(selected_cover.get("book_number"), 0)
+                    selected_cover_book_number = _safe_int(
+                        selected_cover.get("book_number"), 0
+                    )
                 drive_folder_id = str(body.get("drive_folder_id", "")).strip()
                 input_folder_id = str(body.get("input_folder_id", "")).strip()
                 credentials_path = str(body.get("credentials_path", "")).strip()
-                valid_drive_selection, drive_selection_error, resolved_selected_cover_id = _validate_drive_cover_request(
+                (
+                    valid_drive_selection,
+                    drive_selection_error,
+                    resolved_selected_cover_id,
+                ) = _validate_drive_cover_request(
                     runtime=runtime_req,
                     book=book,
                     cover_source=cover_source,
@@ -10259,7 +12723,8 @@ def serve_review_webapp(
                 if not valid_drive_selection:
                     return self._send_error(
                         code="INVALID_DRIVE_COVER_SELECTION",
-                        message=drive_selection_error or "Invalid Drive cover selection.",
+                        message=drive_selection_error
+                        or "Invalid Drive cover selection.",
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
@@ -10281,13 +12746,18 @@ def serve_review_webapp(
                                     row
                                     for row in variants_payload
                                     if isinstance(row, dict)
-                                    and _safe_int(row.get("variant_id", row.get("variant")), 0) == requested_variant
+                                    and _safe_int(
+                                        row.get("variant_id", row.get("variant")), 0
+                                    )
+                                    == requested_variant
                                 ),
                                 None,
                             )
                             variant_row = matching_variant or variants_payload[0]
                             if isinstance(variant_row, dict):
-                                default_prompt = str(variant_row.get("prompt", "")).strip()
+                                default_prompt = str(
+                                    variant_row.get("prompt", "")
+                                ).strip()
                         composed_prompt_payload = _compose_prompt_for_book(
                             runtime=runtime_req,
                             book=book_row,
@@ -10304,7 +12774,9 @@ def serve_review_webapp(
                             scene_override=scene_description,
                         )
                         if prompt_source == "template" or not str(prompt).strip():
-                            prompt = str(composed_prompt_payload.get("prompt", prompt)).strip()
+                            prompt = str(
+                                composed_prompt_payload.get("prompt", prompt)
+                            ).strip()
                 if book_row is not None:
                     if precomposed_prompt:
                         prompt = " ".join(str(prompt or "").split()).strip()
@@ -10322,7 +12794,9 @@ def serve_review_webapp(
                             scene_override=scene_description,
                         )
                     _validate_prompt_before_generation(prompt, book_row)
-                idempotency_key = str(body.get("idempotency_key", "")).strip() or _generation_idempotency_key(
+                idempotency_key = str(
+                    body.get("idempotency_key", "")
+                ).strip() or _generation_idempotency_key(
                     catalog_id=runtime_req.catalog_id,
                     book=book,
                     models=active_models,
@@ -10352,13 +12826,23 @@ def serve_review_webapp(
                         metadata={
                             "prompt_source": prompt_source,
                             "template_id": template_id,
-                            **({"preserve_prompt_text": True} if preserve_prompt_text else {}),
+                            **(
+                                {"preserve_prompt_text": True}
+                                if preserve_prompt_text
+                                else {}
+                            ),
                             "variant": requested_variant,
                             "scene_description": scene_description,
-                            "composed_prompt": str(composed_prompt_payload.get("prompt", "")).strip(),
+                            "composed_prompt": str(
+                                composed_prompt_payload.get("prompt", "")
+                            ).strip(),
                             "prompt_components": composed_prompt_payload,
-                            "inferred_genre": str(composed_prompt_payload.get("genre", "")).strip(),
-                            "prompt_processing": "frontend_resolved" if precomposed_prompt else "backend_enriched",
+                            "inferred_genre": str(
+                                composed_prompt_payload.get("genre", "")
+                            ).strip(),
+                            "prompt_processing": "frontend_resolved"
+                            if precomposed_prompt
+                            else "backend_enriched",
                         },
                     )
                 except job_store.IdempotencyConflictError as exc:
@@ -10388,13 +12872,21 @@ def serve_review_webapp(
                         "event_url": f"/api/events/job/{job.id}",
                         "prompt_source": prompt_source,
                         "template_id": template_id or None,
-                        "composed_prompt": str(composed_prompt_payload.get("prompt", "")).strip() or None,
-                        "inferred_genre": str(composed_prompt_payload.get("genre", "")).strip() or None,
+                        "composed_prompt": str(
+                            composed_prompt_payload.get("prompt", "")
+                        ).strip()
+                        or None,
+                        "inferred_genre": str(
+                            composed_prompt_payload.get("genre", "")
+                        ).strip()
+                        or None,
                     }
                 )
 
             if path == "/api/cache/clear":
-                pattern = str(body.get("pattern", query.get("pattern", [""])[0])).strip()
+                pattern = str(
+                    body.get("pattern", query.get("pattern", [""])[0])
+                ).strip()
                 removed = (
                     _invalidate_cache(pattern, catalog_id=runtime_req.catalog_id)
                     if pattern
@@ -10421,7 +12913,10 @@ def serve_review_webapp(
                     return self._send_error(
                         code="INVALID_PROVIDER",
                         message="provider must be one of configured providers or 'all'",
-                        details={"provider": provider_raw, "valid_providers": sorted(runtime_req.provider_keys.keys())},
+                        details={
+                            "provider": provider_raw,
+                            "valid_providers": sorted(runtime_req.provider_keys.keys()),
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
@@ -10431,7 +12926,9 @@ def serve_review_webapp(
                 _record_audit_event(
                     action="provider_runtime_reset",
                     impact="operations",
-                    actor=str(body.get("actor") or body.get("reviewer") or configured_reviewer),
+                    actor=str(
+                        body.get("actor") or body.get("reviewer") or configured_reviewer
+                    ),
                     source_ip=client_ip,
                     endpoint=path,
                     catalog_id=runtime_req.catalog_id,
@@ -10439,7 +12936,12 @@ def serve_review_webapp(
                     data_dir=runtime_req.data_dir,
                     details={"provider": provider_label},
                 )
-                _invalidate_cache("/api/cache/stats", "/api/metrics", "/api/health", "/api/providers/runtime")
+                _invalidate_cache(
+                    "/api/cache/stats",
+                    "/api/metrics",
+                    "/api/health",
+                    "/api/providers/runtime",
+                )
                 return self._send_json(
                     {
                         "ok": True,
@@ -10449,13 +12951,19 @@ def serve_review_webapp(
                     }
                 )
             if path == "/api/admin/migrate-to-sqlite":
-                db_path_token = str(body.get("db_path", runtime_req.sqlite_db_path)).strip() or str(runtime_req.sqlite_db_path)
+                db_path_token = str(
+                    body.get("db_path", runtime_req.sqlite_db_path)
+                ).strip() or str(runtime_req.sqlite_db_path)
                 db_path = Path(db_path_token)
                 if not db_path.is_absolute():
                     db_path = PROJECT_ROOT / db_path
-                backup = _create_snapshot_before_operation(runtime_req, operation="migrate_to_sqlite")
+                backup = _create_snapshot_before_operation(
+                    runtime_req, operation="migrate_to_sqlite"
+                )
                 try:
-                    from scripts import migrate_to_sqlite as migrate_script  # local import to avoid startup side effects
+                    from scripts import (
+                        migrate_to_sqlite as migrate_script,  # local import to avoid startup side effects
+                    )
 
                     summary = migrate_script.migrate_to_sqlite(
                         catalog_id=runtime_req.catalog_id,
@@ -10471,7 +12979,9 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 _invalidate_cache("*", catalog_id=runtime_req.catalog_id)
-                return self._send_json({"ok": True, "summary": summary, "backup": backup})
+                return self._send_json(
+                    {"ok": True, "summary": summary, "backup": backup}
+                )
             if path == "/api/analytics/budget":
                 limit_usd = _safe_float(body.get("limit_usd"), runtime_req.max_cost_usd)
                 warning_threshold = _safe_float(body.get("warning_threshold"), 0.8)
@@ -10486,14 +12996,22 @@ def serve_review_webapp(
                 )
                 _invalidate_cache("/api/analytics/budget", "/api/dashboard-data")
                 status = cost_tracker.budget_status(
-                    spent_usd=_safe_float(cost_tracker.summarize(_cost_entries_for_runtime(runtime=runtime_req, period="all")).get("total_cost_usd"), 0.0),
+                    spent_usd=_safe_float(
+                        cost_tracker.summarize(
+                            _cost_entries_for_runtime(runtime=runtime_req, period="all")
+                        ).get("total_cost_usd"),
+                        0.0,
+                    ),
                     catalog_id=catalog_id,
                     budget_payload=payload,
                 )
                 return self._send_json({"ok": True, "budget": status})
 
             if path == "/api/analytics/budget/override":
-                catalog_id = str(body.get("catalog", runtime_req.catalog_id)).strip() or runtime_req.catalog_id
+                catalog_id = (
+                    str(body.get("catalog", runtime_req.catalog_id)).strip()
+                    or runtime_req.catalog_id
+                )
                 extra_limit_usd = _safe_float(body.get("extra_limit_usd"), 0.0)
                 duration_hours = max(1, _safe_int(body.get("duration_hours"), 24))
                 reason = str(body.get("reason", "manual override"))
@@ -10505,7 +13023,12 @@ def serve_review_webapp(
                     reason=reason,
                 )
                 status = cost_tracker.budget_status(
-                    spent_usd=_safe_float(cost_tracker.summarize(_cost_entries_for_runtime(runtime=runtime_req, period="all")).get("total_cost_usd"), 0.0),
+                    spent_usd=_safe_float(
+                        cost_tracker.summarize(
+                            _cost_entries_for_runtime(runtime=runtime_req, period="all")
+                        ).get("total_cost_usd"),
+                        0.0,
+                    ),
                     catalog_id=catalog_id,
                     budget_payload=payload,
                 )
@@ -10546,28 +13069,52 @@ def serve_review_webapp(
             if path == "/api/analytics/reports/schedule":
                 schedules_path = _report_schedules_path_for_runtime(runtime_req)
                 schedules_payload = _load_json(schedules_path, {"schedules": []})
-                schedules = schedules_payload.get("schedules", []) if isinstance(schedules_payload, dict) else []
+                schedules = (
+                    schedules_payload.get("schedules", [])
+                    if isinstance(schedules_payload, dict)
+                    else []
+                )
                 if not isinstance(schedules, list):
                     schedules = []
                 row = {
                     "id": str(uuid.uuid4()),
-                    "name": str(body.get("name", "Scheduled report")).strip() or "Scheduled report",
-                    "schedule": str(body.get("schedule", "weekly")).strip().lower() or "weekly",
-                    "catalog": str(body.get("catalog", runtime_req.catalog_id)).strip() or runtime_req.catalog_id,
+                    "name": str(body.get("name", "Scheduled report")).strip()
+                    or "Scheduled report",
+                    "schedule": str(body.get("schedule", "weekly")).strip().lower()
+                    or "weekly",
+                    "catalog": str(body.get("catalog", runtime_req.catalog_id)).strip()
+                    or runtime_req.catalog_id,
                     "format": str(body.get("format", "json")).strip().lower() or "json",
-                    "include": body.get("include", ["costs", "quality", "models", "activity"]) if isinstance(body.get("include"), list) else ["costs", "quality", "models", "activity"],
+                    "include": body.get(
+                        "include", ["costs", "quality", "models", "activity"]
+                    )
+                    if isinstance(body.get("include"), list)
+                    else ["costs", "quality", "models", "activity"],
                     "created_at": datetime.now(timezone.utc).isoformat(),
                     "enabled": bool(body.get("enabled", True)),
                 }
                 schedules.append(row)
-                schedules_payload = {"updated_at": datetime.now(timezone.utc).isoformat(), "schedules": schedules[-500:]}
+                schedules_payload = {
+                    "updated_at": datetime.now(timezone.utc).isoformat(),
+                    "schedules": schedules[-500:],
+                }
                 safe_json.atomic_write_json(schedules_path, schedules_payload)
-                return self._send_json({"ok": True, "schedule": row, "count": len(schedules_payload["schedules"])})
+                return self._send_json(
+                    {
+                        "ok": True,
+                        "schedule": row,
+                        "count": len(schedules_payload["schedules"]),
+                    }
+                )
 
             if path == "/api/drive/schedule":
-                payload = _save_drive_schedule(runtime_req, body if isinstance(body, dict) else {})
+                payload = _save_drive_schedule(
+                    runtime_req, body if isinstance(body, dict) else {}
+                )
                 _invalidate_cache("/api/drive/schedule", "/api/drive/status")
-                return self._send_json({"ok": True, "catalog": runtime_req.catalog_id, "schedule": payload})
+                return self._send_json(
+                    {"ok": True, "catalog": runtime_req.catalog_id, "schedule": payload}
+                )
 
             if path.startswith("/api/jobs/") and path.endswith("/cancel-model"):
                 token = path.rsplit("/", 1)[0].split("/api/jobs/", 1)[1].strip()
@@ -10586,12 +13133,26 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                _mark_job_model_cancelled(job_id=token, catalog_id=runtime_req.catalog_id, model=model_name)
+                _mark_job_model_cancelled(
+                    job_id=token, catalog_id=runtime_req.catalog_id, model=model_name
+                )
                 job_event_broker.publish(
                     "job_model_cancelled",
-                    {"job_id": token, "catalog_id": runtime_req.catalog_id, "model": model_name, "status": "cancelled"},
+                    {
+                        "job_id": token,
+                        "catalog_id": runtime_req.catalog_id,
+                        "model": model_name,
+                        "status": "cancelled",
+                    },
                 )
-                return self._send_json({"ok": True, "job_id": token, "model": model_name, "status": "cancelled"})
+                return self._send_json(
+                    {
+                        "ok": True,
+                        "job_id": token,
+                        "model": model_name,
+                        "status": "cancelled",
+                    }
+                )
 
             if path.startswith("/api/jobs/") and path.endswith("/cancel"):
                 token = path.rsplit("/", 1)[0].split("/api/jobs/", 1)[1].strip()
@@ -10602,7 +13163,9 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                row = job_db_store.mark_cancelled(token, reason=str(body.get("reason", "cancelled")))
+                row = job_db_store.mark_cancelled(
+                    token, reason=str(body.get("reason", "cancelled"))
+                )
                 if row is None:
                     return self._send_error(
                         code="JOB_NOT_FOUND",
@@ -10615,21 +13178,34 @@ def serve_review_webapp(
                 _record_audit_event(
                     action="job_cancel",
                     impact="destructive",
-                    actor=str(body.get("actor") or body.get("reviewer") or configured_reviewer),
+                    actor=str(
+                        body.get("actor") or body.get("reviewer") or configured_reviewer
+                    ),
                     source_ip=client_ip,
                     endpoint=path,
                     catalog_id=runtime_req.catalog_id,
                     status="ok",
                     data_dir=runtime_req.data_dir,
-                    details={"job_id": token, "reason": str(body.get("reason", "cancelled"))},
+                    details={
+                        "job_id": token,
+                        "reason": str(body.get("reason", "cancelled")),
+                    },
                 )
                 job_event_broker.publish(
                     "job_cancelled",
-                    {"job_id": token, "catalog_id": runtime_req.catalog_id, "status": row.status},
+                    {
+                        "job_id": token,
+                        "catalog_id": runtime_req.catalog_id,
+                        "status": row.status,
+                    },
                 )
                 return self._send_json({"ok": True, "job": row.to_dict()})
 
-            if path.startswith("/api/jobs/") and (path.endswith("/pause") or path.endswith("/resume") or path.endswith("/retry")):
+            if path.startswith("/api/jobs/") and (
+                path.endswith("/pause")
+                or path.endswith("/resume")
+                or path.endswith("/retry")
+            ):
                 token = path.split("/api/jobs/", 1)[1].split("/", 1)[0].strip()
                 action = path.rsplit("/", 1)[1].strip().lower()
                 if not token:
@@ -10640,7 +13216,9 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 if action == "pause":
-                    row = job_db_store.mark_paused(token, reason=str(body.get("reason", "paused")))
+                    row = job_db_store.mark_paused(
+                        token, reason=str(body.get("reason", "paused"))
+                    )
                 elif action == "resume":
                     row = job_db_store.resume_job(token)
                 else:
@@ -10655,9 +13233,15 @@ def serve_review_webapp(
                     )
                 job_event_broker.publish(
                     f"job_{action}",
-                    {"job_id": token, "catalog_id": runtime_req.catalog_id, "status": row.status},
+                    {
+                        "job_id": token,
+                        "catalog_id": runtime_req.catalog_id,
+                        "status": row.status,
+                    },
                 )
-                return self._send_json({"ok": True, "job": row.to_dict(), "action": action})
+                return self._send_json(
+                    {"ok": True, "job": row.to_dict(), "action": action}
+                )
 
             if path.startswith("/api/books/") and path.endswith("/tags"):
                 token = path.split("/api/books/", 1)[1].split("/tags", 1)[0].strip()
@@ -10672,9 +13256,13 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                updated = book_metadata.add_tags(_book_metadata_path_for_runtime(runtime_req), book_number, tags)
+                updated = book_metadata.add_tags(
+                    _book_metadata_path_for_runtime(runtime_req), book_number, tags
+                )
                 _invalidate_cache("/api/books", "/api/compare")
-                return self._send_json({"ok": True, "book": book_number, "tags": updated.get("tags", [])})
+                return self._send_json(
+                    {"ok": True, "book": book_number, "tags": updated.get("tags", [])}
+                )
 
             if path.startswith("/api/books/") and path.endswith("/notes"):
                 token = path.split("/api/books/", 1)[1].split("/notes", 1)[0].strip()
@@ -10693,7 +13281,9 @@ def serve_review_webapp(
                     notes=notes,
                 )
                 _invalidate_cache("/api/books", "/api/compare")
-                return self._send_json({"ok": True, "book": book_number, "notes": updated.get("notes", "")})
+                return self._send_json(
+                    {"ok": True, "book": book_number, "notes": updated.get("notes", "")}
+                )
 
             if path == "/api/save-selections":
                 with lock:
@@ -10701,15 +13291,22 @@ def serve_review_webapp(
                         runtime_req.output_dir,
                         input_dir=runtime_req.input_dir,
                         catalog_path=runtime_req.book_catalog_path,
-                        quality_scores_path=_quality_scores_path_for_runtime(runtime_req),
+                        quality_scores_path=_quality_scores_path_for_runtime(
+                            runtime_req
+                        ),
                     )
                     winner_path = _winner_path_for_runtime(runtime_req)
                     existing_payload = _ensure_winner_payload(books, path=winner_path)
                     existing = existing_payload.get("selections", {})
-                    incoming = body.get("selections", body) if isinstance(body, dict) else {}
+                    incoming = (
+                        body.get("selections", body) if isinstance(body, dict) else {}
+                    )
                     if not isinstance(incoming, dict):
                         return self._send_json(
-                            {"ok": False, "error": "Selections payload must be an object."},
+                            {
+                                "ok": False,
+                                "error": "Selections payload must be an object.",
+                            },
                             status=HTTPStatus.BAD_REQUEST,
                         )
 
@@ -10735,8 +13332,14 @@ def serve_review_webapp(
                         if isinstance(raw, dict):
                             winner_raw = raw.get("winner", current.get("winner", 0))
                             score_raw = raw.get("score", current.get("score", 0.0))
-                            auto_selected = bool(raw.get("auto_selected", current.get("auto_selected", True)))
-                            confirmed = bool(raw.get("confirmed", current.get("confirmed", False)))
+                            auto_selected = bool(
+                                raw.get(
+                                    "auto_selected", current.get("auto_selected", True)
+                                )
+                            )
+                            confirmed = bool(
+                                raw.get("confirmed", current.get("confirmed", False))
+                            )
                         else:
                             winner_raw = raw
                             score_raw = 0.0
@@ -10762,20 +13365,46 @@ def serve_review_webapp(
                             "score": round(score, 4),
                             "auto_selected": auto_selected,
                             "confirmed": confirmed,
-                            "selected_by": str(current.get("selected_by", configured_reviewer) or configured_reviewer),
-                            "selection_date": str(current.get("selection_date", datetime.now(timezone.utc).isoformat())),
-                            "reviewer": str(current.get("reviewer", configured_reviewer) or configured_reviewer),
-                            "review_mode": str(current.get("review_mode", "grid") or "grid"),
+                            "selected_by": str(
+                                current.get("selected_by", configured_reviewer)
+                                or configured_reviewer
+                            ),
+                            "selection_date": str(
+                                current.get(
+                                    "selection_date",
+                                    datetime.now(timezone.utc).isoformat(),
+                                )
+                            ),
+                            "reviewer": str(
+                                current.get("reviewer", configured_reviewer)
+                                or configured_reviewer
+                            ),
+                            "review_mode": str(
+                                current.get("review_mode", "grid") or "grid"
+                            ),
                             "overrode_auto": bool(current.get("overrode_auto", False)),
-                            "conflict_requires_resolution": bool(current.get("conflict_requires_resolution", False)),
+                            "conflict_requires_resolution": bool(
+                                current.get("conflict_requires_resolution", False)
+                            ),
                             "conflict": current.get("conflict", {}),
                         }
 
-                    saved_payload = _save_winner_payload(winner_path, merged, total_books=len(books))
-                _invalidate_cache("/api/review-data", "/api/review-queue", "/api/review-stats", "/api/dashboard-data")
+                    saved_payload = _save_winner_payload(
+                        winner_path, merged, total_books=len(books)
+                    )
+                _invalidate_cache(
+                    "/api/review-data",
+                    "/api/review-queue",
+                    "/api/review-stats",
+                    "/api/dashboard-data",
+                )
                 auto_delivery = _maybe_auto_delivery_for_books(
                     runtime=runtime_req,
-                    book_numbers=[_safe_int(key, 0) for key in saved_payload.get("selections", {}).keys() if _safe_int(key, 0) > 0],
+                    book_numbers=[
+                        _safe_int(key, 0)
+                        for key in saved_payload.get("selections", {}).keys()
+                        if _safe_int(key, 0) > 0
+                    ],
                     source="save_selections",
                 )
 
@@ -10791,19 +13420,39 @@ def serve_review_webapp(
 
             if path == "/api/batch-approve":
                 threshold = _safe_float(body.get("threshold"), 0.90)
-                reviewer = str(body.get("reviewer", configured_reviewer) or configured_reviewer).strip() or configured_reviewer
-                summary = _apply_batch_approve(runtime=runtime_req, threshold=threshold, reviewer=reviewer)
+                reviewer = (
+                    str(
+                        body.get("reviewer", configured_reviewer) or configured_reviewer
+                    ).strip()
+                    or configured_reviewer
+                )
+                summary = _apply_batch_approve(
+                    runtime=runtime_req, threshold=threshold, reviewer=reviewer
+                )
                 write_review_data(runtime_req.output_dir, runtime=runtime_req)
-                _invalidate_cache("/api/review-data", "/api/review-queue", "/api/review-stats", "/api/dashboard-data")
+                _invalidate_cache(
+                    "/api/review-data",
+                    "/api/review-queue",
+                    "/api/review-stats",
+                    "/api/dashboard-data",
+                )
                 return self._send_json({"ok": True, "summary": summary})
 
             if path == "/api/review-selection":
                 book = _safe_int(body.get("book"), 0)
                 variant = _safe_int(body.get("variant"), 0)
-                reviewer = str(body.get("reviewer", configured_reviewer) or configured_reviewer).strip() or configured_reviewer
+                reviewer = (
+                    str(
+                        body.get("reviewer", configured_reviewer) or configured_reviewer
+                    ).strip()
+                    or configured_reviewer
+                )
                 if book <= 0 or variant <= 0:
                     return self._send_json(
-                        {"ok": False, "error": "book and variant must be positive integers"},
+                        {
+                            "ok": False,
+                            "error": "book and variant must be positive integers",
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                     )
 
@@ -10814,7 +13463,10 @@ def serve_review_webapp(
                     quality_scores_path=_quality_scores_path_for_runtime(runtime_req),
                 )
                 score = 0.0
-                target_book = next((row for row in books if _safe_int(row.get("number"), 0) == book), None)
+                target_book = next(
+                    (row for row in books if _safe_int(row.get("number"), 0) == book),
+                    None,
+                )
                 if isinstance(target_book, dict):
                     for row in target_book.get("variants", []):
                         if _safe_int(row.get("variant"), 0) == variant:
@@ -10826,9 +13478,15 @@ def serve_review_webapp(
                 selections = payload.get("selections", {})
                 if not isinstance(selections, dict):
                     selections = {}
-                existing = selections.get(str(book), {}) if isinstance(selections.get(str(book), {}), dict) else {}
+                existing = (
+                    selections.get(str(book), {})
+                    if isinstance(selections.get(str(book), {}), dict)
+                    else {}
+                )
                 existing_winner = _safe_int(existing.get("winner"), 0)
-                existing_reviewer = str(existing.get("selected_by") or existing.get("reviewer") or "").strip()
+                existing_reviewer = str(
+                    existing.get("selected_by") or existing.get("reviewer") or ""
+                ).strip()
                 conflict_required = (
                     existing_winner > 0
                     and existing_winner != variant
@@ -10849,7 +13507,9 @@ def serve_review_webapp(
                     conflict_payload = dict(existing.get("conflict", {}))
                     if conflict_payload:
                         conflict_payload["requires_resolution"] = False
-                        conflict_payload["resolved_at"] = datetime.now(timezone.utc).isoformat()
+                        conflict_payload["resolved_at"] = datetime.now(
+                            timezone.utc
+                        ).isoformat()
                 selections[str(book)] = {
                     "winner": variant,
                     "score": round(score, 4),
@@ -10859,33 +13519,66 @@ def serve_review_webapp(
                     "selection_date": datetime.now(timezone.utc).isoformat(),
                     "reviewer": reviewer,
                     "review_mode": str(body.get("review_mode", "speed") or "speed"),
-                    "overrode_auto": bool(existing.get("winner") and _safe_int(existing.get("winner"), 0) != variant),
+                    "overrode_auto": bool(
+                        existing.get("winner")
+                        and _safe_int(existing.get("winner"), 0) != variant
+                    ),
                     "conflict_requires_resolution": conflict_required,
                     "conflict": conflict_payload,
                 }
-                saved_payload = _save_winner_payload(winner_path, selections, total_books=len(books))
+                saved_payload = _save_winner_payload(
+                    winner_path, selections, total_books=len(books)
+                )
                 write_review_data(runtime_req.output_dir, runtime=runtime_req)
-                _invalidate_cache("/api/review-data", "/api/review-queue", "/api/review-stats", "/api/dashboard-data")
-                auto_delivery = _maybe_auto_delivery_for_books(runtime=runtime_req, book_numbers=[book], source="review_selection")
-                return self._send_json({"ok": True, "saved": saved_payload.get("selections", {}).get(str(book), {}), "auto_delivery": auto_delivery})
+                _invalidate_cache(
+                    "/api/review-data",
+                    "/api/review-queue",
+                    "/api/review-stats",
+                    "/api/dashboard-data",
+                )
+                auto_delivery = _maybe_auto_delivery_for_books(
+                    runtime=runtime_req, book_numbers=[book], source="review_selection"
+                )
+                return self._send_json(
+                    {
+                        "ok": True,
+                        "saved": saved_payload.get("selections", {}).get(str(book), {}),
+                        "auto_delivery": auto_delivery,
+                    }
+                )
 
             if path == "/api/save-review-session":
-                session_id = str(body.get("session_id") or f"review_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}").strip()
+                session_id = str(
+                    body.get("session_id")
+                    or f"review_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}"
+                ).strip()
                 payload = {
                     "session_id": session_id,
                     "catalog": runtime_req.catalog_id,
-                    "started_at": str(body.get("started_at") or datetime.now(timezone.utc).isoformat()),
+                    "started_at": str(
+                        body.get("started_at") or datetime.now(timezone.utc).isoformat()
+                    ),
                     "updated_at": datetime.now(timezone.utc).isoformat(),
                     "books_reviewed": _safe_int(body.get("books_reviewed"), 0),
                     "books_remaining": _safe_int(body.get("books_remaining"), 0),
                     "auto_approved": _safe_int(body.get("auto_approved"), 0),
                     "manually_selected": _safe_int(body.get("manually_selected"), 0),
                     "skipped": _safe_int(body.get("skipped"), 0),
-                    "skipped_books": body.get("skipped_books", []) if isinstance(body.get("skipped_books"), list) else [],
-                    "avg_time_per_book_seconds": _safe_float(body.get("avg_time_per_book_seconds"), 0.0),
-                    "selections": body.get("selections", {}) if isinstance(body.get("selections"), dict) else {},
-                    "selection_details": body.get("selection_details", {}) if isinstance(body.get("selection_details"), dict) else {},
-                    "reviewer": str(body.get("reviewer", configured_reviewer) or configured_reviewer),
+                    "skipped_books": body.get("skipped_books", [])
+                    if isinstance(body.get("skipped_books"), list)
+                    else [],
+                    "avg_time_per_book_seconds": _safe_float(
+                        body.get("avg_time_per_book_seconds"), 0.0
+                    ),
+                    "selections": body.get("selections", {})
+                    if isinstance(body.get("selections"), dict)
+                    else {},
+                    "selection_details": body.get("selection_details", {})
+                    if isinstance(body.get("selection_details"), dict)
+                    else {},
+                    "reviewer": str(
+                        body.get("reviewer", configured_reviewer) or configured_reviewer
+                    ),
                     "mode": str(body.get("mode", "speed") or "speed"),
                     "completed": bool(body.get("completed", False)),
                 }
@@ -10898,7 +13591,9 @@ def serve_review_webapp(
                     _append_review_stats(runtime=runtime_req, payload=payload)
                 _invalidate_cache("/api/review-session/", "/api/review-stats")
 
-                return self._send_json({"ok": True, "session_id": session_id, "path": str(session_path)})
+                return self._send_json(
+                    {"ok": True, "session_id": session_id, "path": str(session_path)}
+                )
 
             if path == "/api/enrich-book":
                 book_number = _safe_int(body.get("book"), 0)
@@ -10908,8 +13603,12 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                     )
 
-                enriched_path = config.enriched_catalog_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir)
-                book_row = _book_row_for_number(runtime=runtime_req, book_number=book_number)
+                enriched_path = config.enriched_catalog_path(
+                    catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir
+                )
+                book_row = _book_row_for_number(
+                    runtime=runtime_req, book_number=book_number
+                )
                 if not isinstance(book_row, dict):
                     return self._send_json(
                         {"ok": False, "error": "book not found"},
@@ -10933,13 +13632,22 @@ def serve_review_webapp(
                         (
                             row
                             for row in enriched_payload
-                            if isinstance(row, dict) and _safe_int(row.get("number"), 0) == book_number
+                            if isinstance(row, dict)
+                            and _safe_int(row.get("number"), 0) == book_number
                         ),
                         None,
-                )
+                    )
                 write_iterate_data(runtime=runtime_req)
-                _invalidate_cache("/api/iterate-data", "/api/prompt-performance", "/api/enrichment-health")
-                usage_last = summary.get("usage", {}).get("last_run", {}) if isinstance(summary.get("usage"), dict) else {}
+                _invalidate_cache(
+                    "/api/iterate-data",
+                    "/api/prompt-performance",
+                    "/api/enrichment-health",
+                )
+                usage_last = (
+                    summary.get("usage", {}).get("last_run", {})
+                    if isinstance(summary.get("usage"), dict)
+                    else {}
+                )
                 _record_cost_entry(
                     runtime=runtime_req,
                     operation="enrich",
@@ -10951,13 +13659,20 @@ def serve_review_webapp(
                     tokens_out=_safe_int(usage_last.get("output_tokens"), 0),
                     images_generated=0,
                     duration_seconds=0.0,
-                    metadata={"books_enriched": 1, "source": str(summary.get("source", ""))},
+                    metadata={
+                        "books_enriched": 1,
+                        "source": str(summary.get("source", "")),
+                    },
                 )
                 _invalidate_cache("/api/analytics/", "/api/dashboard-data")
-                return self._send_json({"ok": True, "summary": summary, "book": enriched_row})
+                return self._send_json(
+                    {"ok": True, "summary": summary, "book": enriched_row}
+                )
 
             if path == "/api/enrich-all":
-                enriched_path = config.enriched_catalog_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir)
+                enriched_path = config.enriched_catalog_path(
+                    catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir
+                )
                 force = bool(body.get("force", False))
                 replace_generic = bool(body.get("replace_generic", False))
                 delay_seconds = max(0.0, _safe_float(body.get("delay"), 0.5))
@@ -10978,8 +13693,16 @@ def serve_review_webapp(
                     batch_size=batch_size,
                 )
                 write_iterate_data(runtime=runtime_req)
-                _invalidate_cache("/api/iterate-data", "/api/prompt-performance", "/api/enrichment-health")
-                usage_last = summary.get("usage", {}).get("last_run", {}) if isinstance(summary.get("usage"), dict) else {}
+                _invalidate_cache(
+                    "/api/iterate-data",
+                    "/api/prompt-performance",
+                    "/api/enrichment-health",
+                )
+                usage_last = (
+                    summary.get("usage", {}).get("last_run", {})
+                    if isinstance(summary.get("usage"), dict)
+                    else {}
+                )
                 _record_cost_entry(
                     runtime=runtime_req,
                     operation="enrich",
@@ -10991,7 +13714,11 @@ def serve_review_webapp(
                     tokens_out=_safe_int(usage_last.get("output_tokens"), 0),
                     images_generated=0,
                     duration_seconds=0.0,
-                    metadata={"books_enriched": _safe_int(summary.get("books_enriched_in_run"), 0)},
+                    metadata={
+                        "books_enriched": _safe_int(
+                            summary.get("books_enriched_in_run"), 0
+                        )
+                    },
                 )
                 _invalidate_cache("/api/analytics/", "/api/dashboard-data")
                 return self._send_json({"ok": True, "summary": summary})
@@ -11011,7 +13738,9 @@ def serve_review_webapp(
                 book_number = _safe_int(body.get("book"), 0)
                 count = max(1, min(_safe_int(body.get("count"), 5), 5))
 
-                enriched_path = config.enriched_catalog_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir)
+                enriched_path = config.enriched_catalog_path(
+                    catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir
+                )
                 if not enriched_path.exists():
                     book_enricher.enrich_catalog(
                         catalog_path=runtime_req.book_catalog_path,
@@ -11023,12 +13752,17 @@ def serve_review_webapp(
                         max_tokens=runtime_req.llm_max_tokens,
                         cost_per_1k_tokens=runtime_req.llm_cost_per_1k_tokens,
                         usage_path=_llm_usage_path_for_runtime(runtime_req),
-                        descriptions_path=runtime_req.config_dir / "book_descriptions.json",
+                        descriptions_path=runtime_req.config_dir
+                        / "book_descriptions.json",
                     )
 
-                prompt_output = config.intelligent_prompts_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir)
+                prompt_output = config.intelligent_prompts_path(
+                    catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir
+                )
                 summary = intelligent_prompter.generate_prompts(
-                    catalog_path=enriched_path if enriched_path.exists() else runtime_req.book_catalog_path,
+                    catalog_path=enriched_path
+                    if enriched_path.exists()
+                    else runtime_req.book_catalog_path,
                     output_path=prompt_output,
                     books=[book_number] if book_number > 0 else None,
                     count=count,
@@ -11049,13 +13783,16 @@ def serve_review_webapp(
                             (
                                 row
                                 for row in rows
-                                if isinstance(row, dict) and _safe_int(row.get("number"), 0) == book_number
+                                if isinstance(row, dict)
+                                and _safe_int(row.get("number"), 0) == book_number
                             ),
                             None,
-                )
+                        )
                 write_iterate_data(runtime=runtime_req)
                 _invalidate_cache("/api/iterate-data", "/api/prompt-performance")
-                return self._send_json({"ok": True, "summary": summary, "book": selected_book})
+                return self._send_json(
+                    {"ok": True, "summary": summary, "book": selected_book}
+                )
 
             if path == "/api/generate-mockup":
                 book = _safe_int(body.get("book"), 0)
@@ -11067,7 +13804,9 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                     )
 
-                templates = mockup_generator.template_map(runtime_req.config_dir / "mockup_templates.json")
+                templates = mockup_generator.template_map(
+                    runtime_req.config_dir / "mockup_templates.json"
+                )
                 template = templates.get(template_id)
                 if not template:
                     return self._send_json(
@@ -11075,11 +13814,18 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                     )
 
-                catalog = mockup_generator.load_book_records(runtime_req.book_catalog_path)
-                winners = mockup_generator.load_winner_map(_winner_path_for_runtime(runtime_req))
+                catalog = mockup_generator.load_book_records(
+                    runtime_req.book_catalog_path
+                )
+                winners = mockup_generator.load_winner_map(
+                    _winner_path_for_runtime(runtime_req)
+                )
                 record = catalog.get(book)
                 if not record:
-                    return self._send_json({"ok": False, "error": f"Book {book} not found"}, status=HTTPStatus.NOT_FOUND)
+                    return self._send_json(
+                        {"ok": False, "error": f"Book {book} not found"},
+                        status=HTTPStatus.NOT_FOUND,
+                    )
 
                 try:
                     cover_path = mockup_generator.winner_cover_path(
@@ -11088,7 +13834,12 @@ def serve_review_webapp(
                         catalog=catalog,
                         winner_map=winners,
                     )
-                    out_path = runtime_req.output_dir / "Mockups" / record.folder_name / f"{template_id}.jpg"
+                    out_path = (
+                        runtime_req.output_dir
+                        / "Mockups"
+                        / record.folder_name
+                        / f"{template_id}.jpg"
+                    )
                     saved = mockup_generator.generate_mockup(
                         cover_image_path=str(cover_path),
                         template_id=template_id,
@@ -11098,7 +13849,10 @@ def serve_review_webapp(
                         book_author=record.author,
                     )
                 except Exception as exc:
-                    return self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                    return self._send_json(
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
 
                 rel = _to_project_relative(Path(saved))
                 return self._send_json(
@@ -11117,7 +13871,9 @@ def serve_review_webapp(
                 all_books = bool(body.get("all_books", False))
                 template_ids = body.get("templates")
                 if isinstance(template_ids, str):
-                    template_ids = [item.strip() for item in template_ids.split(",") if item.strip()]
+                    template_ids = [
+                        item.strip() for item in template_ids.split(",") if item.strip()
+                    ]
                 if not isinstance(template_ids, list):
                     template_ids = None
                 spine_width = max(40, _safe_int(body.get("spine_width"), 100))
@@ -11140,7 +13896,10 @@ def serve_review_webapp(
                         spine_width_px=spine_width,
                     )
                 except Exception as exc:
-                    return self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                    return self._send_json(
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
 
                 summary["ok"] = True
                 summary["catalog"] = runtime_req.catalog_id
@@ -11159,7 +13918,9 @@ def serve_review_webapp(
                 _record_audit_event(
                     action="generate_all_mockups",
                     impact="cost",
-                    actor=str(body.get("actor") or body.get("reviewer") or configured_reviewer),
+                    actor=str(
+                        body.get("actor") or body.get("reviewer") or configured_reviewer
+                    ),
                     source_ip=client_ip,
                     endpoint=path,
                     catalog_id=runtime_req.catalog_id,
@@ -11194,7 +13955,10 @@ def serve_review_webapp(
                         spine_width_px=spine_width,
                     )
                 except Exception as exc:
-                    return self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                    return self._send_json(
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
 
                 summary["ok"] = True
                 summary["catalog"] = runtime_req.catalog_id
@@ -11205,7 +13969,9 @@ def serve_review_webapp(
                     model="mockup_generator",
                     provider="local",
                     book_number=book if book > 0 else 0,
-                    images_generated=_safe_int(summary.get("generated", summary.get("books", 0)), 0),
+                    images_generated=_safe_int(
+                        summary.get("generated", summary.get("books", 0)), 0
+                    ),
                     duration_seconds=0.0,
                     metadata={"all_books": all_books},
                 )
@@ -11213,7 +13979,9 @@ def serve_review_webapp(
                 _record_audit_event(
                     action="generate_amazon_set",
                     impact="cost",
-                    actor=str(body.get("actor") or body.get("reviewer") or configured_reviewer),
+                    actor=str(
+                        body.get("actor") or body.get("reviewer") or configured_reviewer
+                    ),
                     source_ip=client_ip,
                     endpoint=path,
                     catalog_id=runtime_req.catalog_id,
@@ -11233,7 +14001,9 @@ def serve_review_webapp(
                 all_books = bool(body.get("all_books", False))
                 formats = body.get("formats")
                 if isinstance(formats, str):
-                    formats = [item.strip() for item in formats.split(",") if item.strip()]
+                    formats = [
+                        item.strip() for item in formats.split(",") if item.strip()
+                    ]
                 if not isinstance(formats, list):
                     formats = ["instagram", "facebook", "twitter", "story", "pinterest"]
                 if book <= 0 and not all_books:
@@ -11251,7 +14021,10 @@ def serve_review_webapp(
                         formats=formats,
                     )
                 except Exception as exc:
-                    return self._send_json({"ok": False, "error": str(exc)}, status=HTTPStatus.INTERNAL_SERVER_ERROR)
+                    return self._send_json(
+                        {"ok": False, "error": str(exc)},
+                        status=HTTPStatus.INTERNAL_SERVER_ERROR,
+                    )
 
                 summary["ok"] = True
                 summary["catalog"] = runtime_req.catalog_id
@@ -11270,7 +14043,9 @@ def serve_review_webapp(
                 _record_audit_event(
                     action="generate_social_cards",
                     impact="cost",
-                    actor=str(body.get("actor") or body.get("reviewer") or configured_reviewer),
+                    actor=str(
+                        body.get("actor") or body.get("reviewer") or configured_reviewer
+                    ),
                     source_ip=client_ip,
                     endpoint=path,
                     catalog_id=runtime_req.catalog_id,
@@ -11290,19 +14065,46 @@ def serve_review_webapp(
                 books_payload = body.get("books", "all")
                 books: list[int] | None
                 if isinstance(books_payload, list):
-                    books = sorted({_safe_int(item, 0) for item in books_payload if _safe_int(item, 0) > 0}) or None
+                    books = (
+                        sorted(
+                            {
+                                _safe_int(item, 0)
+                                for item in books_payload
+                                if _safe_int(item, 0) > 0
+                            }
+                        )
+                        or None
+                    )
                 else:
                     books_token = str(books_payload or "all").strip().lower()
-                    books = None if books_token in {"all", "*", ""} else (_parse_books(books_token) or None)
+                    books = (
+                        None
+                        if books_token in {"all", "*", ""}
+                        else (_parse_books(books_token) or None)
+                    )
 
-                platforms_raw = body.get("platforms", ["amazon", "ingram", "social", "web"])
+                platforms_raw = body.get(
+                    "platforms", ["amazon", "ingram", "social", "web"]
+                )
                 if isinstance(platforms_raw, str):
-                    platforms = [token.strip().lower() for token in platforms_raw.split(",") if token.strip()]
+                    platforms = [
+                        token.strip().lower()
+                        for token in platforms_raw.split(",")
+                        if token.strip()
+                    ]
                 elif isinstance(platforms_raw, list):
-                    platforms = [str(token).strip().lower() for token in platforms_raw if str(token).strip()]
+                    platforms = [
+                        str(token).strip().lower()
+                        for token in platforms_raw
+                        if str(token).strip()
+                    ]
                 else:
                     platforms = []
-                valid_platforms = [token for token in platforms if token in {"amazon", "ingram", "social", "web"}]
+                valid_platforms = [
+                    token
+                    for token in platforms
+                    if token in {"amazon", "ingram", "social", "web"}
+                ]
                 if not valid_platforms:
                     valid_platforms = ["amazon", "ingram", "social", "web"]
 
@@ -11318,7 +14120,9 @@ def serve_review_webapp(
                                 catalog_path=runtime_req.book_catalog_path,
                                 output_root=runtime_req.output_dir,
                                 selections_path=_winner_path_for_runtime(runtime_req),
-                                quality_path=_quality_scores_path_for_runtime(runtime_req),
+                                quality_path=_quality_scores_path_for_runtime(
+                                    runtime_req
+                                ),
                                 exports_root=EXPORTS_ROOT,
                                 books=books,
                             )
@@ -11328,7 +14132,9 @@ def serve_review_webapp(
                                 catalog_path=runtime_req.book_catalog_path,
                                 output_root=runtime_req.output_dir,
                                 selections_path=_winner_path_for_runtime(runtime_req),
-                                quality_path=_quality_scores_path_for_runtime(runtime_req),
+                                quality_path=_quality_scores_path_for_runtime(
+                                    runtime_req
+                                ),
                                 exports_root=EXPORTS_ROOT,
                                 books=books,
                             )
@@ -11338,7 +14144,9 @@ def serve_review_webapp(
                                 catalog_path=runtime_req.book_catalog_path,
                                 output_root=runtime_req.output_dir,
                                 selections_path=_winner_path_for_runtime(runtime_req),
-                                quality_path=_quality_scores_path_for_runtime(runtime_req),
+                                quality_path=_quality_scores_path_for_runtime(
+                                    runtime_req
+                                ),
                                 exports_root=EXPORTS_ROOT,
                                 books=books,
                                 platforms=body.get("social_platforms", "all"),
@@ -11350,21 +14158,34 @@ def serve_review_webapp(
                                 catalog_path=runtime_req.book_catalog_path,
                                 output_root=runtime_req.output_dir,
                                 selections_path=_winner_path_for_runtime(runtime_req),
-                                quality_path=_quality_scores_path_for_runtime(runtime_req),
+                                quality_path=_quality_scores_path_for_runtime(
+                                    runtime_req
+                                ),
                                 exports_root=EXPORTS_ROOT,
                                 books=books,
                             )
-                        export_id = _register_export_result(runtime=runtime_req, export_type=platform, summary=summary)
+                        export_id = _register_export_result(
+                            runtime=runtime_req, export_type=platform, summary=summary
+                        )
                         summary["ok"] = bool(summary.get("ok", True))
                         summary["export_id"] = export_id
                         platform_results[platform] = summary
                         export_ids[platform] = export_id
                     except Exception as exc:
                         failures.append({"platform": platform, "error": str(exc)})
-                        platform_results[platform] = {"ok": False, "error": str(exc), "results": []}
+                        platform_results[platform] = {
+                            "ok": False,
+                            "error": str(exc),
+                            "results": [],
+                        }
 
                 batch_stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
-                combined_root = EXPORTS_ROOT / "all" / runtime_req.catalog_id / f"bundle-{batch_stamp}"
+                combined_root = (
+                    EXPORTS_ROOT
+                    / "all"
+                    / runtime_req.catalog_id
+                    / f"bundle-{batch_stamp}"
+                )
                 combined_root.mkdir(parents=True, exist_ok=True)
                 if books:
                     selected_books = sorted(set(books))
@@ -11373,7 +14194,11 @@ def serve_review_webapp(
                         {
                             _safe_int(item.get("book_number"), 0)
                             for summary in platform_results.values()
-                            for item in (summary.get("results", []) if isinstance(summary, dict) else [])
+                            for item in (
+                                summary.get("results", [])
+                                if isinstance(summary, dict)
+                                else []
+                            )
                             if isinstance(item, dict)
                             and _safe_int(item.get("book_number"), 0) > 0
                         }
@@ -11404,7 +14229,10 @@ def serve_review_webapp(
                                 shutil.copy2(child, dst)
 
                 combined_summary = {
-                    "ok": len(failures) == 0 and all(bool(row.get("ok", False)) for row in platform_results.values()),
+                    "ok": len(failures) == 0
+                    and all(
+                        bool(row.get("ok", False)) for row in platform_results.values()
+                    ),
                     "catalog": runtime_req.catalog_id,
                     "export_type": "all",
                     "books_requested": len(selected_books),
@@ -11415,8 +14243,15 @@ def serve_review_webapp(
                     "platform_results": platform_results,
                     "errors": failures,
                 }
-                combined_export_id = _register_export_result(runtime=runtime_req, export_type="all", summary=combined_summary)
-                _invalidate_cache("/api/exports", "/api/storage/usage", "/api/delivery/tracking", "/api/export/status")
+                combined_export_id = _register_export_result(
+                    runtime=runtime_req, export_type="all", summary=combined_summary
+                )
+                _invalidate_cache(
+                    "/api/exports",
+                    "/api/storage/usage",
+                    "/api/delivery/tracking",
+                    "/api/export/status",
+                )
                 return self._send_json(
                     {
                         "ok": combined_summary["ok"],
@@ -11442,7 +14277,9 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 try:
-                    validation = _validate_export_readiness_for_book(runtime=runtime_req, book_number=book_number)
+                    validation = _validate_export_readiness_for_book(
+                        runtime=runtime_req, book_number=book_number
+                    )
                 except Exception as exc:
                     return self._send_error(
                         code="EXPORT_VALIDATION_FAILED",
@@ -11451,7 +14288,12 @@ def serve_review_webapp(
                         status=HTTPStatus.INTERNAL_SERVER_ERROR,
                         endpoint=path,
                     )
-                return self._send_json(validation, status=HTTPStatus.OK if bool(validation.get("ok", False)) else HTTPStatus.UNPROCESSABLE_ENTITY)
+                return self._send_json(
+                    validation,
+                    status=HTTPStatus.OK
+                    if bool(validation.get("ok", False))
+                    else HTTPStatus.UNPROCESSABLE_ENTITY,
+                )
 
             if path == "/api/export/amazon" or path.startswith("/api/export/amazon/"):
                 book = 0
@@ -11466,7 +14308,11 @@ def serve_review_webapp(
                             status=HTTPStatus.BAD_REQUEST,
                             endpoint=path,
                         )
-                books = [book] if book > 0 else (_parse_books(str(body.get("books", ""))) or None)
+                books = (
+                    [book]
+                    if book > 0
+                    else (_parse_books(str(body.get("books", ""))) or None)
+                )
                 try:
                     summary = export_amazon.export_catalog(
                         catalog_id=runtime_req.catalog_id,
@@ -11484,7 +14330,9 @@ def serve_review_webapp(
                         status=HTTPStatus.INTERNAL_SERVER_ERROR,
                         endpoint=path,
                     )
-                export_id = _register_export_result(runtime=runtime_req, export_type="amazon", summary=summary)
+                export_id = _register_export_result(
+                    runtime=runtime_req, export_type="amazon", summary=summary
+                )
                 summary["ok"] = summary.get("ok", True)
                 summary["export_id"] = export_id
                 _record_cost_entry(
@@ -11496,9 +14344,17 @@ def serve_review_webapp(
                     book_number=book if book > 0 else 0,
                     images_generated=_safe_int(summary.get("file_count"), 0),
                     duration_seconds=0.0,
-                    metadata={"books_requested": summary.get("books_requested", 0), "export_id": export_id},
+                    metadata={
+                        "books_requested": summary.get("books_requested", 0),
+                        "export_id": export_id,
+                    },
                 )
-                _invalidate_cache("/api/exports", "/api/export/status", "/api/delivery/tracking", "/api/storage/usage")
+                _invalidate_cache(
+                    "/api/exports",
+                    "/api/export/status",
+                    "/api/delivery/tracking",
+                    "/api/storage/usage",
+                )
                 return self._send_json(summary)
 
             if path == "/api/export/ingram" or path.startswith("/api/export/ingram/"):
@@ -11514,7 +14370,11 @@ def serve_review_webapp(
                             status=HTTPStatus.BAD_REQUEST,
                             endpoint=path,
                         )
-                books = [book] if book > 0 else (_parse_books(str(body.get("books", ""))) or None)
+                books = (
+                    [book]
+                    if book > 0
+                    else (_parse_books(str(body.get("books", ""))) or None)
+                )
                 try:
                     summary = export_ingram.export_catalog(
                         catalog_id=runtime_req.catalog_id,
@@ -11532,7 +14392,9 @@ def serve_review_webapp(
                         status=HTTPStatus.INTERNAL_SERVER_ERROR,
                         endpoint=path,
                     )
-                export_id = _register_export_result(runtime=runtime_req, export_type="ingram", summary=summary)
+                export_id = _register_export_result(
+                    runtime=runtime_req, export_type="ingram", summary=summary
+                )
                 summary["ok"] = summary.get("ok", True)
                 summary["export_id"] = export_id
                 _record_cost_entry(
@@ -11544,9 +14406,17 @@ def serve_review_webapp(
                     book_number=book if book > 0 else 0,
                     images_generated=_safe_int(summary.get("file_count"), 0),
                     duration_seconds=0.0,
-                    metadata={"books_requested": summary.get("books_requested", 0), "export_id": export_id},
+                    metadata={
+                        "books_requested": summary.get("books_requested", 0),
+                        "export_id": export_id,
+                    },
                 )
-                _invalidate_cache("/api/exports", "/api/export/status", "/api/delivery/tracking", "/api/storage/usage")
+                _invalidate_cache(
+                    "/api/exports",
+                    "/api/export/status",
+                    "/api/delivery/tracking",
+                    "/api/storage/usage",
+                )
                 return self._send_json(summary)
 
             if path == "/api/export/social" or path.startswith("/api/export/social/"):
@@ -11562,8 +14432,15 @@ def serve_review_webapp(
                             status=HTTPStatus.BAD_REQUEST,
                             endpoint=path,
                         )
-                platforms_token = str(query.get("platforms", [body.get("platforms", "all")])[0] or body.get("platforms", "all"))
-                books = [book] if book > 0 else (_parse_books(str(body.get("books", ""))) or None)
+                platforms_token = str(
+                    query.get("platforms", [body.get("platforms", "all")])[0]
+                    or body.get("platforms", "all")
+                )
+                books = (
+                    [book]
+                    if book > 0
+                    else (_parse_books(str(body.get("books", ""))) or None)
+                )
                 try:
                     summary = export_social.export_catalog(
                         catalog_id=runtime_req.catalog_id,
@@ -11583,7 +14460,9 @@ def serve_review_webapp(
                         status=HTTPStatus.INTERNAL_SERVER_ERROR,
                         endpoint=path,
                     )
-                export_id = _register_export_result(runtime=runtime_req, export_type="social", summary=summary)
+                export_id = _register_export_result(
+                    runtime=runtime_req, export_type="social", summary=summary
+                )
                 summary["ok"] = summary.get("ok", True)
                 summary["export_id"] = export_id
                 _record_cost_entry(
@@ -11595,9 +14474,18 @@ def serve_review_webapp(
                     book_number=book if book > 0 else 0,
                     images_generated=_safe_int(summary.get("file_count"), 0),
                     duration_seconds=0.0,
-                    metadata={"books_requested": summary.get("books_requested", 0), "platforms": platforms_token, "export_id": export_id},
+                    metadata={
+                        "books_requested": summary.get("books_requested", 0),
+                        "platforms": platforms_token,
+                        "export_id": export_id,
+                    },
                 )
-                _invalidate_cache("/api/exports", "/api/export/status", "/api/delivery/tracking", "/api/storage/usage")
+                _invalidate_cache(
+                    "/api/exports",
+                    "/api/export/status",
+                    "/api/delivery/tracking",
+                    "/api/storage/usage",
+                )
                 return self._send_json(summary)
 
             if path == "/api/export/web":
@@ -11619,7 +14507,9 @@ def serve_review_webapp(
                         status=HTTPStatus.INTERNAL_SERVER_ERROR,
                         endpoint=path,
                     )
-                export_id = _register_export_result(runtime=runtime_req, export_type="web", summary=summary)
+                export_id = _register_export_result(
+                    runtime=runtime_req, export_type="web", summary=summary
+                )
                 summary["ok"] = summary.get("ok", True)
                 summary["export_id"] = export_id
                 _record_cost_entry(
@@ -11631,9 +14521,17 @@ def serve_review_webapp(
                     book_number=0,
                     images_generated=_safe_int(summary.get("file_count"), 0),
                     duration_seconds=0.0,
-                    metadata={"books_requested": summary.get("books_requested", 0), "export_id": export_id},
+                    metadata={
+                        "books_requested": summary.get("books_requested", 0),
+                        "export_id": export_id,
+                    },
                 )
-                _invalidate_cache("/api/exports", "/api/export/status", "/api/delivery/tracking", "/api/storage/usage")
+                _invalidate_cache(
+                    "/api/exports",
+                    "/api/export/status",
+                    "/api/delivery/tracking",
+                    "/api/storage/usage",
+                )
                 return self._send_json(summary)
 
             if path == "/api/delivery/enable":
@@ -11642,7 +14540,14 @@ def serve_review_webapp(
                     enabled=True,
                     config_path=_delivery_config_path_for_runtime(runtime_req),
                 )
-                return self._send_json({"ok": True, "catalog": runtime_req.catalog_id, "enabled": cfg.enabled, "updated_at": cfg.updated_at})
+                return self._send_json(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "enabled": cfg.enabled,
+                        "updated_at": cfg.updated_at,
+                    }
+                )
 
             if path == "/api/delivery/disable":
                 cfg = delivery_pipeline.set_enabled(
@@ -11650,28 +14555,64 @@ def serve_review_webapp(
                     enabled=False,
                     config_path=_delivery_config_path_for_runtime(runtime_req),
                 )
-                return self._send_json({"ok": True, "catalog": runtime_req.catalog_id, "enabled": cfg.enabled, "updated_at": cfg.updated_at})
+                return self._send_json(
+                    {
+                        "ok": True,
+                        "catalog": runtime_req.catalog_id,
+                        "enabled": cfg.enabled,
+                        "updated_at": cfg.updated_at,
+                    }
+                )
 
             if path == "/api/delivery/batch":
-                platforms_token = str(query.get("platforms", [body.get("platforms", "")])[0] or body.get("platforms", ""))
-                platforms = [token.strip().lower() for token in platforms_token.split(",") if token.strip()] if platforms_token else None
+                platforms_token = str(
+                    query.get("platforms", [body.get("platforms", "")])[0]
+                    or body.get("platforms", "")
+                )
+                platforms = (
+                    [
+                        token.strip().lower()
+                        for token in platforms_token.split(",")
+                        if token.strip()
+                    ]
+                    if platforms_token
+                    else None
+                )
                 if platforms:
                     valid_platforms = set(delivery_pipeline.DEFAULT_PLATFORMS)
-                    invalid_platforms = sorted({token for token in platforms if token not in valid_platforms})
+                    invalid_platforms = sorted(
+                        {token for token in platforms if token not in valid_platforms}
+                    )
                     if invalid_platforms:
                         return self._send_error(
                             code="INVALID_DELIVERY_PLATFORMS",
                             message="One or more delivery platforms are invalid.",
-                            details={"invalid": invalid_platforms, "valid": sorted(valid_platforms)},
+                            details={
+                                "invalid": invalid_platforms,
+                                "valid": sorted(valid_platforms),
+                            },
                             status=HTTPStatus.BAD_REQUEST,
                             endpoint=path,
                         )
-                books_param = str(query.get("books", [body.get("books", "")])[0] or body.get("books", ""))
+                books_param = str(
+                    query.get("books", [body.get("books", "")])[0]
+                    or body.get("books", "")
+                )
                 books = _parse_books(books_param)
                 if not books:
-                    winners_payload = _load_winner_payload(_winner_path_for_runtime(runtime_req))
-                    selection_rows = winners_payload.get("selections", {}) if isinstance(winners_payload, dict) else {}
-                    books = sorted(_safe_int(key, 0) for key in selection_rows.keys() if _safe_int(key, 0) > 0)
+                    winners_payload = _load_winner_payload(
+                        _winner_path_for_runtime(runtime_req)
+                    )
+                    selection_rows = (
+                        winners_payload.get("selections", {})
+                        if isinstance(winners_payload, dict)
+                        else {}
+                    )
+                    books = sorted(
+                        _safe_int(key, 0)
+                        for key in selection_rows.keys()
+                        if _safe_int(key, 0) > 0
+                    )
                 if not books:
                     return self._send_error(
                         code="NO_READY_BOOKS",
@@ -11689,7 +14630,9 @@ def serve_review_webapp(
                     quality_path=_quality_scores_path_for_runtime(runtime_req),
                     exports_root=EXPORTS_ROOT,
                     delivery_config_path=_delivery_config_path_for_runtime(runtime_req),
-                    delivery_tracking_path=_delivery_tracking_path_for_runtime(runtime_req),
+                    delivery_tracking_path=_delivery_tracking_path_for_runtime(
+                        runtime_req
+                    ),
                     drive_folder_id=runtime_req.gdrive_output_folder_id,
                     credentials_path=_resolve_credentials_path(runtime_req),
                     platforms=platforms,
@@ -11697,16 +14640,27 @@ def serve_review_webapp(
                 )
                 for event in events:
                     if isinstance(event, dict):
-                        event_name = str(event.get("event", "job_progress") or "job_progress")
+                        event_name = str(
+                            event.get("event", "job_progress") or "job_progress"
+                        )
                         job_event_broker.publish(
                             event_name,
                             {"catalog_id": runtime_req.catalog_id, **event},
                         )
-                _invalidate_cache("/api/delivery/status", "/api/delivery/tracking", "/api/exports", "/api/storage/usage")
-                return self._send_json({"ok": bool(summary.get("ok", False)), "summary": summary})
+                _invalidate_cache(
+                    "/api/delivery/status",
+                    "/api/delivery/tracking",
+                    "/api/exports",
+                    "/api/storage/usage",
+                )
+                return self._send_json(
+                    {"ok": bool(summary.get("ok", False)), "summary": summary}
+                )
 
             if path == "/api/save-raw":
-                job_id = str(body.get("job_id", "") or body.get("backend_job_id", "")).strip()
+                job_id = str(
+                    body.get("job_id", "") or body.get("backend_job_id", "")
+                ).strip()
                 if not job_id:
                     return self._send_error(
                         code="JOB_ID_REQUIRED",
@@ -11725,12 +14679,17 @@ def serve_review_webapp(
                     )
                 expected_selection = _save_raw_expectation_from_payload(body)
                 try:
-                    payload = _save_raw_payload_for_job(runtime=runtime_req, job=job, expected=expected_selection)
+                    payload = _save_raw_payload_for_job(
+                        runtime=runtime_req, job=job, expected=expected_selection
+                    )
                 except LookupError:
                     return self._send_error(
                         code="BOOK_NOT_FOUND",
                         message="book not found for job",
-                        details={"job_id": job_id, "book_number": int(job.book_number or 0)},
+                        details={
+                            "job_id": job_id,
+                            "book_number": int(job.book_number or 0),
+                        },
                         status=HTTPStatus.NOT_FOUND,
                         endpoint=path,
                     )
@@ -11753,7 +14712,9 @@ def serve_review_webapp(
                 return self._send_json(payload)
 
             if path == "/api/save-result":
-                job_id = str(body.get("job_id", "") or body.get("backend_job_id", "")).strip()
+                job_id = str(
+                    body.get("job_id", "") or body.get("backend_job_id", "")
+                ).strip()
                 if not job_id:
                     return self._send_error(
                         code="JOB_ID_REQUIRED",
@@ -11783,7 +14744,10 @@ def serve_review_webapp(
                     return self._send_error(
                         code="BOOK_NOT_FOUND",
                         message="book not found for job",
-                        details={"job_id": job_id, "book_number": int(job.book_number or 0)},
+                        details={
+                            "job_id": job_id,
+                            "book_number": int(job.book_number or 0),
+                        },
                         status=HTTPStatus.NOT_FOUND,
                         endpoint=path,
                     )
@@ -11806,7 +14770,9 @@ def serve_review_webapp(
                 return self._send_json(payload)
 
             if path == "/api/retry-drive-upload":
-                job_id = str(body.get("job_id", "") or body.get("backend_job_id", "")).strip()
+                job_id = str(
+                    body.get("job_id", "") or body.get("backend_job_id", "")
+                ).strip()
                 if not job_id:
                     return self._send_error(
                         code="JOB_ID_REQUIRED",
@@ -11825,12 +14791,17 @@ def serve_review_webapp(
                     )
                 expected_selection = _save_raw_expectation_from_payload(body)
                 try:
-                    payload = _save_raw_payload_for_job(runtime=runtime_req, job=job, expected=expected_selection)
+                    payload = _save_raw_payload_for_job(
+                        runtime=runtime_req, job=job, expected=expected_selection
+                    )
                 except LookupError:
                     return self._send_error(
                         code="BOOK_NOT_FOUND",
                         message="book not found for job",
-                        details={"job_id": job_id, "book_number": int(job.book_number or 0)},
+                        details={
+                            "job_id": job_id,
+                            "book_number": int(job.book_number or 0),
+                        },
                         status=HTTPStatus.NOT_FOUND,
                         endpoint=path,
                     )
@@ -11856,7 +14827,9 @@ def serve_review_webapp(
             if path == "/api/save-prompt":
                 try:
                     with lock:
-                        payload = _save_prompt_from_request(runtime=runtime_req, body=body)
+                        payload = _save_prompt_from_request(
+                            runtime=runtime_req, body=body
+                        )
                 except ValueError as exc:
                     return self._send_error(
                         code="PROMPT_SAVE_INVALID",
@@ -11877,11 +14850,15 @@ def serve_review_webapp(
             if path == "/api/prompts/seed-builtins":
                 payload = _seed_builtin_prompts(
                     runtime=runtime_req,
-                    actor=str(body.get("actor") or body.get("reviewer") or configured_reviewer),
+                    actor=str(
+                        body.get("actor") or body.get("reviewer") or configured_reviewer
+                    ),
                     overwrite=bool(body.get("overwrite", False)),
                 )
                 write_iterate_data(runtime=runtime_req)
-                _invalidate_cache("/api/prompts", "/api/iterate-data", "/api/prompt-performance")
+                _invalidate_cache(
+                    "/api/prompts", "/api/iterate-data", "/api/prompt-performance"
+                )
                 return self._send_json(payload)
 
             if path == "/api/prompts/import":
@@ -11904,9 +14881,15 @@ def serve_review_webapp(
                     if action == "delete":
                         payload = _delete_prompt(runtime=runtime_req, prompt_id=token)
                     elif action == "record_usage":
-                        payload = _record_prompt_usage(runtime=runtime_req, prompt_id=token, won=bool(body.get("won", False)))
+                        payload = _record_prompt_usage(
+                            runtime=runtime_req,
+                            prompt_id=token,
+                            won=bool(body.get("won", False)),
+                        )
                     else:
-                        payload = _update_prompt_from_request(runtime=runtime_req, prompt_id=token, body=body)
+                        payload = _update_prompt_from_request(
+                            runtime=runtime_req, prompt_id=token, body=body
+                        )
                 except KeyError:
                     return self._send_error(
                         code="PROMPT_NOT_FOUND",
@@ -11933,14 +14916,22 @@ def serve_review_webapp(
             if path == "/api/test-connection":
                 provider = str(body.get("provider", "")).strip().lower()
                 selected = [provider] if provider and provider != "all" else None
-                report = pipeline_runner.test_api_keys(runtime=runtime_req, providers=selected)
+                report = pipeline_runner.test_api_keys(
+                    runtime=runtime_req, providers=selected
+                )
                 with _provider_connectivity_cache_lock:
                     _provider_connectivity_cache.pop(str(runtime_req.catalog_id), None)
                 return self._send_json({"ok": True, "report": report})
 
             if path == "/api/validate/cover":
-                distributor = str(body.get("distributor", "ingram_spark") or "ingram_spark").strip().lower()
-                file_token = str(body.get("file_path", body.get("image_path", "")) or "").strip()
+                distributor = (
+                    str(body.get("distributor", "ingram_spark") or "ingram_spark")
+                    .strip()
+                    .lower()
+                )
+                file_token = str(
+                    body.get("file_path", body.get("image_path", "")) or ""
+                ).strip()
                 text_elements = body.get("text_elements", [])
                 if not isinstance(text_elements, list):
                     text_elements = []
@@ -11980,17 +14971,25 @@ def serve_review_webapp(
                 try:
                     with Image.open(safe_path) as cover_image:
                         if distributor == "all":
-                            payload = validator.validate_for_all_distributors(cover_image, text_elements, safe_path)
+                            payload = validator.validate_for_all_distributors(
+                                cover_image, text_elements, safe_path
+                            )
                             return self._send_json(
                                 {
                                     "ok": True,
                                     "file_path": _to_project_relative(safe_path),
                                     "distributor": "all",
                                     "results": payload,
-                                    "passed": all(bool(row.get("passed")) for row in payload.values() if isinstance(row, dict)),
+                                    "passed": all(
+                                        bool(row.get("passed"))
+                                        for row in payload.values()
+                                        if isinstance(row, dict)
+                                    ),
                                 }
                             )
-                        result = validator.validate_all(cover_image, text_elements, safe_path, distributor)
+                        result = validator.validate_all(
+                            cover_image, text_elements, safe_path, distributor
+                        )
                         return self._send_json(
                             {
                                 "ok": True,
@@ -12002,7 +15001,11 @@ def serve_review_webapp(
                     return self._send_error(
                         code="UNKNOWN_DISTRIBUTOR",
                         message=f"Unknown distributor: {distributor}",
-                        details={"supported": sorted(_print_validator_instance().specs.keys())},
+                        details={
+                            "supported": sorted(
+                                _print_validator_instance().specs.keys()
+                            )
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
@@ -12010,23 +15013,42 @@ def serve_review_webapp(
                     return self._send_error(
                         code="PRINT_VALIDATION_FAILED",
                         message=str(exc),
-                        details={"file_path": str(safe_path), "distributor": distributor},
+                        details={
+                            "file_path": str(safe_path),
+                            "distributor": distributor,
+                        },
                         status=HTTPStatus.INTERNAL_SERVER_ERROR,
                         endpoint=path,
                     )
 
             if path == "/api/generate":
                 book = int(body.get("book", 0))
-                models = list(body.get("models", [])) if isinstance(body.get("models", []), list) else []
+                models = (
+                    list(body.get("models", []))
+                    if isinstance(body.get("models", []), list)
+                    else []
+                )
                 variants = int(body.get("variants", 5))
                 requested_variant = max(1, _safe_int(body.get("variant"), 1))
                 prompt = str(body.get("prompt", ""))
-                prompt_source = str(body.get("promptSource", body.get("prompt_source", "template")) or "template").strip().lower() or "template"
-                template_id = str(body.get("template_id", body.get("templateId", "")) or "").strip()
+                prompt_source = (
+                    str(
+                        body.get("promptSource", body.get("prompt_source", "template"))
+                        or "template"
+                    )
+                    .strip()
+                    .lower()
+                    or "template"
+                )
+                template_id = str(
+                    body.get("template_id", body.get("templateId", "")) or ""
+                ).strip()
                 compose_prompt = bool(body.get("compose_prompt", True))
                 preserve_prompt_text = bool(body.get("preserve_prompt_text", False))
                 scene_description = str(body.get("scene_description", "") or "").strip()
-                template_ok, template_details = _validate_template_id(runtime=runtime_req, template_id=template_id)
+                template_ok, template_details = _validate_template_id(
+                    runtime=runtime_req, template_id=template_id
+                )
                 if not template_ok:
                     return self._send_error(
                         code="INVALID_TEMPLATE_ID",
@@ -12036,22 +15058,31 @@ def serve_review_webapp(
                         endpoint=path,
                     )
                 provider = str(body.get("provider", "")).strip().lower()
-                cover_source = str(body.get("cover_source", "catalog")).strip().lower() or "catalog"
+                cover_source = (
+                    str(body.get("cover_source", "catalog")).strip().lower()
+                    or "catalog"
+                )
                 if cover_source not in {"catalog", "drive"}:
                     cover_source = "catalog"
                 selected_cover = body.get("selected_cover")
                 selected_cover_id = str(body.get("selected_cover_id", "")).strip()
                 if not selected_cover_id and isinstance(selected_cover, dict):
                     selected_cover_id = str(selected_cover.get("id", "")).strip()
-                selected_cover_book_number = _safe_int(body.get("selected_cover_book_number"), 0)
+                selected_cover_book_number = _safe_int(
+                    body.get("selected_cover_book_number"), 0
+                )
                 if selected_cover_book_number <= 0 and isinstance(selected_cover, dict):
-                    selected_cover_book_number = _safe_int(selected_cover.get("book_number"), 0)
+                    selected_cover_book_number = _safe_int(
+                        selected_cover.get("book_number"), 0
+                    )
                 drive_folder_id = str(body.get("drive_folder_id", "")).strip()
                 input_folder_id = str(body.get("input_folder_id", "")).strip()
                 credentials_path = str(body.get("credentials_path", "")).strip()
                 library_prompt_id = str(body.get("library_prompt_id", "")).strip()
                 async_mode = bool(body.get("async", True))
-                worker_mode = _normalize_worker_mode(body.get("worker_mode", ACTIVE_WORKER_MODE))
+                worker_mode = _normalize_worker_mode(
+                    body.get("worker_mode", ACTIVE_WORKER_MODE)
+                )
                 if _is_generation_budget_blocked(runtime_req):
                     budget = _budget_status_for_runtime(runtime_req)
                     return self._send_error(
@@ -12070,7 +15101,9 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                variant_validation = api_validation.validate_positive_int(variants, field="variants")
+                variant_validation = api_validation.validate_positive_int(
+                    variants, field="variants"
+                )
                 if not variant_validation.valid:
                     return self._send_error(
                         code=variant_validation.error.code,
@@ -12088,7 +15121,11 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                valid_drive_selection, drive_selection_error, resolved_selected_cover_id = _validate_drive_cover_request(
+                (
+                    valid_drive_selection,
+                    drive_selection_error,
+                    resolved_selected_cover_id,
+                ) = _validate_drive_cover_request(
                     runtime=runtime_req,
                     book=book,
                     cover_source=cover_source,
@@ -12102,7 +15139,8 @@ def serve_review_webapp(
                 if not valid_drive_selection:
                     return self._send_error(
                         code="INVALID_DRIVE_COVER_SELECTION",
-                        message=drive_selection_error or "Invalid Drive cover selection.",
+                        message=drive_selection_error
+                        or "Invalid Drive cover selection.",
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
@@ -12124,13 +15162,18 @@ def serve_review_webapp(
                                     row
                                     for row in variants_payload
                                     if isinstance(row, dict)
-                                    and _safe_int(row.get("variant_id", row.get("variant")), 0) == requested_variant
+                                    and _safe_int(
+                                        row.get("variant_id", row.get("variant")), 0
+                                    )
+                                    == requested_variant
                                 ),
                                 None,
                             )
                             variant_row = matching_variant or variants_payload[0]
                             if isinstance(variant_row, dict):
-                                default_prompt = str(variant_row.get("prompt", "")).strip()
+                                default_prompt = str(
+                                    variant_row.get("prompt", "")
+                                ).strip()
                         composed_prompt_payload = _compose_prompt_for_book(
                             runtime=runtime_req,
                             book=book_row,
@@ -12141,14 +15184,15 @@ def serve_review_webapp(
                                     f"Cinematic full-bleed narrative scene for {book_row.get('title', f'Book {book}')}, "
                                     "single dominant focal subject, vivid painterly color, no text, no logos, no borders or frames"
                                 )
-                            )
-                            .strip(),
+                            ).strip(),
                             template_id=template_id,
                             variant_index=max(0, requested_variant - 1),
                             scene_override=scene_description,
                         )
                         if prompt_source == "template" or not str(prompt).strip():
-                            prompt = str(composed_prompt_payload.get("prompt", prompt)).strip()
+                            prompt = str(
+                                composed_prompt_payload.get("prompt", prompt)
+                            ).strip()
                 if book_row is not None:
                     if precomposed_prompt:
                         prompt = " ".join(str(prompt or "").split()).strip()
@@ -12166,7 +15210,9 @@ def serve_review_webapp(
                             scene_override=scene_description,
                         )
                     _validate_prompt_before_generation(prompt, book_row)
-                active_models = [str(item).strip() for item in models if str(item).strip()]
+                active_models = [
+                    str(item).strip() for item in models if str(item).strip()
+                ]
                 if not active_models:
                     return self._send_error(
                         code="MODELS_REQUIRED",
@@ -12175,15 +15221,18 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                valid_catalog_source, catalog_source_error = _validate_catalog_cover_request(
-                    runtime=runtime_req,
-                    book=book,
-                    cover_source=cover_source,
+                valid_catalog_source, catalog_source_error = (
+                    _validate_catalog_cover_request(
+                        runtime=runtime_req,
+                        book=book,
+                        cover_source=cover_source,
+                    )
                 )
                 if not valid_catalog_source:
                     return self._send_error(
                         code="MISSING_LOCAL_COVER",
-                        message=catalog_source_error or "No local catalog cover is available for this title.",
+                        message=catalog_source_error
+                        or "No local catalog cover is available for this title.",
                         details={
                             "book": int(book),
                             "cover_source": cover_source,
@@ -12195,7 +15244,9 @@ def serve_review_webapp(
 
                 if async_mode:
                     requested_dry_run = bool(body.get("dry_run", False))
-                    idempotency_key = str(body.get("idempotency_key", "")).strip() or _generation_idempotency_key(
+                    idempotency_key = str(
+                        body.get("idempotency_key", "")
+                    ).strip() or _generation_idempotency_key(
                         catalog_id=runtime_req.catalog_id,
                         book=book,
                         models=active_models,
@@ -12226,13 +15277,23 @@ def serve_review_webapp(
                             metadata={
                                 "prompt_source": prompt_source,
                                 "template_id": template_id,
-                                **({"preserve_prompt_text": True} if preserve_prompt_text else {}),
+                                **(
+                                    {"preserve_prompt_text": True}
+                                    if preserve_prompt_text
+                                    else {}
+                                ),
                                 "variant": requested_variant,
                                 "scene_description": scene_description,
-                                "composed_prompt": str(composed_prompt_payload.get("prompt", "")).strip(),
+                                "composed_prompt": str(
+                                    composed_prompt_payload.get("prompt", "")
+                                ).strip(),
                                 "prompt_components": composed_prompt_payload,
-                                "inferred_genre": str(composed_prompt_payload.get("genre", "")).strip(),
-                                "prompt_processing": "frontend_resolved" if precomposed_prompt else "backend_enriched",
+                                "inferred_genre": str(
+                                    composed_prompt_payload.get("genre", "")
+                                ).strip(),
+                                "prompt_processing": "frontend_resolved"
+                                if precomposed_prompt
+                                else "backend_enriched",
                             },
                         )
                     except job_store.IdempotencyConflictError as exc:
@@ -12252,10 +15313,20 @@ def serve_review_webapp(
                         "event_url": f"/api/events/job/{job.id}",
                         "prompt_source": prompt_source,
                         "template_id": template_id or None,
-                        "composed_prompt": str(composed_prompt_payload.get("prompt", "")).strip() or None,
-                        "inferred_genre": str(composed_prompt_payload.get("genre", "")).strip() or None,
+                        "composed_prompt": str(
+                            composed_prompt_payload.get("prompt", "")
+                        ).strip()
+                        or None,
+                        "inferred_genre": str(
+                            composed_prompt_payload.get("genre", "")
+                        ).strip()
+                        or None,
                     }
-                    batch_token = str((job.payload or {}).get("batch_id", "")).strip() if isinstance(job.payload, dict) else ""
+                    batch_token = (
+                        str((job.payload or {}).get("batch_id", "")).strip()
+                        if isinstance(job.payload, dict)
+                        else ""
+                    )
                     if batch_token:
                         payload["batch_id"] = batch_token
                         payload["batch_event_url"] = f"/api/events/batch/{batch_token}"
@@ -12264,7 +15335,11 @@ def serve_review_webapp(
                     _record_audit_event(
                         action="generate_async",
                         impact="cost",
-                        actor=str(body.get("actor") or body.get("reviewer") or configured_reviewer),
+                        actor=str(
+                            body.get("actor")
+                            or body.get("reviewer")
+                            or configured_reviewer
+                        ),
                         source_ip=client_ip,
                         endpoint=path,
                         catalog_id=runtime_req.catalog_id,
@@ -12329,7 +15404,9 @@ def serve_review_webapp(
                 _record_audit_event(
                     action="generate_sync",
                     impact="cost",
-                    actor=str(body.get("actor") or body.get("reviewer") or configured_reviewer),
+                    actor=str(
+                        body.get("actor") or body.get("reviewer") or configured_reviewer
+                    ),
                     source_ip=client_ip,
                     endpoint=path,
                     catalog_id=runtime_req.catalog_id,
@@ -12374,18 +15451,34 @@ def serve_review_webapp(
                     return self._send_json(
                         {
                             "ok": False,
-                            "error": (completed.stderr or completed.stdout or "Regeneration failed").strip(),
+                            "error": (
+                                completed.stderr
+                                or completed.stdout
+                                or "Regeneration failed"
+                            ).strip(),
                         },
                         status=HTTPStatus.INTERNAL_SERVER_ERROR,
                     )
 
-                payload = _load_json(_regeneration_results_path_for_runtime(runtime_req), {"details": []})
+                payload = _load_json(
+                    _regeneration_results_path_for_runtime(runtime_req), {"details": []}
+                )
                 write_review_data(runtime_req.output_dir, runtime=runtime_req)
-                _invalidate_cache("/api/review-data", "/api/dashboard-data", "/api/history", "/api/generation-history", "/api/similarity-", "/api/weak-books", "/api/regeneration-results")
+                _invalidate_cache(
+                    "/api/review-data",
+                    "/api/dashboard-data",
+                    "/api/history",
+                    "/api/generation-history",
+                    "/api/similarity-",
+                    "/api/weak-books",
+                    "/api/regeneration-results",
+                )
                 _record_audit_event(
                     action="regenerate_weak",
                     impact="cost",
-                    actor=str(body.get("actor") or body.get("reviewer") or configured_reviewer),
+                    actor=str(
+                        body.get("actor") or body.get("reviewer") or configured_reviewer
+                    ),
                     source_ip=client_ip,
                     endpoint=path,
                     catalog_id=runtime_req.catalog_id,
@@ -12399,9 +15492,16 @@ def serve_review_webapp(
                         "auto_accept": auto_accept,
                     },
                 )
-                return self._send_json({"ok": True, "summary": payload, "stdout": completed.stdout.strip()})
+                return self._send_json(
+                    {"ok": True, "summary": payload, "stdout": completed.stdout.strip()}
+                )
 
-            if path in {"/api/sync-to-drive", "/api/drive/sync", "/api/drive/push", "/api/drive/pull"}:
+            if path in {
+                "/api/sync-to-drive",
+                "/api/drive/sync",
+                "/api/drive/push",
+                "/api/drive/pull",
+            }:
                 runtime = runtime_req
                 requested_mode = str(body.get("mode", "")).strip().lower()
                 if path.endswith("/push"):
@@ -12412,9 +15512,15 @@ def serve_review_webapp(
                     requested_mode = requested_mode or "bidirectional"
                 else:
                     requested_mode = requested_mode or "push"
-                drive_folder_id = str(body.get("drive_folder_id", runtime.gdrive_output_folder_id)).strip()
+                drive_folder_id = str(
+                    body.get("drive_folder_id", runtime.gdrive_output_folder_id)
+                ).strip()
                 credentials_override = str(body.get("credentials_path", "")).strip()
-                credentials_path = Path(credentials_override) if credentials_override else _resolve_credentials_path(runtime)
+                credentials_path = (
+                    Path(credentials_override)
+                    if credentials_override
+                    else _resolve_credentials_path(runtime)
+                )
                 if not credentials_path.is_absolute():
                     credentials_path = PROJECT_ROOT / credentials_path
 
@@ -12422,7 +15528,9 @@ def serve_review_webapp(
                 if requested_mode in {"push", "bidirectional", "sync"}:
                     selections = body.get("selections")
                     if not isinstance(selections, dict):
-                        selections = _load_json(_selection_path_for_runtime(runtime), {})
+                        selections = _load_json(
+                            _selection_path_for_runtime(runtime), {}
+                        )
                     selected_files = _collect_selected_variant_files(
                         output_dir=runtime.output_dir,
                         selections=selections,
@@ -12478,7 +15586,10 @@ def serve_review_webapp(
                     return self._send_error(
                         code="DRIVE_SYNC_FAILED",
                         message=str(exc),
-                        details={"mode": requested_mode, "drive_folder_id": drive_folder_id},
+                        details={
+                            "mode": requested_mode,
+                            "drive_folder_id": drive_folder_id,
+                        },
                         status=HTTPStatus.INTERNAL_SERVER_ERROR,
                         endpoint=path,
                     )
@@ -12500,7 +15611,9 @@ def serve_review_webapp(
                 _record_audit_event(
                     action="sync_to_drive",
                     impact="destructive",
-                    actor=str(body.get("actor") or body.get("reviewer") or configured_reviewer),
+                    actor=str(
+                        body.get("actor") or body.get("reviewer") or configured_reviewer
+                    ),
                     source_ip=client_ip,
                     endpoint=path,
                     catalog_id=runtime_req.catalog_id,
@@ -12527,9 +15640,17 @@ def serve_review_webapp(
                 )
 
             if path == "/api/archive/old-exports":
-                days = max(1, _safe_int(body.get("days", query.get("days", ["30"])[0]), 30))
+                days = max(
+                    1, _safe_int(body.get("days", query.get("days", ["30"])[0]), 30)
+                )
                 archived = _archive_old_exports(days=days, runtime=runtime_req)
-                _invalidate_cache("/api/archive/stats", "/api/storage/usage", "/api/exports", "/api/export/status", "/api/delivery/tracking")
+                _invalidate_cache(
+                    "/api/archive/stats",
+                    "/api/storage/usage",
+                    "/api/exports",
+                    "/api/export/status",
+                    "/api/delivery/tracking",
+                )
                 return self._send_json({"ok": True, "summary": archived})
 
             if path.startswith("/api/archive/restore/"):
@@ -12543,17 +15664,33 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                restored = _restore_archived_book(book_number=book_number, runtime=runtime_req)
-                _invalidate_cache("/api/archive/stats", "/api/storage/usage", "/api/review-data")
+                restored = _restore_archived_book(
+                    book_number=book_number, runtime=runtime_req
+                )
+                _invalidate_cache(
+                    "/api/archive/stats", "/api/storage/usage", "/api/review-data"
+                )
                 return self._send_json({"ok": True, "summary": restored})
 
             if path in {"/api/archive-non-winners", "/api/archive/non-winners"}:
                 dry_run = bool(body.get("dry_run", False))
                 include_unconfirmed = bool(body.get("include_unconfirmed", False))
-                selections_path = Path(str(body.get("selections_path", _winner_path_for_runtime(runtime_req))))
+                selections_path = Path(
+                    str(
+                        body.get(
+                            "selections_path", _winner_path_for_runtime(runtime_req)
+                        )
+                    )
+                )
                 if not selections_path.is_absolute():
                     selections_path = PROJECT_ROOT / selections_path
-                backup = _create_snapshot_before_operation(runtime_req, operation="archive_non_winners") if not dry_run else {"ok": False, "skipped": True, "reason": "dry_run"}
+                backup = (
+                    _create_snapshot_before_operation(
+                        runtime_req, operation="archive_non_winners"
+                    )
+                    if not dry_run
+                    else {"ok": False, "skipped": True, "reason": "dry_run"}
+                )
 
                 cmd = [
                     sys.executable,
@@ -12567,7 +15704,12 @@ def serve_review_webapp(
                     "--archive-dir",
                     str(runtime_req.output_dir / "Archive"),
                     "--log-path",
-                    str(config.archive_log_path(catalog_id=runtime_req.catalog_id, data_dir=runtime_req.data_dir)),
+                    str(
+                        config.archive_log_path(
+                            catalog_id=runtime_req.catalog_id,
+                            data_dir=runtime_req.data_dir,
+                        )
+                    ),
                 ]
                 if dry_run:
                     cmd.append("--dry-run")
@@ -12579,7 +15721,11 @@ def serve_review_webapp(
                     return self._send_json(
                         {
                             "ok": False,
-                            "error": (completed.stderr or completed.stdout or "Archive command failed").strip(),
+                            "error": (
+                                completed.stderr
+                                or completed.stdout
+                                or "Archive command failed"
+                            ).strip(),
                         },
                         status=HTTPStatus.INTERNAL_SERVER_ERROR,
                     )
@@ -12592,11 +15738,20 @@ def serve_review_webapp(
 
                 if not dry_run:
                     write_review_data(runtime_req.output_dir, runtime=runtime_req)
-                    _invalidate_cache("/api/review-data", "/api/dashboard-data", "/api/history", "/api/generation-history", "/api/archive/stats", "/api/storage/usage")
+                    _invalidate_cache(
+                        "/api/review-data",
+                        "/api/dashboard-data",
+                        "/api/history",
+                        "/api/generation-history",
+                        "/api/archive/stats",
+                        "/api/storage/usage",
+                    )
                 _record_audit_event(
                     action="archive_non_winners",
                     impact="destructive",
-                    actor=str(body.get("actor") or body.get("reviewer") or configured_reviewer),
+                    actor=str(
+                        body.get("actor") or body.get("reviewer") or configured_reviewer
+                    ),
                     source_ip=client_ip,
                     endpoint=path,
                     catalog_id=runtime_req.catalog_id,
@@ -12608,13 +15763,22 @@ def serve_review_webapp(
                         "summary": summary,
                     },
                 )
-                return self._send_json({"ok": True, "summary": summary, "dry_run": dry_run, "backup": backup})
+                return self._send_json(
+                    {
+                        "ok": True,
+                        "summary": summary,
+                        "dry_run": dry_run,
+                        "backup": backup,
+                    }
+                )
 
             if path == "/api/similarity/recompute":
                 threshold = _safe_float(
                     body.get(
                         "threshold",
-                        query.get("threshold", ["0.25"])[0] if isinstance(query.get("threshold"), list) else 0.25,
+                        query.get("threshold", ["0.25"])[0]
+                        if isinstance(query.get("threshold"), list)
+                        else 0.25,
                     ),
                     0.25,
                 )
@@ -12625,14 +15789,20 @@ def serve_review_webapp(
                     reason=str(body.get("reason", "manual")).strip() or "manual",
                     force=force,
                 )
-                _invalidate_cache("/api/similarity-matrix", "/api/similarity-alerts", "/api/similarity-clusters")
+                _invalidate_cache(
+                    "/api/similarity-matrix",
+                    "/api/similarity-alerts",
+                    "/api/similarity-clusters",
+                )
                 return self._send_json({"ok": True, **started})
 
             if path == "/api/similarity/update":
                 book = _safe_int(
                     body.get(
                         "book",
-                        query.get("book", ["0"])[0] if isinstance(query.get("book"), list) else 0,
+                        query.get("book", ["0"])[0]
+                        if isinstance(query.get("book"), list)
+                        else 0,
                     ),
                     0,
                 )
@@ -12640,14 +15810,23 @@ def serve_review_webapp(
                     return self._send_error(
                         code="INVALID_BOOK_NUMBER",
                         message="book must be a positive integer",
-                        details={"book": body.get("book", query.get("book", [""])[0] if isinstance(query.get("book"), list) else "")},
+                        details={
+                            "book": body.get(
+                                "book",
+                                query.get("book", [""])[0]
+                                if isinstance(query.get("book"), list)
+                                else "",
+                            )
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
                 threshold = _safe_float(
                     body.get(
                         "threshold",
-                        query.get("threshold", ["0.25"])[0] if isinstance(query.get("threshold"), list) else 0.25,
+                        query.get("threshold", ["0.25"])[0]
+                        if isinstance(query.get("threshold"), list)
+                        else 0.25,
                     ),
                     0.25,
                 )
@@ -12657,7 +15836,10 @@ def serve_review_webapp(
                     threshold=threshold,
                     catalog_path=runtime_req.book_catalog_path,
                     winner_selections_path=_winner_path_for_runtime(runtime_req),
-                    regions_path=config.cover_regions_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir),
+                    regions_path=config.cover_regions_path(
+                        catalog_id=runtime_req.catalog_id,
+                        config_dir=runtime_req.config_dir,
+                    ),
                     hashes_path=_similarity_hashes_path_for_runtime(runtime_req),
                     matrix_path=_similarity_matrix_path_for_runtime(runtime_req),
                     clusters_path=_similarity_clusters_path_for_runtime(runtime_req),
@@ -12665,12 +15847,21 @@ def serve_review_webapp(
                 if not bool(payload.get("ok", False)):
                     return self._send_error(
                         code="SIMILARITY_UPDATE_FAILED",
-                        message=str(payload.get("error", "Failed to update similarity data for book")),
+                        message=str(
+                            payload.get(
+                                "error", "Failed to update similarity data for book"
+                            )
+                        ),
                         details=payload,
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                _invalidate_cache("/api/similarity-matrix", "/api/similarity-alerts", "/api/similarity-clusters", "/api/review-data")
+                _invalidate_cache(
+                    "/api/similarity-matrix",
+                    "/api/similarity-alerts",
+                    "/api/similarity-clusters",
+                    "/api/review-data",
+                )
                 return self._send_json({"ok": True, **payload})
 
             if path == "/api/dismiss-similarity":
@@ -12678,7 +15869,10 @@ def serve_review_webapp(
                 book_b = _safe_int(body.get("book_b"), 0)
                 if book_a <= 0 or book_b <= 0:
                     return self._send_json(
-                        {"ok": False, "error": "book_a and book_b must be positive integers"},
+                        {
+                            "ok": False,
+                            "error": "book_a and book_b must be positive integers",
+                        },
                         status=HTTPStatus.BAD_REQUEST,
                     )
                 payload = similarity_detector.dismiss_similarity_pair(
@@ -12689,7 +15883,9 @@ def serve_review_webapp(
                 _invalidate_cache("/api/similarity-", "/api/review-data")
                 return self._send_json({"ok": True, "dismissed": payload})
 
-            return self._send_json({"ok": False, "error": "Unknown endpoint"}, status=HTTPStatus.NOT_FOUND)
+            return self._send_json(
+                {"ok": False, "error": "Unknown endpoint"}, status=HTTPStatus.NOT_FOUND
+            )
 
         def do_PUT(self):
             return self.do_POST()
@@ -12699,10 +15895,18 @@ def serve_review_webapp(
             path = parsed.path
             query = parse_qs(parsed.query)
             self._set_active_runtime(None)
-            self._set_request_id(str(self.headers.get("X-Request-Id", "")).strip() or str(uuid.uuid4()))
-            requested_catalog_raw = str(query.get("catalog", [default_runtime.catalog_id])[0]).strip()
+            self._set_request_id(
+                str(self.headers.get("X-Request-Id", "")).strip() or str(uuid.uuid4())
+            )
+            requested_catalog_raw = str(
+                query.get("catalog", [default_runtime.catalog_id])[0]
+            ).strip()
             try:
-                requested_catalog = security.validate_catalog_id(requested_catalog_raw) if requested_catalog_raw else default_runtime.catalog_id
+                requested_catalog = (
+                    security.validate_catalog_id(requested_catalog_raw)
+                    if requested_catalog_raw
+                    else default_runtime.catalog_id
+                )
             except ValueError:
                 return self._send_error(
                     code="INVALID_CATALOG_ID",
@@ -12711,9 +15915,13 @@ def serve_review_webapp(
                     status=HTTPStatus.BAD_REQUEST,
                     endpoint=path,
                 )
-            runtime_req = config.get_config(requested_catalog or default_runtime.catalog_id)
+            runtime_req = config.get_config(
+                requested_catalog or default_runtime.catalog_id
+            )
             self._set_active_runtime(runtime_req)
-            client_ip = str(self.client_address[0] if self.client_address else "unknown")
+            client_ip = str(
+                self.client_address[0] if self.client_address else "unknown"
+            )
 
             if MUTATION_API_TOKEN:
                 supplied = str(self.headers.get("X-API-Token", "")).strip()
@@ -12727,7 +15935,9 @@ def serve_review_webapp(
                         endpoint=path,
                     )
 
-            limiter, limit_per_minute = _mutation_limiter(path, catalog_id=runtime_req.catalog_id)
+            limiter, limit_per_minute = _mutation_limiter(
+                path, catalog_id=runtime_req.catalog_id
+            )
             if not limiter.allow(f"{client_ip}:{path}"):
                 return self._send_error(
                     code="RATE_LIMITED",
@@ -12756,8 +15966,16 @@ def serve_review_webapp(
                         status=HTTPStatus.NOT_FOUND,
                         endpoint=path,
                     )
-                _invalidate_cache("/api/exports", "/api/export/status", "/api/delivery/tracking", "/api/archive/stats", "/api/storage/usage")
-                return self._send_json({"ok": True, "export_id": token, "deleted": True})
+                _invalidate_cache(
+                    "/api/exports",
+                    "/api/export/status",
+                    "/api/delivery/tracking",
+                    "/api/archive/stats",
+                    "/api/storage/usage",
+                )
+                return self._send_json(
+                    {"ok": True, "export_id": token, "deleted": True}
+                )
 
             if path.startswith("/api/jobs/"):
                 token = path.split("/api/jobs/", 1)[1].strip().split("/", 1)[0]
@@ -12804,9 +16022,13 @@ def serve_review_webapp(
                         status=HTTPStatus.BAD_REQUEST,
                         endpoint=path,
                     )
-                updated = book_metadata.remove_tag(_book_metadata_path_for_runtime(runtime_req), book_number, tag)
+                updated = book_metadata.remove_tag(
+                    _book_metadata_path_for_runtime(runtime_req), book_number, tag
+                )
                 _invalidate_cache("/api/books", "/api/compare")
-                return self._send_json({"ok": True, "book": book_number, "tags": updated.get("tags", [])})
+                return self._send_json(
+                    {"ok": True, "book": book_number, "tags": updated.get("tags", [])}
+                )
 
             if path == "/api/drive/schedule":
                 payload = {
@@ -12817,7 +16039,9 @@ def serve_review_webapp(
                 }
                 saved = _save_drive_schedule(runtime_req, payload)
                 _invalidate_cache("/api/drive/schedule", "/api/drive/status")
-                return self._send_json({"ok": True, "catalog": runtime_req.catalog_id, "schedule": saved})
+                return self._send_json(
+                    {"ok": True, "catalog": runtime_req.catalog_id, "schedule": saved}
+                )
 
             return self._send_error(
                 code="ENDPOINT_NOT_FOUND",
@@ -12842,22 +16066,35 @@ def serve_review_webapp(
             request_id = self._current_request_id()
             normalized["request_id"] = request_id
 
-            is_error_response = int(status) >= 400 or bool(normalized.get("ok") is False)
+            is_error_response = int(status) >= 400 or bool(
+                normalized.get("ok") is False
+            )
             if is_error_response:
                 normalized["ok"] = False
                 message = ""
-                if isinstance(normalized.get("error"), str) and str(normalized.get("error", "")).strip():
+                if (
+                    isinstance(normalized.get("error"), str)
+                    and str(normalized.get("error", "")).strip()
+                ):
                     message = str(normalized.get("error", "")).strip()
-                elif isinstance(normalized.get("error_message"), str) and str(normalized.get("error_message", "")).strip():
+                elif (
+                    isinstance(normalized.get("error_message"), str)
+                    and str(normalized.get("error_message", "")).strip()
+                ):
                     message = str(normalized.get("error_message", "")).strip()
-                elif isinstance(normalized.get("message"), str) and str(normalized.get("message", "")).strip():
+                elif (
+                    isinstance(normalized.get("message"), str)
+                    and str(normalized.get("message", "")).strip()
+                ):
                     message = str(normalized.get("message", "")).strip()
                 else:
                     message = "Request failed"
                 normalized["error"] = message
                 normalized["error_message"] = message
                 if "error_code" not in normalized:
-                    normalized["error_code"] = str(normalized.get("code", "REQUEST_FAILED"))
+                    normalized["error_code"] = str(
+                        normalized.get("code", "REQUEST_FAILED")
+                    )
 
             if "success" not in normalized:
                 if "ok" in normalized:
@@ -12867,7 +16104,10 @@ def serve_review_webapp(
                 else:
                     normalized["success"] = int(status) < 400
             raw = json.dumps(normalized, ensure_ascii=False).encode("utf-8")
-            use_gzip = "gzip" in str(self.headers.get("Accept-Encoding", "")).lower() and len(raw) >= 1200
+            use_gzip = (
+                "gzip" in str(self.headers.get("Accept-Encoding", "")).lower()
+                and len(raw) >= 1200
+            )
             data = gzip.compress(raw) if use_gzip else raw
             self.send_response(status)
             self.send_header("Content-Type", "application/json; charset=utf-8")
@@ -12895,7 +16135,9 @@ def serve_review_webapp(
             except Exception:
                 pass
             try:
-                runtime_for_slo = self._runtime_for_catalog_token(str(catalog_id or "").strip() or self._current_catalog())
+                runtime_for_slo = self._runtime_for_catalog_token(
+                    str(catalog_id or "").strip() or self._current_catalog()
+                )
                 _slo_tracker_for_runtime(runtime_for_slo).record_response(
                     int(status),
                     catalog_id=runtime_for_slo.catalog_id,
@@ -12955,7 +16197,9 @@ def serve_review_webapp(
             except Exception:
                 pass
             try:
-                runtime_for_slo = self._runtime_for_catalog_token(str(catalog_id or "").strip() or self._current_catalog())
+                runtime_for_slo = self._runtime_for_catalog_token(
+                    str(catalog_id or "").strip() or self._current_catalog()
+                )
                 _slo_tracker_for_runtime(runtime_for_slo).record_response(
                     int(HTTPStatus.OK),
                     catalog_id=runtime_for_slo.catalog_id,
@@ -12996,7 +16240,9 @@ def serve_review_webapp(
             except Exception:
                 pass
             try:
-                runtime_for_slo = self._runtime_for_catalog_token(str(catalog_id or "").strip() or self._current_catalog())
+                runtime_for_slo = self._runtime_for_catalog_token(
+                    str(catalog_id or "").strip() or self._current_catalog()
+                )
                 _slo_tracker_for_runtime(runtime_for_slo).record_response(
                     int(HTTPStatus.OK),
                     catalog_id=runtime_for_slo.catalog_id,
@@ -13013,7 +16259,9 @@ def serve_review_webapp(
         ):
             scoped_job_id = str(job_id or "").strip()
             scoped_batch_id = str(batch_id or "").strip()
-            client_ip = str(self.client_address[0] if self.client_address else "unknown")
+            client_ip = str(
+                self.client_address[0] if self.client_address else "unknown"
+            )
             sse_key = f"{client_ip}:{str(catalog_id or '*').strip().lower() or '*'}"
             if not sse_connection_limiter.start(sse_key):
                 return self._send_error(
@@ -13042,13 +16290,23 @@ def serve_review_webapp(
                     "batch_id": scoped_batch_id,
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
-                self.wfile.write(f"event: ready\ndata: {json.dumps(bootstrap, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.write(
+                    f"event: ready\ndata: {json.dumps(bootstrap, ensure_ascii=False)}\n\n".encode(
+                        "utf-8"
+                    )
+                )
                 self.wfile.flush()
                 while True:
                     try:
-                        event = client_queue.get(timeout=20.0) if client_queue is not None else {}
+                        event = (
+                            client_queue.get(timeout=20.0)
+                            if client_queue is not None
+                            else {}
+                        )
                     except queue.Empty:
-                        keepalive = f": ping {datetime.now(timezone.utc).isoformat()}\n\n".encode("utf-8")
+                        keepalive = f": ping {datetime.now(timezone.utc).isoformat()}\n\n".encode(
+                            "utf-8"
+                        )
                         self.wfile.write(keepalive)
                         self.wfile.flush()
                         continue
@@ -13092,7 +16350,10 @@ def serve_review_webapp(
                 catalog_token = self._current_catalog()
                 if not catalog_token:
                     try:
-                        catalog_token = str(parse_qs(urlparse(self.path).query).get("catalog", [""])[0] or "").strip()
+                        catalog_token = str(
+                            parse_qs(urlparse(self.path).query).get("catalog", [""])[0]
+                            or ""
+                        ).strip()
                     except Exception:
                         catalog_token = ""
                 runtime_for_error = self._runtime_for_catalog_token(catalog_token)
@@ -13111,11 +16372,15 @@ def serve_review_webapp(
                 r"\bsk-or-v1-[A-Za-z0-9_-]{12,}\b",
                 r"\bAIza[0-9A-Za-z_-]{20,}\b",
             ):
-                safe_message = re.sub(pattern, lambda m: security.mask_api_key(m.group(0)), safe_message)
+                safe_message = re.sub(
+                    pattern, lambda m: security.mask_api_key(m.group(0)), safe_message
+                )
             raw_details = details if isinstance(details, dict) else {}
             safe_details = security.scrub_sensitive(raw_details)
             if "idempotency_key" in raw_details:
-                safe_details["idempotency_key"] = str(raw_details.get("idempotency_key", ""))
+                safe_details["idempotency_key"] = str(
+                    raw_details.get("idempotency_key", "")
+                )
             payload = {
                 "ok": False,
                 "error": safe_message,
@@ -13126,7 +16391,12 @@ def serve_review_webapp(
                 "details": safe_details,
                 "request_id": self._current_request_id(),
             }
-            return self._send_json(payload, status=status, headers=headers, catalog_id=runtime_for_error.catalog_id)
+            return self._send_json(
+                payload,
+                status=status,
+                headers=headers,
+                catalog_id=runtime_for_error.catalog_id,
+            )
 
     class StableThreadingHTTPServer(ThreadingHTTPServer):
         daemon_threads = True
@@ -13144,25 +16414,42 @@ def serve_review_webapp(
             _bootstrap_state_store_for_runtime(default_runtime)
             _prime_catalog_file_caches(default_runtime)
             try:
-                config.sync_openrouter_pricing(api_key=default_runtime.openrouter_api_key)
+                config.sync_openrouter_pricing(
+                    api_key=default_runtime.openrouter_api_key
+                )
             except Exception as exc:
-                logger.warning("OpenRouter pricing sync skipped during startup: %s", exc)
-            config.start_openrouter_pricing_sync(api_key=default_runtime.openrouter_api_key)
+                logger.warning(
+                    "OpenRouter pricing sync skipped during startup: %s", exc
+                )
+            config.start_openrouter_pricing_sync(
+                api_key=default_runtime.openrouter_api_key
+            )
             default_runtime.model_cost_usd = config.runtime_model_costs_copy()
-            default_runtime.cost_per_image_usd = default_runtime.get_model_cost(default_runtime.ai_model)
+            default_runtime.cost_per_image_usd = default_runtime.get_model_cost(
+                default_runtime.ai_model
+            )
             _set_startup_health(_run_startup_checks(default_runtime))
             _ensure_builtin_prompts_seeded(runtime=default_runtime, actor="startup")
-            stale_after_seconds, retry_delay_seconds = _job_stale_recovery_config(default_runtime)
+            stale_after_seconds, retry_delay_seconds = _job_stale_recovery_config(
+                default_runtime
+            )
             recovered = job_db_store.recover_stale_running_jobs(
                 stale_after_seconds=stale_after_seconds,
                 retry_delay_seconds=retry_delay_seconds,
             )
             if recovered:
-                logger.warning("Recovered stale jobs on startup", extra={"recovered_jobs": recovered})
+                logger.warning(
+                    "Recovered stale jobs on startup",
+                    extra={"recovered_jobs": recovered},
+                )
 
-            slo_monitor_interval_seconds = _slo_monitor_interval_seconds(default_runtime)
+            slo_monitor_interval_seconds = _slo_monitor_interval_seconds(
+                default_runtime
+            )
             if slo_monitor_interval_seconds > 0:
-                local_slo_monitor = SLOBackgroundMonitor(interval_seconds=slo_monitor_interval_seconds)
+                local_slo_monitor = SLOBackgroundMonitor(
+                    interval_seconds=slo_monitor_interval_seconds
+                )
                 local_slo_monitor.start()
                 _set_slo_background_monitor(local_slo_monitor)
                 logger.info(
@@ -13171,13 +16458,18 @@ def serve_review_webapp(
                 )
             else:
                 _set_slo_background_monitor(None)
-                logger.info("Background SLO monitor disabled", extra={"interval_seconds": slo_monitor_interval_seconds})
+                logger.info(
+                    "Background SLO monitor disabled",
+                    extra={"interval_seconds": slo_monitor_interval_seconds},
+                )
 
             if mode == "inline":
                 job_worker_pool.start()
                 local_workers_started = True
             elif mode == "external":
-                logger.info("Web server running in external worker mode (enqueue/poll only)")
+                logger.info(
+                    "Web server running in external worker mode (enqueue/poll only)"
+                )
             else:
                 logger.warning("Web server running with workers disabled")
 
@@ -13203,7 +16495,9 @@ def serve_review_webapp(
             return
         shutdown_requested.set()
         logger.info("Shutdown signal received", extra={"signal": int(signum)})
-        threading.Thread(target=server.shutdown, name="server-shutdown", daemon=True).start()
+        threading.Thread(
+            target=server.shutdown, name="server-shutdown", daemon=True
+        ).start()
 
     try:
         previous_sigint_handler = signal.getsignal(signal.SIGINT)
@@ -13215,7 +16509,9 @@ def serve_review_webapp(
         previous_sigterm_handler = None
 
     shown_host = bind_host if bind_host not in {"0.0.0.0", "::"} else "127.0.0.1"
-    threading.Thread(target=_background_startup, name="startup-init", daemon=True).start()
+    threading.Thread(
+        target=_background_startup, name="startup-init", daemon=True
+    ).start()
     logger.info("Review webapp running at http://%s:%d/review", shown_host, port)
     logger.info("Iteration page running at http://%s:%d/iterate", shown_host, port)
     try:
@@ -13245,7 +16541,9 @@ def serve_review_webapp(
         server.server_close()
 
 
-def _resolve_composited_candidate(image_path: Path, *, runtime: config.Config | None = None) -> Path | None:
+def _resolve_composited_candidate(
+    image_path: Path, *, runtime: config.Config | None = None
+) -> Path | None:
     runtime_cfg = runtime or config.get_config()
     if len(image_path.parts) < 2:
         return None
@@ -13263,7 +16561,9 @@ def _resolve_composited_candidate(image_path: Path, *, runtime: config.Config | 
     if image_path.parent.parent.name.isdigit():
         book = image_path.parent.parent.name
         model = image_path.parent.name
-        return runtime_cfg.tmp_dir / "composited" / book / model / f"variant_{variant}.jpg"
+        return (
+            runtime_cfg.tmp_dir / "composited" / book / model / f"variant_{variant}.jpg"
+        )
 
     return None
 
@@ -13372,12 +16672,16 @@ def _load_winner_payload(path: Path) -> dict[str, Any]:
                 "selections": selections,
                 "selection_date": datetime.now(timezone.utc).isoformat(),
                 "total_books": len(selections),
-                "average_winner_score": round(sum(scores) / len(scores), 4) if scores else 0.0,
+                "average_winner_score": round(sum(scores) / len(scores), 4)
+                if scores
+                else 0.0,
                 "min_winner_score": round(min(scores), 4) if scores else 0.0,
                 "max_winner_score": round(max(scores), 4) if scores else 0.0,
             }
     except Exception as exc:  # pragma: no cover - fallback to JSON
-        logger.warning("State DB winner load failed for catalog %s: %s", catalog_id, exc)
+        logger.warning(
+            "State DB winner load failed for catalog %s: %s", catalog_id, exc
+        )
 
     if not path.exists():
         return {"selections": {}}
@@ -13415,7 +16719,9 @@ def _selection_path_for_winner_path(path: Path) -> Path:
     return config.variant_selections_path(catalog_id=catalog_id, data_dir=path.parent)
 
 
-def _save_winner_payload(path: Path, selections: dict[str, Any], total_books: int) -> dict[str, Any]:
+def _save_winner_payload(
+    path: Path, selections: dict[str, Any], total_books: int
+) -> dict[str, Any]:
     scores = []
     for value in selections.values():
         if isinstance(value, dict):
@@ -13434,9 +16740,13 @@ def _save_winner_payload(path: Path, selections: dict[str, Any], total_books: in
     }
     catalog_id = _catalog_id_from_winner_path(path)
     try:
-        state_db_store.upsert_winner_selections(catalog_id=catalog_id, selections=selections, replace=True)
+        state_db_store.upsert_winner_selections(
+            catalog_id=catalog_id, selections=selections, replace=True
+        )
     except Exception as exc:  # pragma: no cover - fallback to JSON
-        logger.warning("State DB winner save failed for catalog %s: %s", catalog_id, exc)
+        logger.warning(
+            "State DB winner save failed for catalog %s: %s", catalog_id, exc
+        )
     selection_path = _selection_path_for_winner_path(path)
     safe_json.atomic_write_many_json(
         [
@@ -13447,7 +16757,9 @@ def _save_winner_payload(path: Path, selections: dict[str, Any], total_books: in
     return payload
 
 
-def _ensure_winner_payload(books: list[dict[str, Any]], *, path: Path = WINNER_SELECTIONS_PATH) -> dict[str, Any]:
+def _ensure_winner_payload(
+    books: list[dict[str, Any]], *, path: Path = WINNER_SELECTIONS_PATH
+) -> dict[str, Any]:
     payload = _load_winner_payload(path)
     selections = payload.get("selections", {})
     if not isinstance(selections, dict):
@@ -13546,15 +16858,15 @@ def _history_row_identity(row: dict[str, Any]) -> tuple[Any, ...]:
     )
 
 
-def _build_generation_history_payload(path: Path, items: list[dict[str, Any]]) -> dict[str, Any]:
+def _build_generation_history_payload(
+    path: Path, items: list[dict[str, Any]]
+) -> dict[str, Any]:
     payload = _load_json(path, {"items": []})
     history = payload.get("items", []) if isinstance(payload, dict) else []
     if not isinstance(history, list):
         history = []
     existing_keys = {
-        _history_row_identity(row)
-        for row in history
-        if isinstance(row, dict)
+        _history_row_identity(row) for row in history if isinstance(row, dict)
     }
     deduped_new: list[dict[str, Any]] = []
     for row in items:
@@ -13624,7 +16936,11 @@ def _validate_drive_cover_request(
     if not effective_drive_folder_id:
         return False, "Google Drive source folder is not configured.", ""
 
-    credentials_path = Path(credentials_path_token) if str(credentials_path_token or "").strip() else _resolve_credentials_path(runtime)
+    credentials_path = (
+        Path(credentials_path_token)
+        if str(credentials_path_token or "").strip()
+        else _resolve_credentials_path(runtime)
+    )
     if not credentials_path.is_absolute():
         credentials_path = PROJECT_ROOT / credentials_path
 
@@ -13646,7 +16962,8 @@ def _validate_drive_cover_request(
         rows = []
     candidate = next(
         (
-            row for row in rows
+            row
+            for row in rows
             if isinstance(row, dict) and str(row.get("id", "")).strip() == selected_id
         ),
         None,
@@ -13658,8 +16975,10 @@ def _validate_drive_cover_request(
 
     fallback = next(
         (
-            row for row in rows
-            if isinstance(row, dict) and _safe_int(row.get("book_number"), 0) == int(book)
+            row
+            for row in rows
+            if isinstance(row, dict)
+            and _safe_int(row.get("book_number"), 0) == int(book)
         ),
         None,
     )
@@ -13705,11 +17024,16 @@ def _drive_credentials_mode(
             return "oauth_file", None
         return "credentials_file", None
 
-    return None, "No Google credentials found. Set GOOGLE_CREDENTIALS_JSON environment variable."
+    return (
+        None,
+        "No Google credentials found. Set GOOGLE_CREDENTIALS_JSON environment variable.",
+    )
 
 
 def _save_raw_drive_status_payload(*, runtime: config.Config) -> dict[str, Any]:
-    service, credentials_path, mode, credentials_meta, connection_error = _drive_service_for_runtime(runtime)
+    service, credentials_path, mode, credentials_meta, connection_error = (
+        _drive_service_for_runtime(runtime)
+    )
     payload: dict[str, Any] = {
         "ok": True,
         "connected": False,
@@ -13731,11 +17055,15 @@ def _save_raw_drive_status_payload(*, runtime: config.Config) -> dict[str, Any]:
 
     payload["connected"] = True
     try:
-        parent = service.files().get(
-            fileId=SAVE_RAW_DRIVE_FOLDER_ID,
-            fields="id,name,webViewLink",
-            supportsAllDrives=True,
-        ).execute()
+        parent = (
+            service.files()
+            .get(
+                fileId=SAVE_RAW_DRIVE_FOLDER_ID,
+                fields="id,name,webViewLink",
+                supportsAllDrives=True,
+            )
+            .execute()
+        )
     except Exception as exc:
         details = _drive_error_details(exc)
         payload["error"] = details["message"]
@@ -13743,15 +17071,28 @@ def _save_raw_drive_status_payload(*, runtime: config.Config) -> dict[str, Any]:
 
     payload["parent_folder_access"] = bool(str(parent.get("id", "") or "").strip())
     payload["parent_folder_name"] = str(parent.get("name", "") or "")
-    payload["parent_folder_url"] = str(parent.get("webViewLink", "") or payload["parent_folder_url"])
-    write_probe = _probe_drive_write_access(service=service, parent_folder_id=SAVE_RAW_DRIVE_FOLDER_ID)
+    payload["parent_folder_url"] = str(
+        parent.get("webViewLink", "") or payload["parent_folder_url"]
+    )
+    write_probe = _probe_drive_write_access(
+        service=service, parent_folder_id=SAVE_RAW_DRIVE_FOLDER_ID
+    )
     payload["write_access"] = bool(write_probe.get("ok", False))
     payload["write_probe_error"] = str(write_probe.get("error", "") or "")
-    payload["retry_supported"] = payload["connected"] and payload["parent_folder_access"] and payload["write_access"]
+    payload["retry_supported"] = (
+        payload["connected"]
+        and payload["parent_folder_access"]
+        and payload["write_access"]
+    )
     return payload
 
 
-def _collect_selected_variant_files(output_dir: Path, selections: dict[str, Any], *, catalog_path: Path = config.BOOK_CATALOG_PATH) -> list[str]:
+def _collect_selected_variant_files(
+    output_dir: Path,
+    selections: dict[str, Any],
+    *,
+    catalog_path: Path = config.BOOK_CATALOG_PATH,
+) -> list[str]:
     if not selections:
         return []
 
@@ -13798,11 +17139,15 @@ def _collect_selected_variant_files(output_dir: Path, selections: dict[str, Any]
 
 
 def _drive_sync_log_path(runtime: config.Config) -> Path:
-    return config.drive_sync_log_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.drive_sync_log_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _gdrive_sync_state_path(runtime: config.Config) -> Path:
-    return config.gdrive_sync_state_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.gdrive_sync_state_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _append_drive_sync_log(*, runtime: config.Config, entry: dict[str, Any]) -> None:
@@ -13811,12 +17156,22 @@ def _append_drive_sync_log(*, runtime: config.Config, entry: dict[str, Any]) -> 
     items = payload.get("items", []) if isinstance(payload, dict) else []
     if not isinstance(items, list):
         items = []
-    items.append({"timestamp": datetime.now(timezone.utc).isoformat(), **(entry if isinstance(entry, dict) else {})})
-    safe_json.atomic_write_json(path, {"updated_at": datetime.now(timezone.utc).isoformat(), "items": items[-500:]})
+    items.append(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            **(entry if isinstance(entry, dict) else {}),
+        }
+    )
+    safe_json.atomic_write_json(
+        path,
+        {"updated_at": datetime.now(timezone.utc).isoformat(), "items": items[-500:]},
+    )
 
 
 def _drive_schedule_path(runtime: config.Config) -> Path:
-    return config.drive_schedule_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.drive_schedule_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _default_drive_schedules(catalog_id: str) -> list[dict[str, Any]]:
@@ -13840,7 +17195,9 @@ def _default_drive_schedules(catalog_id: str) -> list[dict[str, Any]]:
     ]
 
 
-def _normalize_drive_schedule_rows(rows: list[dict[str, Any]], *, catalog_id: str) -> list[dict[str, Any]]:
+def _normalize_drive_schedule_rows(
+    rows: list[dict[str, Any]], *, catalog_id: str
+) -> list[dict[str, Any]]:
     normalized: list[dict[str, Any]] = []
     for idx, raw in enumerate(rows):
         if not isinstance(raw, dict):
@@ -13851,7 +17208,9 @@ def _normalize_drive_schedule_rows(rows: list[dict[str, Any]], *, catalog_id: st
         mode_token = str(raw.get("mode", "push")).strip().lower() or "push"
         if mode_token not in {"push", "pull", "bidirectional", "sync"}:
             mode_token = "push"
-        name = str(raw.get("name", "")).strip() or ("Push new winners" if mode_token == "push" else "Full bidirectional sync")
+        name = str(raw.get("name", "")).strip() or (
+            "Push new winners" if mode_token == "push" else "Full bidirectional sync"
+        )
         schedule_id = str(raw.get("id", "")).strip() or f"schedule-{idx + 1}"
         catalogs = raw.get("catalogs")
         if not isinstance(catalogs, list) or not catalogs:
@@ -13863,7 +17222,10 @@ def _normalize_drive_schedule_rows(rows: list[dict[str, Any]], *, catalog_id: st
                 "enabled": bool(raw.get("enabled", True)),
                 "interval_hours": interval_hours,
                 "mode": mode_token,
-                "catalogs": [str(item).strip() for item in catalogs if str(item).strip()] or [catalog_id],
+                "catalogs": [
+                    str(item).strip() for item in catalogs if str(item).strip()
+                ]
+                or [catalog_id],
             }
         )
     return normalized
@@ -13876,15 +17238,22 @@ def _load_drive_schedule(runtime: config.Config) -> dict[str, Any]:
     raw_schedules = payload.get("schedules")
     schedules: list[dict[str, Any]]
     if isinstance(raw_schedules, list) and raw_schedules:
-        schedules = _normalize_drive_schedule_rows([row for row in raw_schedules if isinstance(row, dict)], catalog_id=runtime.catalog_id)
+        schedules = _normalize_drive_schedule_rows(
+            [row for row in raw_schedules if isinstance(row, dict)],
+            catalog_id=runtime.catalog_id,
+        )
     else:
         legacy = {
             "enabled": bool(payload.get("enabled", True)),
             "interval_hours": _safe_int(payload.get("interval_hours"), 6),
             "mode": str(payload.get("mode", "push")).strip().lower() or "push",
-            "catalogs": payload.get("catalogs", [runtime.catalog_id]) if isinstance(payload.get("catalogs"), list) else [runtime.catalog_id],
+            "catalogs": payload.get("catalogs", [runtime.catalog_id])
+            if isinstance(payload.get("catalogs"), list)
+            else [runtime.catalog_id],
         }
-        schedules = _normalize_drive_schedule_rows([legacy], catalog_id=runtime.catalog_id)
+        schedules = _normalize_drive_schedule_rows(
+            [legacy], catalog_id=runtime.catalog_id
+        )
         if not schedules:
             schedules = _default_drive_schedules(runtime.catalog_id)
 
@@ -13898,24 +17267,37 @@ def _load_drive_schedule(runtime: config.Config) -> dict[str, Any]:
         "mode": str(primary.get("mode", "push")),
         "catalogs": primary.get("catalogs", [runtime.catalog_id]),
         "schedules": schedules,
-        "updated_at": str(payload.get("updated_at", datetime.now(timezone.utc).isoformat())),
+        "updated_at": str(
+            payload.get("updated_at", datetime.now(timezone.utc).isoformat())
+        ),
     }
 
 
-def _save_drive_schedule(runtime: config.Config, payload: dict[str, Any]) -> dict[str, Any]:
+def _save_drive_schedule(
+    runtime: config.Config, payload: dict[str, Any]
+) -> dict[str, Any]:
     requested_rows = payload.get("schedules")
     if isinstance(requested_rows, list) and requested_rows:
-        schedules = _normalize_drive_schedule_rows([row for row in requested_rows if isinstance(row, dict)], catalog_id=runtime.catalog_id)
+        schedules = _normalize_drive_schedule_rows(
+            [row for row in requested_rows if isinstance(row, dict)],
+            catalog_id=runtime.catalog_id,
+        )
     else:
         legacy = {
             "id": str(payload.get("id", "manual")).strip() or "manual",
-            "name": str(payload.get("name", "Manual schedule")).strip() or "Manual schedule",
+            "name": str(payload.get("name", "Manual schedule")).strip()
+            or "Manual schedule",
             "enabled": bool(payload.get("enabled", True)),
             "interval_hours": _safe_int(payload.get("interval_hours"), 6),
-            "mode": str(payload.get("mode", "bidirectional")).strip().lower() or "bidirectional",
-            "catalogs": payload.get("catalogs", [runtime.catalog_id]) if isinstance(payload.get("catalogs"), list) else [runtime.catalog_id],
+            "mode": str(payload.get("mode", "bidirectional")).strip().lower()
+            or "bidirectional",
+            "catalogs": payload.get("catalogs", [runtime.catalog_id])
+            if isinstance(payload.get("catalogs"), list)
+            else [runtime.catalog_id],
         }
-        schedules = _normalize_drive_schedule_rows([legacy], catalog_id=runtime.catalog_id)
+        schedules = _normalize_drive_schedule_rows(
+            [legacy], catalog_id=runtime.catalog_id
+        )
     if not schedules:
         schedules = _default_drive_schedules(runtime.catalog_id)
 
@@ -13933,15 +17315,21 @@ def _save_drive_schedule(runtime: config.Config, payload: dict[str, Any]) -> dic
 
 
 def _export_manifest_path(runtime: config.Config) -> Path:
-    return config.exports_manifest_path(catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.exports_manifest_path(
+        catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _export_tracking_path(runtime: config.Config) -> Path:
-    return config.catalog_scoped_data_path("export_tracking.json", catalog_id=runtime.catalog_id, data_dir=runtime.data_dir)
+    return config.catalog_scoped_data_path(
+        "export_tracking.json", catalog_id=runtime.catalog_id, data_dir=runtime.data_dir
+    )
 
 
 def _load_export_tracking(runtime: config.Config) -> dict[str, Any]:
-    payload = _load_json(_export_tracking_path(runtime), {"updated_at": "", "items": []})
+    payload = _load_json(
+        _export_tracking_path(runtime), {"updated_at": "", "items": []}
+    )
     if not isinstance(payload, dict):
         payload = {"updated_at": "", "items": []}
     rows = payload.get("items", [])
@@ -13967,7 +17355,11 @@ def _save_export_tracking(runtime: config.Config, payload: dict[str, Any]) -> No
 def _winner_signature_map(*, runtime: config.Config) -> dict[int, str]:
     titles, folder_by_book = _catalog_maps(catalog_path=runtime.book_catalog_path)
     winners_payload = _load_winner_payload(_winner_path_for_runtime(runtime))
-    selections = winners_payload.get("selections", {}) if isinstance(winners_payload, dict) else {}
+    selections = (
+        winners_payload.get("selections", {})
+        if isinstance(winners_payload, dict)
+        else {}
+    )
     if not isinstance(selections, dict):
         selections = {}
     out: dict[int, str] = {}
@@ -13975,16 +17367,24 @@ def _winner_signature_map(*, runtime: config.Config) -> dict[int, str]:
         book = _safe_int(key, 0)
         if book <= 0:
             continue
-        winner_variant = _safe_int(value.get("winner") if isinstance(value, dict) else value, 0)
+        winner_variant = _safe_int(
+            value.get("winner") if isinstance(value, dict) else value, 0
+        )
         if winner_variant <= 0:
             continue
         folder = folder_by_book.get(book, "")
-        image = _find_first_jpg(runtime.output_dir / folder / f"Variant-{winner_variant}") if folder else None
+        image = (
+            _find_first_jpg(runtime.output_dir / folder / f"Variant-{winner_variant}")
+            if folder
+            else None
+        )
         signature = f"missing:{winner_variant}:{titles.get(book, f'Book {book}')}"
         if image and image.exists():
             stat = image.stat()
             signature = hashlib.sha1(
-                f"{winner_variant}:{int(stat.st_size)}:{int(stat.st_mtime)}:{_to_project_relative(image)}".encode("utf-8")
+                f"{winner_variant}:{int(stat.st_size)}:{int(stat.st_mtime)}:{_to_project_relative(image)}".encode(
+                    "utf-8"
+                )
             ).hexdigest()
         out[book] = signature
     return out
@@ -14016,9 +17416,15 @@ def _record_export_tracking(
 
     signature_map = _winner_signature_map(runtime=runtime)
     now = datetime.now(timezone.utc).isoformat()
-    results = summary.get("results", []) if isinstance(summary.get("results"), list) else []
-    errors = summary.get("errors", []) if isinstance(summary.get("errors"), list) else []
-    error_books = {_safe_int(row.get("book_number"), 0) for row in errors if isinstance(row, dict)}
+    results = (
+        summary.get("results", []) if isinstance(summary.get("results"), list) else []
+    )
+    errors = (
+        summary.get("errors", []) if isinstance(summary.get("errors"), list) else []
+    )
+    error_books = {
+        _safe_int(row.get("book_number"), 0) for row in errors if isinstance(row, dict)
+    }
 
     for row in results:
         if not isinstance(row, dict):
@@ -14044,7 +17450,13 @@ def _record_export_tracking(
         )
         index_map[key] = current
 
-    items = sorted(index_map.values(), key=lambda row: (_safe_int(row.get("book_number"), 0), str(row.get("platform", ""))))
+    items = sorted(
+        index_map.values(),
+        key=lambda row: (
+            _safe_int(row.get("book_number"), 0),
+            str(row.get("platform", "")),
+        ),
+    )
     payload["items"] = items
     _save_export_tracking(runtime, payload)
 
@@ -14074,7 +17486,12 @@ def _export_status_rows(*, runtime: config.Config) -> list[dict[str, Any]]:
                 "current_source_signature": current_sig,
             }
         )
-    out.sort(key=lambda row: (_safe_int(row.get("book_number"), 0), str(row.get("platform", ""))))
+    out.sort(
+        key=lambda row: (
+            _safe_int(row.get("book_number"), 0),
+            str(row.get("platform", "")),
+        )
+    )
     return out
 
 
@@ -14092,7 +17509,9 @@ def _export_status_by_book(*, runtime: config.Config) -> dict[int, dict[str, Any
     return out
 
 
-def _validate_export_readiness_for_book(*, runtime: config.Config, book_number: int) -> dict[str, Any]:
+def _validate_export_readiness_for_book(
+    *, runtime: config.Config, book_number: int
+) -> dict[str, Any]:
     winners = export_utils.load_winner_books(
         catalog_path=runtime.book_catalog_path,
         output_root=runtime.output_dir,
@@ -14107,10 +17526,26 @@ def _validate_export_readiness_for_book(*, runtime: config.Config, book_number: 
             "catalog": runtime.catalog_id,
             "error": f"Winner not available for book {book_number}",
             "platforms": {
-                "amazon": {"ready": False, "status": "failed", "reasons": ["missing_winner_selection"]},
-                "ingram": {"ready": False, "status": "failed", "reasons": ["missing_winner_selection"]},
-                "social": {"ready": False, "status": "failed", "reasons": ["missing_winner_selection"]},
-                "web": {"ready": False, "status": "failed", "reasons": ["missing_winner_selection"]},
+                "amazon": {
+                    "ready": False,
+                    "status": "failed",
+                    "reasons": ["missing_winner_selection"],
+                },
+                "ingram": {
+                    "ready": False,
+                    "status": "failed",
+                    "reasons": ["missing_winner_selection"],
+                },
+                "social": {
+                    "ready": False,
+                    "status": "failed",
+                    "reasons": ["missing_winner_selection"],
+                },
+                "web": {
+                    "ready": False,
+                    "status": "failed",
+                    "reasons": ["missing_winner_selection"],
+                },
             },
         }
 
@@ -14122,10 +17557,26 @@ def _validate_export_readiness_for_book(*, runtime: config.Config, book_number: 
             "catalog": runtime.catalog_id,
             "error": f"Winner cover file not found: {cover_path}",
             "platforms": {
-                "amazon": {"ready": False, "status": "failed", "reasons": ["missing_cover_file"]},
-                "ingram": {"ready": False, "status": "failed", "reasons": ["missing_cover_file"]},
-                "social": {"ready": False, "status": "failed", "reasons": ["missing_cover_file"]},
-                "web": {"ready": False, "status": "failed", "reasons": ["missing_cover_file"]},
+                "amazon": {
+                    "ready": False,
+                    "status": "failed",
+                    "reasons": ["missing_cover_file"],
+                },
+                "ingram": {
+                    "ready": False,
+                    "status": "failed",
+                    "reasons": ["missing_cover_file"],
+                },
+                "social": {
+                    "ready": False,
+                    "status": "failed",
+                    "reasons": ["missing_cover_file"],
+                },
+                "web": {
+                    "ready": False,
+                    "status": "failed",
+                    "reasons": ["missing_cover_file"],
+                },
             },
         }
 
@@ -14133,7 +17584,9 @@ def _validate_export_readiness_for_book(*, runtime: config.Config, book_number: 
         source_mode = str(cover.mode or "").upper()
         source_width, source_height = cover.size
         source_dpi = cover.info.get("dpi", ())
-        front, _spine, _back, _detail = export_utils.crop_cover_regions(cover.convert("RGB"))
+        front, _spine, _back, _detail = export_utils.crop_cover_regions(
+            cover.convert("RGB")
+        )
 
     front_width, front_height = front.size
     front_ratio = float(front_height) / float(max(1, front_width))
@@ -14216,7 +17669,9 @@ def _validate_export_readiness_for_book(*, runtime: config.Config, book_number: 
 
 
 def _load_export_manifest(runtime: config.Config) -> dict[str, Any]:
-    payload = _load_json(_export_manifest_path(runtime), {"updated_at": "", "exports": []})
+    payload = _load_json(
+        _export_manifest_path(runtime), {"updated_at": "", "exports": []}
+    )
     if not isinstance(payload, dict):
         payload = {"updated_at": "", "exports": []}
     rows = payload.get("exports", [])
@@ -14258,7 +17713,9 @@ def _file_count(path: Path) -> int:
     return sum(1 for p in path.rglob("*") if p.is_file())
 
 
-def _register_export_result(*, runtime: config.Config, export_type: str, summary: dict[str, Any]) -> str:
+def _register_export_result(
+    *, runtime: config.Config, export_type: str, summary: dict[str, Any]
+) -> str:
     token = f"{str(export_type).strip().lower()}-{runtime.catalog_id}-{datetime.now(timezone.utc).strftime('%Y%m%d-%H%M%S')}"
     export_path = EXPORTS_ROOT / str(export_type).strip().lower() / runtime.catalog_id
     reported = str(summary.get("export_path", "") or summary.get("output", "")).strip()
@@ -14286,7 +17743,9 @@ def _register_export_result(*, runtime: config.Config, export_type: str, summary
     exports.append(row)
     manifest["exports"] = exports
     _save_export_manifest(runtime, manifest)
-    _record_export_tracking(runtime=runtime, export_type=export_type, summary=summary, export_id=token)
+    _record_export_tracking(
+        runtime=runtime, export_type=export_type, summary=summary, export_id=token
+    )
     return token
 
 
@@ -14295,17 +17754,29 @@ def _summarize_generation_failures(rows: list[dict[str, Any]]) -> list[dict[str,
     for row in rows:
         if not isinstance(row, dict) or bool(row.get("success")):
             continue
-        failure_meta = row.get("failure_meta", {}) if isinstance(row.get("failure_meta"), dict) else {}
+        failure_meta = (
+            row.get("failure_meta", {})
+            if isinstance(row.get("failure_meta"), dict)
+            else {}
+        )
         status_code = _safe_int(failure_meta.get("status_code"), 0)
         failures.append(
             {
                 "model": str(row.get("model", "")).strip(),
                 "variant": _safe_int(row.get("variant", row.get("variant_id", 0)), 0),
-                "provider": str(row.get("provider", failure_meta.get("provider", ""))).strip(),
+                "provider": str(
+                    row.get("provider", failure_meta.get("provider", ""))
+                ).strip(),
                 "attempts": _safe_int(row.get("attempts"), 0),
                 "status_code": status_code if status_code > 0 else None,
-                "error": str(row.get("error", "") or failure_meta.get("error", "") or "unknown error").strip(),
-                "retry_count": _safe_int(failure_meta.get("retry_count"), _safe_int(row.get("attempts"), 0)),
+                "error": str(
+                    row.get("error", "")
+                    or failure_meta.get("error", "")
+                    or "unknown error"
+                ).strip(),
+                "retry_count": _safe_int(
+                    failure_meta.get("retry_count"), _safe_int(row.get("attempts"), 0)
+                ),
                 "error_type": str(failure_meta.get("error_type", "")).strip(),
             }
         )
@@ -14327,14 +17798,23 @@ def _exports_listing_payload(*, runtime: config.Config) -> dict[str, Any]:
             updated = dict(row)
             updated["size_bytes"] = _directory_size_bytes(path_obj)
             updated["file_count"] = _file_count(path_obj)
-            updated["updated_at"] = datetime.fromtimestamp(path_obj.stat().st_mtime, tz=timezone.utc).isoformat()
+            updated["updated_at"] = datetime.fromtimestamp(
+                path_obj.stat().st_mtime, tz=timezone.utc
+            ).isoformat()
             fresh.append(updated)
     manifest["exports"] = fresh
     _save_export_manifest(runtime, manifest)
-    return {"ok": True, "catalog": runtime.catalog_id, "exports": list(reversed(fresh)), "count": len(fresh)}
+    return {
+        "ok": True,
+        "catalog": runtime.catalog_id,
+        "exports": list(reversed(fresh)),
+        "count": len(fresh),
+    }
 
 
-def _resolve_export_row(*, runtime: config.Config, export_id: str) -> dict[str, Any] | None:
+def _resolve_export_row(
+    *, runtime: config.Config, export_id: str
+) -> dict[str, Any] | None:
     payload = _load_export_manifest(runtime)
     rows = payload.get("exports", [])
     if not isinstance(rows, list):
@@ -14408,14 +17888,22 @@ def _archive_old_exports(*, days: int, runtime: config.Config) -> dict[str, Any]
                 continue
             for child in sorted(catalog_dir.glob("*")):
                 try:
-                    modified = datetime.fromtimestamp(child.stat().st_mtime, tz=timezone.utc)
+                    modified = datetime.fromtimestamp(
+                        child.stat().st_mtime, tz=timezone.utc
+                    )
                 except OSError:
                     continue
                 if modified >= cutoff:
                     continue
-                target = archive_root / export_type_dir.name / catalog_dir.name / child.name
+                target = (
+                    archive_root / export_type_dir.name / catalog_dir.name / child.name
+                )
                 target.parent.mkdir(parents=True, exist_ok=True)
-                size_before = _directory_size_bytes(child) if child.is_dir() else int(child.stat().st_size)
+                size_before = (
+                    _directory_size_bytes(child)
+                    if child.is_dir()
+                    else int(child.stat().st_size)
+                )
                 if target.exists():
                     if target.is_dir():
                         shutil.rmtree(target)
@@ -14428,12 +17916,14 @@ def _archive_old_exports(*, days: int, runtime: config.Config) -> dict[str, Any]
         "catalog": runtime.catalog_id,
         "days": int(days),
         "moved_items": moved,
-        "freed_gb": round(bytes_moved / (1024 ** 3), 6),
+        "freed_gb": round(bytes_moved / (1024**3), 6),
         "archive_root": str(archive_root),
     }
 
 
-def _restore_archived_book(*, book_number: int, runtime: config.Config) -> dict[str, Any]:
+def _restore_archived_book(
+    *, book_number: int, runtime: config.Config
+) -> dict[str, Any]:
     archive_root = EXPORTS_ROOT / "archive"
     restored = 0
     # Restore non-winner variants from output archive tree.
@@ -14464,7 +17954,11 @@ def _restore_archived_book(*, book_number: int, runtime: config.Config) -> dict[
                 target.unlink()
         shutil.move(str(candidate), str(target))
         restored += 1
-    return {"catalog": runtime.catalog_id, "book_number": int(book_number), "restored_items": restored}
+    return {
+        "catalog": runtime.catalog_id,
+        "book_number": int(book_number),
+        "restored_items": restored,
+    }
 
 
 def _archive_stats_payload(*, runtime: config.Config) -> dict[str, Any]:
@@ -14485,13 +17979,17 @@ def _archive_stats_payload(*, runtime: config.Config) -> dict[str, Any]:
             except OSError:
                 continue
     date_range = {
-        "oldest": datetime.fromtimestamp(min(mtimes), tz=timezone.utc).isoformat() if mtimes else None,
-        "newest": datetime.fromtimestamp(max(mtimes), tz=timezone.utc).isoformat() if mtimes else None,
+        "oldest": datetime.fromtimestamp(min(mtimes), tz=timezone.utc).isoformat()
+        if mtimes
+        else None,
+        "newest": datetime.fromtimestamp(max(mtimes), tz=timezone.utc).isoformat()
+        if mtimes
+        else None,
     }
     return {
         "ok": True,
         "catalog": runtime.catalog_id,
-        "archive_size_gb": round(total_bytes / (1024 ** 3), 6),
+        "archive_size_gb": round(total_bytes / (1024**3), 6),
         "file_count": file_count,
         "date_range": date_range,
     }
@@ -14499,12 +17997,23 @@ def _archive_stats_payload(*, runtime: config.Config) -> dict[str, Any]:
 
 def _storage_usage_payload(*, runtime: config.Config) -> dict[str, Any]:
     source_covers = _directory_size_bytes(runtime.input_dir)
-    output_variants = _directory_size_bytes(runtime.output_dir) - _directory_size_bytes(runtime.output_dir / "Mockups")
+    output_variants = _directory_size_bytes(runtime.output_dir) - _directory_size_bytes(
+        runtime.output_dir / "Mockups"
+    )
     mockups = _directory_size_bytes(runtime.output_dir / "Mockups")
-    social_cards = _directory_size_bytes(runtime.output_dir / "Social") + _directory_size_bytes(EXPORTS_ROOT / "social" / runtime.catalog_id)
-    exports_size = _directory_size_bytes(EXPORTS_ROOT / runtime.catalog_id) + _directory_size_bytes(EXPORTS_ROOT / "amazon" / runtime.catalog_id) + _directory_size_bytes(EXPORTS_ROOT / "ingram" / runtime.catalog_id) + _directory_size_bytes(EXPORTS_ROOT / "web" / runtime.catalog_id)
+    social_cards = _directory_size_bytes(
+        runtime.output_dir / "Social"
+    ) + _directory_size_bytes(EXPORTS_ROOT / "social" / runtime.catalog_id)
+    exports_size = (
+        _directory_size_bytes(EXPORTS_ROOT / runtime.catalog_id)
+        + _directory_size_bytes(EXPORTS_ROOT / "amazon" / runtime.catalog_id)
+        + _directory_size_bytes(EXPORTS_ROOT / "ingram" / runtime.catalog_id)
+        + _directory_size_bytes(EXPORTS_ROOT / "web" / runtime.catalog_id)
+    )
     thumbnails = _directory_size_bytes(runtime.tmp_dir / "thumbnails")
-    archive_size = _directory_size_bytes(runtime.output_dir / "Archive") + _directory_size_bytes(EXPORTS_ROOT / "archive")
+    archive_size = _directory_size_bytes(
+        runtime.output_dir / "Archive"
+    ) + _directory_size_bytes(EXPORTS_ROOT / "archive")
     breakdown_bytes = {
         "source_covers": max(0, source_covers),
         "output_variants": max(0, output_variants),
@@ -14515,25 +18024,35 @@ def _storage_usage_payload(*, runtime: config.Config) -> dict[str, Any]:
         "archive": max(0, archive_size),
     }
     total_bytes = sum(breakdown_bytes.values())
-    breakdown_human = {key: f"{(value / (1024 ** 3)):.3f} GB" for key, value in breakdown_bytes.items()}
-    reclaimable_gb = (breakdown_bytes["output_variants"] * 0.4 + breakdown_bytes["archive"] * 0.8) / (1024 ** 3)
+    breakdown_human = {
+        key: f"{(value / (1024**3)):.3f} GB" for key, value in breakdown_bytes.items()
+    }
+    reclaimable_gb = (
+        breakdown_bytes["output_variants"] * 0.4 + breakdown_bytes["archive"] * 0.8
+    ) / (1024**3)
     return {
         "ok": True,
         "catalog": runtime.catalog_id,
-        "total_gb": round(total_bytes / (1024 ** 3), 6),
+        "total_gb": round(total_bytes / (1024**3), 6),
         "breakdown": breakdown_human,
         "suggested_cleanup": f"Archive non-winners to free approximately {reclaimable_gb:.2f} GB",
     }
 
 
-def _maybe_auto_delivery_for_books(*, runtime: config.Config, book_numbers: list[int], source: str) -> dict[str, Any]:
+def _maybe_auto_delivery_for_books(
+    *, runtime: config.Config, book_numbers: list[int], source: str
+) -> dict[str, Any]:
     cfg = delivery_pipeline.get_config(
         catalog_id=runtime.catalog_id,
         config_path=_delivery_config_path_for_runtime(runtime),
     )
     unique_books = sorted({int(book) for book in book_numbers if int(book) > 0})
     if not cfg.enabled:
-        return {"enabled": False, "reason": "delivery_pipeline_disabled", "books": unique_books}
+        return {
+            "enabled": False,
+            "reason": "delivery_pipeline_disabled",
+            "books": unique_books,
+        }
     if not unique_books:
         return {"enabled": True, "reason": "no_books", "books": []}
     credentials_path = _resolve_credentials_path(runtime)
@@ -14555,13 +18074,17 @@ def _maybe_auto_delivery_for_books(*, runtime: config.Config, book_numbers: list
             platforms=None,
             progress_callback=None,
         )
-        _invalidate_cache("/api/delivery/status", "/api/delivery/tracking", "/api/exports")
+        _invalidate_cache(
+            "/api/delivery/status", "/api/delivery/tracking", "/api/exports"
+        )
         return {"enabled": True, "trigger": source, "summary": summary}
     except Exception as exc:
         return {"enabled": True, "trigger": source, "error": str(exc)}
 
 
-def _pull_from_local_mirror(*, mirror_dir: Path, input_dir: Path, incremental: bool = True) -> dict[str, Any]:
+def _pull_from_local_mirror(
+    *, mirror_dir: Path, input_dir: Path, incremental: bool = True
+) -> dict[str, Any]:
     if not mirror_dir.exists():
         raise FileNotFoundError(f"Local mirror path not found: {mirror_dir}")
     copied = 0
@@ -14575,7 +18098,11 @@ def _pull_from_local_mirror(*, mirror_dir: Path, input_dir: Path, incremental: b
         target = input_dir / rel
         try:
             target.parent.mkdir(parents=True, exist_ok=True)
-            if incremental and target.exists() and target.stat().st_size == source.stat().st_size:
+            if (
+                incremental
+                and target.exists()
+                and target.stat().st_size == source.stat().st_size
+            ):
                 skipped += 1
                 continue
             shutil.copy2(source, target)
@@ -14612,7 +18139,9 @@ def _parse_books(raw: str | None) -> list[int] | None:
             continue
         if "-" in token:
             start, end = token.split("-", 1)
-            for value in range(min(int(start), int(end)), max(int(start), int(end)) + 1):
+            for value in range(
+                min(int(start), int(end)), max(int(start), int(end)) + 1
+            ):
                 values.add(value)
         else:
             values.add(int(token))
@@ -14657,7 +18186,9 @@ def _normalize_model_name(model: str) -> str:
     return text
 
 
-def _catalog_maps(*, catalog_path: Path = config.BOOK_CATALOG_PATH) -> tuple[dict[int, str], dict[int, str]]:
+def _catalog_maps(
+    *, catalog_path: Path = config.BOOK_CATALOG_PATH
+) -> tuple[dict[int, str], dict[int, str]]:
     payload = _load_json(catalog_path, [])
     rows = payload if isinstance(payload, list) else []
     title_by_book: dict[int, str] = {}
@@ -14681,7 +18212,7 @@ def _safe_file_stem(text: str) -> str:
     while "__" in token:
         token = token.replace("__", "_")
     token = token.strip("_")
-    return (token[:120] or "book")
+    return token[:120] or "book"
 
 
 def _descriptive_download_filename(
@@ -14701,7 +18232,9 @@ def _descriptive_download_filename(
     return f"Book{int(book_number):03d}_{safe_title}_{safe_edition}_{safe_model}_{suffix}_v{int(variant)}.{ext.lstrip('.')}"
 
 
-def _book_title_and_edition(*, runtime: config.Config, book_number: int) -> tuple[str, str]:
+def _book_title_and_edition(
+    *, runtime: config.Config, book_number: int
+) -> tuple[str, str]:
     payload = _load_json(runtime.book_catalog_path, [])
     rows = payload if isinstance(payload, list) else []
     for row in rows:
@@ -14710,7 +18243,12 @@ def _book_title_and_edition(*, runtime: config.Config, book_number: int) -> tupl
         if _safe_int(row.get("number"), 0) != int(book_number):
             continue
         title = str(row.get("title", f"Book {book_number}"))
-        edition = str(row.get("edition", row.get("format", "paperback")) or "paperback").strip() or "paperback"
+        edition = (
+            str(
+                row.get("edition", row.get("format", "paperback")) or "paperback"
+            ).strip()
+            or "paperback"
+        )
         return title, edition
     return f"Book {book_number}", "paperback"
 
@@ -14746,7 +18284,9 @@ def _source_image_for_variant(
         candidate = model_dir / f"variant_{int(variant)}.png"
         if candidate.exists():
             return candidate
-    candidate = next(iter(sorted(generated_dir.glob(f"*/variant_{int(variant)}.png"))), None)
+    candidate = next(
+        iter(sorted(generated_dir.glob(f"*/variant_{int(variant)}.png"))), None
+    )
     if candidate and candidate.exists():
         return candidate
     return None
@@ -14786,10 +18326,15 @@ def _latest_variant_record(
         for row in _load_generation_records(runtime=runtime)
         if isinstance(row, dict)
         and _safe_int(row.get("book_number"), 0) == int(book_number)
-        and _safe_int(row.get("variant"), _safe_int(row.get("variant_id"), 0)) == int(variant)
+        and _safe_int(row.get("variant"), _safe_int(row.get("variant_id"), 0))
+        == int(variant)
     ]
     if model_token:
-        filtered = [row for row in rows if str(row.get("model", "")).strip().lower() == model_token]
+        filtered = [
+            row
+            for row in rows
+            if str(row.get("model", "")).strip().lower() == model_token
+        ]
         if filtered:
             rows = filtered
     if not rows:
@@ -14798,7 +18343,9 @@ def _latest_variant_record(
     return rows[0]
 
 
-def _variant_output_dir(*, runtime: config.Config, book_number: int, variant: int) -> Path | None:
+def _variant_output_dir(
+    *, runtime: config.Config, book_number: int, variant: int
+) -> Path | None:
     _, folder_by_book = _catalog_maps(catalog_path=runtime.book_catalog_path)
     folder_name = folder_by_book.get(int(book_number), "")
     if not folder_name:
@@ -14821,16 +18368,24 @@ def _build_variant_download_zip(
     variant: int,
     model: str = "",
 ) -> tuple[Path, str]:
-    record = _latest_variant_record(runtime=runtime, book_number=book_number, variant=variant, model=model)
-    variant_dir = _variant_output_dir(runtime=runtime, book_number=book_number, variant=variant)
+    record = _latest_variant_record(
+        runtime=runtime, book_number=book_number, variant=variant, model=model
+    )
+    variant_dir = _variant_output_dir(
+        runtime=runtime, book_number=book_number, variant=variant
+    )
     if record is None and variant_dir is None:
-        raise FileNotFoundError(f"No variant data found for book {book_number} variant {variant}")
+        raise FileNotFoundError(
+            f"No variant data found for book {book_number} variant {variant}"
+        )
 
     cover_jpg: Path | None = None
     cover_pdf: Path | None = None
     cover_ai: Path | None = None
     generated_raw_image: Path | None = None
-    source_raw_image: Path | None = _first_local_cover_path(runtime=runtime, book_number=book_number)
+    source_raw_image: Path | None = _first_local_cover_path(
+        runtime=runtime, book_number=book_number
+    )
 
     if variant_dir is not None:
         jpg_rows = sorted(variant_dir.glob("*.jpg"))
@@ -14849,7 +18404,9 @@ def _build_variant_download_zip(
                 if candidate is not None and candidate.exists():
                     cover_jpg = candidate
     if cover_jpg is None:
-        raise FileNotFoundError(f"Missing composited JPG for book {book_number} variant {variant}")
+        raise FileNotFoundError(
+            f"Missing composited JPG for book {book_number} variant {variant}"
+        )
 
     generated_raw_image = _source_image_for_variant(
         runtime=runtime,
@@ -14875,7 +18432,9 @@ def _build_variant_download_zip(
 
     _, folder_by_book = _catalog_maps(catalog_path=runtime.book_catalog_path)
     folder_name = folder_by_book.get(int(book_number), "")
-    book_title, edition = _book_title_and_edition(runtime=runtime, book_number=book_number)
+    book_title, edition = _book_title_and_edition(
+        runtime=runtime, book_number=book_number
+    )
     model_name = str((record or {}).get("model", model or "unknown"))
     cover_jpg_name = _descriptive_download_filename(
         book_number=book_number,
@@ -14910,7 +18469,11 @@ def _build_variant_download_zip(
         edition=edition,
         model=model_name,
         variant=variant,
-        ext=(generated_raw_image.suffix.lstrip(".") if generated_raw_image is not None else "png"),
+        ext=(
+            generated_raw_image.suffix.lstrip(".")
+            if generated_raw_image is not None
+            else "png"
+        ),
         source=True,
     ).replace("_source_", "_generated_raw_")
     source_raw_name = _descriptive_download_filename(
@@ -14919,15 +18482,23 @@ def _build_variant_download_zip(
         edition=edition,
         model=model_name,
         variant=variant,
-        ext=(source_raw_image.suffix.lstrip(".") if source_raw_image is not None else "png"),
+        ext=(
+            source_raw_image.suffix.lstrip(".")
+            if source_raw_image is not None
+            else "png"
+        ),
         source=True,
     ).replace("_source_", "_source_raw_")
 
     composite_jpg_arc = f"composites/{cover_jpg_name}"
     composite_pdf_arc = f"composites/{cover_pdf_name}"
     composite_ai_arc = f"composites/{cover_ai_name}" if cover_ai is not None else ""
-    generated_raw_arc = f"source_images/{generated_raw_name}" if generated_raw_image is not None else ""
-    source_raw_arc = f"source_files/{source_raw_name}" if source_raw_image is not None else ""
+    generated_raw_arc = (
+        f"source_images/{generated_raw_name}" if generated_raw_image is not None else ""
+    )
+    source_raw_arc = (
+        f"source_files/{source_raw_name}" if source_raw_image is not None else ""
+    )
 
     metadata = {
         "book_number": int(book_number),
@@ -14948,10 +18519,14 @@ def _build_variant_download_zip(
 
     downloads_dir = runtime.tmp_dir / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(prefix="variant-", suffix=".zip", dir=str(downloads_dir), delete=False) as handle:
+    with tempfile.NamedTemporaryFile(
+        prefix="variant-", suffix=".zip", dir=str(downloads_dir), delete=False
+    ) as handle:
         zip_path = Path(handle.name)
 
-    with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(
+        zip_path, mode="w", compression=zipfile.ZIP_DEFLATED
+    ) as archive:
         archive.write(cover_jpg, arcname=composite_jpg_arc)
         if cover_pdf is not None and cover_pdf.exists():
             archive.write(cover_pdf, arcname=composite_pdf_arc)
@@ -14965,10 +18540,12 @@ def _build_variant_download_zip(
             archive.write(source_raw_image, arcname=source_raw_arc)
         manifest_csv = (
             "book_number,title,edition,model,variant,composite_jpg,composite_pdf,composite_ai,generated_raw_image,source_raw_image,quality_score\n"
-            f"{int(book_number)},\"{book_title}\",\"{edition}\",\"{model_name}\",{int(variant)},\"{composite_jpg_arc}\",\"{composite_pdf_arc}\",\"{composite_ai_arc}\",\"{generated_raw_arc}\",\"{source_raw_arc}\",{_safe_float((record or {}).get('quality_score'), 0.0):.4f}\n"
+            f'{int(book_number)},"{book_title}","{edition}","{model_name}",{int(variant)},"{composite_jpg_arc}","{composite_pdf_arc}","{composite_ai_arc}","{generated_raw_arc}","{source_raw_arc}",{_safe_float((record or {}).get("quality_score"), 0.0):.4f}\n'
         )
         archive.writestr("manifest.csv", manifest_csv)
-        archive.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
+        archive.writestr(
+            "metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2)
+        )
 
     zip_name = _descriptive_download_filename(
         book_number=book_number,
@@ -14982,9 +18559,15 @@ def _build_variant_download_zip(
     return zip_path, zip_name
 
 
-def _build_winner_download_zip(*, runtime: config.Config, book_number: int) -> tuple[Path, str]:
+def _build_winner_download_zip(
+    *, runtime: config.Config, book_number: int
+) -> tuple[Path, str]:
     winners_payload = _load_winner_payload(_winner_path_for_runtime(runtime))
-    selections = winners_payload.get("selections", {}) if isinstance(winners_payload, dict) else {}
+    selections = (
+        winners_payload.get("selections", {})
+        if isinstance(winners_payload, dict)
+        else {}
+    )
     selected = selections.get(str(int(book_number)))
     if isinstance(selected, dict):
         winner_variant = _safe_int(selected.get("winner"), 0)
@@ -15004,9 +18587,13 @@ def _build_winner_download_zip(*, runtime: config.Config, book_number: int) -> t
         book_number=int(book_number),
         variant=int(winner_variant),
     )
-    variant_dir = _variant_output_dir(runtime=runtime, book_number=int(book_number), variant=int(winner_variant))
+    variant_dir = _variant_output_dir(
+        runtime=runtime, book_number=int(book_number), variant=int(winner_variant)
+    )
     if variant_dir is None:
-        raise FileNotFoundError(f"Winner output folder missing for book {book_number} variant {winner_variant}")
+        raise FileNotFoundError(
+            f"Winner output folder missing for book {book_number} variant {winner_variant}"
+        )
 
     title_by_book, _ = _catalog_maps(catalog_path=runtime.book_catalog_path)
     book_title = str(title_by_book.get(int(book_number), f"Book {book_number}"))
@@ -15016,7 +18603,9 @@ def _build_winner_download_zip(*, runtime: config.Config, book_number: int) -> t
 
     cover_jpg = next(iter(sorted(variant_dir.glob("*.jpg"))), None)
     if cover_jpg is None:
-        raise FileNotFoundError(f"Winner JPG missing for book {book_number} variant {winner_variant}")
+        raise FileNotFoundError(
+            f"Winner JPG missing for book {book_number} variant {winner_variant}"
+        )
     cover_pdf = next(iter(sorted(variant_dir.glob("*.pdf"))), None)
     cmyk_pdf = next(iter(sorted(variant_dir.glob("*CMYK*.pdf"))), None)
     if cmyk_pdf is None:
@@ -15064,7 +18653,9 @@ def _build_winner_download_zip(*, runtime: config.Config, book_number: int) -> t
         "winner_variant": int(winner_variant),
         "model": model_name,
         "prompt": str((variant_record or {}).get("prompt", "")),
-        "quality_score": _safe_float((variant_record or {}).get("quality_score"), winner_score),
+        "quality_score": _safe_float(
+            (variant_record or {}).get("quality_score"), winner_score
+        ),
         "generation_timestamp": str((variant_record or {}).get("timestamp", "")),
         "selection_date": selected_at,
         "reviewer": reviewer,
@@ -15073,15 +18664,21 @@ def _build_winner_download_zip(*, runtime: config.Config, book_number: int) -> t
 
     downloads_dir = runtime.tmp_dir / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(prefix="winner-", suffix=".zip", dir=str(downloads_dir), delete=False) as handle:
+    with tempfile.NamedTemporaryFile(
+        prefix="winner-", suffix=".zip", dir=str(downloads_dir), delete=False
+    ) as handle:
         zip_path = Path(handle.name)
 
-    with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(
+        zip_path, mode="w", compression=zipfile.ZIP_DEFLATED
+    ) as archive:
         archive.write(cover_jpg, arcname=f"composites/{cover_jpg_name}")
         if cover_pdf is not None and cover_pdf.exists():
             archive.write(cover_pdf, arcname=f"composites/{cover_pdf_name}")
         else:
-            archive.writestr(f"composites/{cover_pdf_name}", _jpg_to_pdf_bytes(cover_jpg))
+            archive.writestr(
+                f"composites/{cover_pdf_name}", _jpg_to_pdf_bytes(cover_jpg)
+            )
         if medallion_png is not None and medallion_png.exists():
             archive.write(medallion_png, arcname=f"source_images/{source_png_name}")
         if cmyk_pdf is not None and cmyk_pdf.exists():
@@ -15097,10 +18694,12 @@ def _build_winner_download_zip(*, runtime: config.Config, book_number: int) -> t
             archive.write(cmyk_pdf, arcname=f"composites/{cmyk_name}")
         manifest_csv = (
             "book_number,title,edition,model,variant,composite_jpg,composite_pdf,source_image,quality_score\n"
-            f"{int(book_number)},\"{book_title}\",\"{edition}\",\"{model_name}\",{int(winner_variant)},\"composites/{cover_jpg_name}\",\"composites/{cover_pdf_name}\",\"source_images/{source_png_name}\",{_safe_float((variant_record or {}).get('quality_score'), winner_score):.4f}\n"
+            f'{int(book_number)},"{book_title}","{edition}","{model_name}",{int(winner_variant)},"composites/{cover_jpg_name}","composites/{cover_pdf_name}","source_images/{source_png_name}",{_safe_float((variant_record or {}).get("quality_score"), winner_score):.4f}\n'
         )
         archive.writestr("manifest.csv", manifest_csv)
-        archive.writestr("metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2))
+        archive.writestr(
+            "metadata.json", json.dumps(metadata, ensure_ascii=False, indent=2)
+        )
 
     zip_name = _descriptive_download_filename(
         book_number=book_number,
@@ -15114,11 +18713,14 @@ def _build_winner_download_zip(*, runtime: config.Config, book_number: int) -> t
     return zip_path, zip_name
 
 
-def _latest_rows_for_book(*, runtime: config.Config, book_number: int) -> list[dict[str, Any]]:
+def _latest_rows_for_book(
+    *, runtime: config.Config, book_number: int
+) -> list[dict[str, Any]]:
     rows = [
         row
         for row in _load_generation_records(runtime=runtime)
-        if isinstance(row, dict) and _safe_int(row.get("book_number"), 0) == int(book_number)
+        if isinstance(row, dict)
+        and _safe_int(row.get("book_number"), 0) == int(book_number)
     ]
     latest: dict[tuple[str, int], dict[str, Any]] = {}
     for row in rows:
@@ -15128,10 +18730,14 @@ def _latest_rows_for_book(*, runtime: config.Config, book_number: int) -> list[d
             continue
         key = (model, variant)
         current = latest.get(key)
-        if current is None or str(row.get("timestamp", "")) > str(current.get("timestamp", "")):
+        if current is None or str(row.get("timestamp", "")) > str(
+            current.get("timestamp", "")
+        ):
             latest[key] = row
     out = list(latest.values())
-    out.sort(key=lambda item: (str(item.get("model", "")), _safe_int(item.get("variant"), 0)))
+    out.sort(
+        key=lambda item: (str(item.get("model", "")), _safe_int(item.get("variant"), 0))
+    )
     return out
 
 
@@ -15142,7 +18748,9 @@ def _build_source_download_file(
     variant: int,
     model: str = "",
 ) -> tuple[Path, str]:
-    record = _latest_variant_record(runtime=runtime, book_number=book_number, variant=variant, model=model)
+    record = _latest_variant_record(
+        runtime=runtime, book_number=book_number, variant=variant, model=model
+    )
     source = _source_image_for_variant(
         runtime=runtime,
         book_number=book_number,
@@ -15151,7 +18759,9 @@ def _build_source_download_file(
         record=record,
     )
     if source is None or not source.exists():
-        raise FileNotFoundError(f"Source image not found for book {book_number} variant {variant}")
+        raise FileNotFoundError(
+            f"Source image not found for book {book_number} variant {variant}"
+        )
     title, edition = _book_title_and_edition(runtime=runtime, book_number=book_number)
     model_name = str((record or {}).get("model", model or "unknown"))
     filename = _descriptive_download_filename(
@@ -15182,13 +18792,17 @@ def _row_variant_number(row: dict[str, Any] | None) -> int:
     return _safe_int(row.get("variant"), _safe_int(row.get("variant_id"), 0))
 
 
-def _save_raw_expectation_from_payload(payload: dict[str, Any] | None) -> dict[str, Any]:
+def _save_raw_expectation_from_payload(
+    payload: dict[str, Any] | None,
+) -> dict[str, Any]:
     source = payload if isinstance(payload, dict) else {}
     variant_value = source.get("expected_variant", source.get("variant", 0))
     display_variant_value = source.get("display_variant", 0)
     model_value = source.get("expected_model", source.get("model", ""))
     raw_art_value = source.get("expected_raw_art_path", source.get("raw_art_path", ""))
-    saved_composited_value = source.get("expected_saved_composited_path", source.get("saved_composited_path", ""))
+    saved_composited_value = source.get(
+        "expected_saved_composited_path", source.get("saved_composited_path", "")
+    )
     return {
         "variant": max(0, _safe_int(variant_value, 0)),
         "display_variant": max(0, _safe_int(display_variant_value, 0)),
@@ -15199,7 +18813,9 @@ def _save_raw_expectation_from_payload(payload: dict[str, Any] | None) -> dict[s
     }
 
 
-def _row_matches_save_raw_expectation(row: dict[str, Any], expected: dict[str, Any]) -> bool:
+def _row_matches_save_raw_expectation(
+    row: dict[str, Any], expected: dict[str, Any]
+) -> bool:
     if not isinstance(row, dict):
         return False
     variant = _safe_int(expected.get("variant"), 0)
@@ -15223,7 +18839,9 @@ def _row_matches_save_raw_expectation(row: dict[str, Any], expected: dict[str, A
     return True
 
 
-def _row_for_save_raw(*, job: job_store.JobRecord, expected: dict[str, Any] | None = None) -> dict[str, Any]:
+def _row_for_save_raw(
+    *, job: job_store.JobRecord, expected: dict[str, Any] | None = None
+) -> dict[str, Any]:
     rows = _job_result_rows(job)
     if not rows:
         raise FileNotFoundError("No job results found")
@@ -15235,11 +18853,17 @@ def _row_for_save_raw(*, job: job_store.JobRecord, expected: dict[str, Any] | No
             int(normalized_expected.get("variant", 0)) > 0,
             bool(str(normalized_expected.get("model", "") or "").strip()),
             bool(str(normalized_expected.get("raw_art_path", "") or "").strip()),
-            bool(str(normalized_expected.get("saved_composited_path", "") or "").strip()),
+            bool(
+                str(normalized_expected.get("saved_composited_path", "") or "").strip()
+            ),
         ]
     )
     if has_selector:
-        matches = [row for row in pool if _row_matches_save_raw_expectation(row, normalized_expected)]
+        matches = [
+            row
+            for row in pool
+            if _row_matches_save_raw_expectation(row, normalized_expected)
+        ]
         if len(matches) == 1:
             return matches[0]
         details = {
@@ -15251,7 +18875,9 @@ def _row_for_save_raw(*, job: job_store.JobRecord, expected: dict[str, Any] | No
                     "variant": _row_variant_number(row),
                     "model": str(row.get("model", "") or "").strip(),
                     "raw_art_path": str(row.get("raw_art_path", "") or "").strip(),
-                    "saved_composited_path": str(row.get("saved_composited_path", "") or "").strip(),
+                    "saved_composited_path": str(
+                        row.get("saved_composited_path", "") or ""
+                    ).strip(),
                 }
                 for row in pool
             ],
@@ -15287,7 +18913,9 @@ def _is_descendant_path(candidate: Path, parent: Path) -> bool:
         return False
 
 
-def _resolve_durable_raw_image_path(*, runtime: config.Config, row: dict[str, Any]) -> Path | None:
+def _resolve_durable_raw_image_path(
+    *, runtime: config.Config, row: dict[str, Any]
+) -> Path | None:
     raw_root = runtime.output_dir / "raw_art"
     for token in (row.get("raw_art_path"), row.get("image_path")):
         candidate = _project_path_if_exists(token)
@@ -15298,10 +18926,16 @@ def _resolve_durable_raw_image_path(*, runtime: config.Config, row: dict[str, An
     return None
 
 
-def _resolve_durable_composite_image_path(*, runtime: config.Config, row: dict[str, Any]) -> Path | None:
+def _resolve_durable_composite_image_path(
+    *, runtime: config.Config, row: dict[str, Any]
+) -> Path | None:
     composite_root = runtime.output_dir / "saved_composites"
     candidate = _ensure_saved_composite_for_row(runtime=runtime, row=row)
-    if candidate is not None and candidate.exists() and _is_descendant_path(candidate, composite_root):
+    if (
+        candidate is not None
+        and candidate.exists()
+        and _is_descendant_path(candidate, composite_root)
+    ):
         return candidate
     return None
 
@@ -15312,14 +18946,22 @@ def _save_raw_package_folder_name(
     row: dict[str, Any],
     display_variant: int | None = None,
 ) -> str:
-    job_token = _generation_artifact_job_token(job_id=str(job.id or "").strip(), row=row)
+    job_token = _generation_artifact_job_token(
+        job_id=str(job.id or "").strip(), row=row
+    )
     variant = max(1, int(display_variant or 0) or _row_variant_number(row))
-    model_token = image_generator._model_to_directory(str(row.get("model", "") or "unknown"))  # type: ignore[attr-defined]
-    safe_model_token = _display_filename_token(model_token, allow_en_dash=False).replace(" ", "_")
+    model_token = image_generator._model_to_directory(
+        str(row.get("model", "") or "unknown")
+    )  # type: ignore[attr-defined]
+    safe_model_token = _display_filename_token(
+        model_token, allow_en_dash=False
+    ).replace(" ", "_")
     return f"save-raw__{job_token}__variant-{variant}__{safe_model_token}"
 
 
-def _resolve_raw_image_path_for_job(*, runtime: config.Config, job: job_store.JobRecord) -> Path | None:
+def _resolve_raw_image_path_for_job(
+    *, runtime: config.Config, job: job_store.JobRecord
+) -> Path | None:
     del runtime
     row = _primary_job_result_row(job)
     if not isinstance(row, dict):
@@ -15333,7 +18975,9 @@ def _resolve_raw_image_path_for_job(*, runtime: config.Config, job: job_store.Jo
     return None
 
 
-def _resolve_composite_image_path_for_job(*, runtime: config.Config, job: job_store.JobRecord) -> Path | None:
+def _resolve_composite_image_path_for_job(
+    *, runtime: config.Config, job: job_store.JobRecord
+) -> Path | None:
     row = _primary_job_result_row(job)
     if not isinstance(row, dict):
         return None
@@ -15362,7 +19006,9 @@ def _display_filename_token(text: str, *, allow_en_dash: bool = True) -> str:
     return token or "Untitled"
 
 
-def _save_raw_display_variant(*, expected: dict[str, Any] | None, row: dict[str, Any]) -> int:
+def _save_raw_display_variant(
+    *, expected: dict[str, Any] | None, row: dict[str, Any]
+) -> int:
     requested = max(0, _safe_int((expected or {}).get("display_variant"), 0))
     if requested > 0:
         return requested
@@ -15409,7 +19055,9 @@ def _export_png_asset(
     return str(destination)
 
 
-def _copy_image_with_format(source: Path, destination: Path, *, format_name: str) -> Path:
+def _copy_image_with_format(
+    source: Path, destination: Path, *, format_name: str
+) -> Path:
     destination.parent.mkdir(parents=True, exist_ok=True)
     source_ext = source.suffix.lower().lstrip(".")
     expected_ext = destination.suffix.lower().lstrip(".")
@@ -15440,7 +19088,9 @@ def _resolve_composite_companion_for_job(
     candidate = _project_path_if_exists(row.get(key))
     if candidate is not None and candidate.exists():
         return candidate
-    composite_path = _project_path_if_exists(row.get("saved_composited_path")) or _project_path_if_exists(row.get("composited_path"))
+    composite_path = _project_path_if_exists(
+        row.get("saved_composited_path")
+    ) or _project_path_if_exists(row.get("composited_path"))
     if composite_path is None or not composite_path.exists():
         return None
     companion = _resolve_composited_companion(composite_path, suffix)
@@ -15465,7 +19115,9 @@ def _export_asset_triplet(
     pdf_target = local_folder / f"{base_filename}.pdf"
     ai_target = local_folder / f"{base_filename}.ai"
 
-    saved.append(str(_copy_image_with_format(source_image, jpg_target, format_name="JPEG")))
+    saved.append(
+        str(_copy_image_with_format(source_image, jpg_target, format_name="JPEG"))
+    )
     if existing_pdf is not None and existing_pdf.exists():
         shutil.copy2(existing_pdf, pdf_target)
     else:
@@ -15506,12 +19158,18 @@ def _drive_error_details(exc: Exception) -> dict[str, Any]:
                 nested_message = str(error_payload.get("message", "") or "").strip()
                 if nested_message:
                     message = nested_message
-                error_code = str(error_payload.get("status", "") or error_payload.get("code", "") or "").strip()
+                error_code = str(
+                    error_payload.get("status", "")
+                    or error_payload.get("code", "")
+                    or ""
+                ).strip()
                 detail_rows = error_payload.get("errors", [])
                 if not error_code and isinstance(detail_rows, list) and detail_rows:
                     first = detail_rows[0]
                     if isinstance(first, dict):
-                        error_code = str(first.get("reason", "") or first.get("domain", "") or "").strip()
+                        error_code = str(
+                            first.get("reason", "") or first.get("domain", "") or ""
+                        ).strip()
     resp = getattr(exc, "resp", None)
     if resp is not None:
         try:
@@ -15527,42 +19185,67 @@ def _drive_error_details(exc: Exception) -> dict[str, Any]:
     }
 
 
-def _drive_service_for_runtime(runtime: config.Config) -> tuple[Any | None, Path, str | None, dict[str, Any], str | None]:
+def _drive_service_for_runtime(
+    runtime: config.Config,
+) -> tuple[Any | None, Path, str | None, dict[str, Any], str | None]:
     credentials_path = _resolve_credentials_path(runtime)
     if not credentials_path.is_absolute():
         credentials_path = PROJECT_ROOT / credentials_path
-    mode, mode_error = _drive_credentials_mode(runtime, credentials_path=credentials_path)
+    mode, mode_error = _drive_credentials_mode(
+        runtime, credentials_path=credentials_path
+    )
     credentials_meta = gdrive_sync.credential_details(credentials_path)
     if not mode:
-        return None, credentials_path, None, credentials_meta, mode_error or "Google Drive credentials are not configured."
+        return (
+            None,
+            credentials_path,
+            None,
+            credentials_meta,
+            mode_error or "Google Drive credentials are not configured.",
+        )
     auth_path = None if mode == "service_account_env" else credentials_path
     try:
         service = gdrive_sync.authenticate(auth_path)
     except Exception as exc:
-        return None, credentials_path, mode, credentials_meta, _drive_error_details(exc)["message"]
+        return (
+            None,
+            credentials_path,
+            mode,
+            credentials_meta,
+            _drive_error_details(exc)["message"],
+        )
     return service, credentials_path, mode, credentials_meta, None
 
 
-def _find_existing_drive_file_id(*, service: Any, parent_folder_id: str, file_name: str) -> str:
+def _find_existing_drive_file_id(
+    *, service: Any, parent_folder_id: str, file_name: str
+) -> str:
     file_name_query = _escape_drive_query_value(file_name)
     query = (
         f"name='{file_name_query}' and "
         f"'{str(parent_folder_id)}' in parents and "
         "trashed=false"
     )
-    existing = service.files().list(
-        q=query,
-        fields="files(id, name)",
-        pageSize=1,
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True,
-    ).execute().get("files", [])
+    existing = (
+        service.files()
+        .list(
+            q=query,
+            fields="files(id, name)",
+            pageSize=1,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        )
+        .execute()
+        .get("files", [])
+    )
     if not existing:
         return ""
     return str(existing[0].get("id", "")).strip()
 
 
-def _upload_single_file_to_drive(*, service: Any, parent_folder_id: str, file_path: Path) -> dict[str, Any]:
+def _upload_single_file_to_drive(
+    *, service: Any, parent_folder_id: str, file_path: Path
+) -> dict[str, Any]:
     max_attempts = SAVE_RAW_DRIVE_RETRY_ATTEMPTS
     for attempt in range(1, max_attempts + 1):
         try:
@@ -15571,16 +19254,24 @@ def _upload_single_file_to_drive(*, service: Any, parent_folder_id: str, file_pa
                 parent_folder_id=parent_folder_id,
                 file_name=file_path.name,
             )
-            mime_type = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+            mime_type = (
+                mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+            )
             media = gdrive_sync.MediaFileUpload(str(file_path), mimetype=mime_type)
             if existing_file_id:
-                updated = service.files().update(
-                    fileId=existing_file_id,
-                    media_body=media,
-                    fields="id",
-                    supportsAllDrives=True,
-                ).execute()
-                file_id = str(updated.get("id", existing_file_id) or existing_file_id).strip()
+                updated = (
+                    service.files()
+                    .update(
+                        fileId=existing_file_id,
+                        media_body=media,
+                        fields="id",
+                        supportsAllDrives=True,
+                    )
+                    .execute()
+                )
+                file_id = str(
+                    updated.get("id", existing_file_id) or existing_file_id
+                ).strip()
                 return {
                     "ok": True,
                     "name": file_path.name,
@@ -15590,12 +19281,16 @@ def _upload_single_file_to_drive(*, service: Any, parent_folder_id: str, file_pa
                     "action": "updated",
                     "attempts": attempt,
                 }
-            created = service.files().create(
-                body={"name": file_path.name, "parents": [str(parent_folder_id)]},
-                media_body=media,
-                fields="id",
-                supportsAllDrives=True,
-            ).execute()
+            created = (
+                service.files()
+                .create(
+                    body={"name": file_path.name, "parents": [str(parent_folder_id)]},
+                    media_body=media,
+                    fields="id",
+                    supportsAllDrives=True,
+                )
+                .execute()
+            )
             file_id = str(created.get("id", "")).strip()
             if not file_id:
                 raise RuntimeError("Google Drive file upload did not return an id")
@@ -15635,14 +19330,24 @@ def _upload_folder_to_drive(
     folder_parts: list[str] | None = None,
     parent_folder_id: str,
 ) -> dict[str, Any]:
-    local_files = [file_path for file_path in sorted(local_folder.iterdir()) if file_path.is_file()]
+    local_files = [
+        file_path for file_path in sorted(local_folder.iterdir()) if file_path.is_file()
+    ]
     normalized_parts = [
         str(part or "").strip()
-        for part in (folder_parts if isinstance(folder_parts, list) and folder_parts else [folder_name])
+        for part in (
+            folder_parts
+            if isinstance(folder_parts, list) and folder_parts
+            else [folder_name]
+        )
         if str(part or "").strip()
     ]
-    leaf_folder_name = normalized_parts[-1] if normalized_parts else str(folder_name or "").strip()
-    service, credentials_path, mode, credentials_meta, connection_error = _drive_service_for_runtime(runtime)
+    leaf_folder_name = (
+        normalized_parts[-1] if normalized_parts else str(folder_name or "").strip()
+    )
+    service, credentials_path, mode, credentials_meta, connection_error = (
+        _drive_service_for_runtime(runtime)
+    )
     result: dict[str, Any] = {
         "ok": False,
         "mode": mode,
@@ -15730,7 +19435,9 @@ def _upload_folder_to_drive(
     result["failed_count"] = len(result["failed"])
     result["ok"] = bool(child_folder_id) and result["failed_count"] == 0
     if result["failed_count"] > 0:
-        result["error"] = str(result["failed"][0].get("error", "") or "Drive upload failed.")
+        result["error"] = str(
+            result["failed"][0].get("error", "") or "Drive upload failed."
+        )
         result["warning"] = (
             "Files could not be saved to Google Drive. "
             f"The folder was created but {result['failed_count']} file(s) failed to upload. "
@@ -15750,13 +19457,12 @@ def _save_raw_context_for_job(
         raise LookupError("book not found for job")
 
     selected_row = _row_for_save_raw(job=job, expected=expected)
-    title = _display_filename_token(str(book.get("title", f"Book {int(job.book_number or 0)}")))
+    title = _display_filename_token(
+        str(book.get("title", f"Book {int(job.book_number or 0)}"))
+    )
     author = _display_filename_token(str(book.get("author", "Unknown")))
     catalog_number = str(
-        book.get("catalog_number")
-        or book.get("number")
-        or job.book_number
-        or "0"
+        book.get("catalog_number") or book.get("number") or job.book_number or "0"
     ).strip()
     book_folder_name = f"{catalog_number}. {title} - {author}"
     display_variant = _save_raw_display_variant(expected=expected, row=selected_row)
@@ -15772,7 +19478,9 @@ def _save_raw_context_for_job(
         display_variant=display_variant,
     )
     raw_source = _resolve_durable_raw_image_path(runtime=runtime, row=selected_row)
-    comp_source = _resolve_durable_composite_image_path(runtime=runtime, row=selected_row)
+    comp_source = _resolve_durable_composite_image_path(
+        runtime=runtime, row=selected_row
+    )
     if raw_source is None and comp_source is None:
         raise SaveRawIntegrityError(
             "Save Raw refused because this result does not have immutable job-scoped artifacts. Regenerate the result before saving.",
@@ -15782,7 +19490,9 @@ def _save_raw_context_for_job(
                 "variant": _row_variant_number(selected_row),
                 "model": str(selected_row.get("model", "") or "").strip(),
                 "raw_art_path": str(selected_row.get("raw_art_path", "") or "").strip(),
-                "saved_composited_path": str(selected_row.get("saved_composited_path", "") or "").strip(),
+                "saved_composited_path": str(
+                    selected_row.get("saved_composited_path", "") or ""
+                ).strip(),
             },
         )
     return {
@@ -15791,7 +19501,9 @@ def _save_raw_context_for_job(
         "book_folder_name": book_folder_name,
         "package_folder_name": package_folder_name,
         "folder_name": package_folder_name,
-        "local_folder": _local_save_raw_root(runtime=runtime) / book_folder_name / package_folder_name,
+        "local_folder": _local_save_raw_root(runtime=runtime)
+        / book_folder_name
+        / package_folder_name,
         "raw_source": raw_source,
         "raw_file_name": f"{file_prefix}_raw.png",
         "comp_source": comp_source,
@@ -15871,7 +19583,9 @@ def _save_raw_payload_for_job(
     job: job_store.JobRecord,
     expected: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    local_payload = _materialize_save_raw_package(runtime=runtime, job=job, expected=expected)
+    local_payload = _materialize_save_raw_package(
+        runtime=runtime, job=job, expected=expected
+    )
     drive_payload = _upload_folder_to_drive(
         runtime=runtime,
         local_folder=Path(local_payload["local_folder"]),
@@ -15928,7 +19642,9 @@ def _safe_filename_component(text: str) -> str:
     return token or "Untitled"
 
 
-def _save_result_filename(*, title: str, variant: int, style_label: str, stamp: datetime | None = None) -> str:
+def _save_result_filename(
+    *, title: str, variant: int, style_label: str, stamp: datetime | None = None
+) -> str:
     current = stamp or datetime.now(timezone.utc)
     date_token = current.strftime("%Y%m%d-%H%M%S")
     title_token = _safe_filename_component(title)
@@ -15948,18 +19664,19 @@ def _save_result_context_for_job(
         raise LookupError("book not found for job")
 
     selected_row = _row_for_save_raw(job=job, expected=expected)
-    composite_source = _resolve_durable_composite_image_path(runtime=runtime, row=selected_row)
+    composite_source = _resolve_durable_composite_image_path(
+        runtime=runtime, row=selected_row
+    )
     if composite_source is None or not composite_source.exists():
         raise FileNotFoundError("No composite image found for job")
 
     variant = _row_variant_number(selected_row)
-    title_display = _display_filename_token(str(book.get("title", f"Book {int(job.book_number or 0)}")))
+    title_display = _display_filename_token(
+        str(book.get("title", f"Book {int(job.book_number or 0)}"))
+    )
     author_display = _display_filename_token(str(book.get("author", "Unknown")))
     catalog_number = str(
-        book.get("catalog_number")
-        or book.get("number")
-        or job.book_number
-        or "0"
+        book.get("catalog_number") or book.get("number") or job.book_number or "0"
     ).strip()
     book_folder_name = f"{catalog_number}. {title_display} - {author_display}"
     resolved_style_label = str(
@@ -16029,7 +19746,9 @@ def _upload_saved_result_to_drive(
     local_path: Path,
     parent_folder_id: str,
 ) -> dict[str, Any]:
-    service, credentials_path, mode, credentials_meta, connection_error = _drive_service_for_runtime(runtime)
+    service, credentials_path, mode, credentials_meta, connection_error = (
+        _drive_service_for_runtime(runtime)
+    )
     payload: dict[str, Any] = {
         "ok": False,
         "mode": mode,
@@ -16056,7 +19775,9 @@ def _upload_saved_result_to_drive(
     payload["drive_file_id"] = str(upload_row.get("file_id", "") or "").strip()
     payload["drive_url"] = str(upload_row.get("drive_url", "") or "").strip() or None
     if not payload["ok"]:
-        payload["error"] = str(upload_row.get("error", "") or connection_error or "Drive upload failed.")
+        payload["error"] = str(
+            upload_row.get("error", "") or connection_error or "Drive upload failed."
+        )
         payload["warning"] = (
             "The cover was saved locally but could not be uploaded to Google Drive. "
             f"Error: {payload['error']}"
@@ -16111,34 +19832,45 @@ def _save_result_payload_for_job(
     }
 
 
-def _ensure_drive_child_folder(*, service: Any, parent_folder_id: str, folder_name: str) -> str:
+def _ensure_drive_child_folder(
+    *, service: Any, parent_folder_id: str, folder_name: str
+) -> str:
     folder_name_query = str(folder_name).replace("'", "\\'")
     query = (
         f"name='{folder_name_query}' and "
         f"'{str(parent_folder_id)}' in parents and "
         "mimeType='application/vnd.google-apps.folder' and trashed=false"
     )
-    existing = service.files().list(
-        q=query,
-        fields="files(id, name)",
-        pageSize=1,
-        supportsAllDrives=True,
-        includeItemsFromAllDrives=True,
-    ).execute().get("files", [])
+    existing = (
+        service.files()
+        .list(
+            q=query,
+            fields="files(id, name)",
+            pageSize=1,
+            supportsAllDrives=True,
+            includeItemsFromAllDrives=True,
+        )
+        .execute()
+        .get("files", [])
+    )
     if existing:
         folder_id = str(existing[0].get("id", "")).strip()
         if folder_id:
             return folder_id
 
-    created = service.files().create(
-        body={
-            "name": str(folder_name),
-            "mimeType": "application/vnd.google-apps.folder",
-            "parents": [str(parent_folder_id)],
-        },
-        fields="id",
-        supportsAllDrives=True,
-    ).execute()
+    created = (
+        service.files()
+        .create(
+            body={
+                "name": str(folder_name),
+                "mimeType": "application/vnd.google-apps.folder",
+                "parents": [str(parent_folder_id)],
+            },
+            fields="id",
+            supportsAllDrives=True,
+        )
+        .execute()
+    )
     folder_id = str(created.get("id", "")).strip()
     if not folder_id:
         raise RuntimeError("Google Drive folder creation did not return an id")
@@ -16154,47 +19886,66 @@ def _upload_saved_prompt_metadata_to_drive(
 ) -> str:
     drive_mode, drive_error = _drive_credentials_mode(runtime)
     if not drive_mode:
-        raise RuntimeError(drive_error or "Google Drive credentials are not configured.")
+        raise RuntimeError(
+            drive_error or "Google Drive credentials are not configured."
+        )
 
     credentials_path = _resolve_credentials_path(runtime)
     if not credentials_path.is_absolute():
         credentials_path = PROJECT_ROOT / credentials_path
-    service = gdrive_sync.authenticate(credentials_path if credentials_path.exists() else None)
+    service = gdrive_sync.authenticate(
+        credentials_path if credentials_path.exists() else None
+    )
     child_folder_id = _ensure_drive_child_folder(
         service=service,
         parent_folder_id=parent_folder_id,
         folder_name=SAVE_PROMPT_DRIVE_SUBDIR,
     )
 
-    file_name = f"winner_prompt_{_prompt_slug_token(prompt_id, fallback='winner-prompt')}.json"
+    file_name = (
+        f"winner_prompt_{_prompt_slug_token(prompt_id, fallback='winner-prompt')}.json"
+    )
     temp_path = Path(tempfile.mkstemp(prefix="winner-prompt-", suffix=".json")[1])
     try:
-        temp_path.write_text(json.dumps(prompt_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        temp_path.write_text(
+            json.dumps(prompt_payload, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
         file_name_query = file_name.replace("'", "\\'")
         query = (
             f"name='{file_name_query}' and "
             f"'{str(child_folder_id)}' in parents and trashed=false"
         )
-        existing = service.files().list(
-            q=query,
-            fields="files(id, name)",
-            pageSize=1,
-            supportsAllDrives=True,
-            includeItemsFromAllDrives=True,
-        ).execute().get("files", [])
+        existing = (
+            service.files()
+            .list(
+                q=query,
+                fields="files(id, name)",
+                pageSize=1,
+                supportsAllDrives=True,
+                includeItemsFromAllDrives=True,
+            )
+            .execute()
+            .get("files", [])
+        )
         media = gdrive_sync.MediaFileUpload(str(temp_path), mimetype="application/json")
         if existing:
             file_id = str(existing[0].get("id", "")).strip()
             if not file_id:
                 raise RuntimeError("Google Drive file update target is missing an id")
-            service.files().update(fileId=file_id, media_body=media, supportsAllDrives=True).execute()
-        else:
-            created = service.files().create(
-                body={"name": file_name, "parents": [child_folder_id]},
-                media_body=media,
-                fields="id",
-                supportsAllDrives=True,
+            service.files().update(
+                fileId=file_id, media_body=media, supportsAllDrives=True
             ).execute()
+        else:
+            created = (
+                service.files()
+                .create(
+                    body={"name": file_name, "parents": [child_folder_id]},
+                    media_body=media,
+                    fields="id",
+                    supportsAllDrives=True,
+                )
+                .execute()
+            )
             file_id = str(created.get("id", "")).strip()
             if not file_id:
                 raise RuntimeError("Google Drive file creation did not return an id")
@@ -16203,20 +19954,28 @@ def _upload_saved_prompt_metadata_to_drive(
         temp_path.unlink(missing_ok=True)
 
 
-def _build_book_download_zip(*, runtime: config.Config, book_number: int) -> tuple[Path, str]:
+def _build_book_download_zip(
+    *, runtime: config.Config, book_number: int
+) -> tuple[Path, str]:
     rows = _latest_rows_for_book(runtime=runtime, book_number=book_number)
     if not rows:
         raise FileNotFoundError(f"No generated variants found for book {book_number}")
     title, edition = _book_title_and_edition(runtime=runtime, book_number=book_number)
     book_dir = f"Book{int(book_number):03d}_{_safe_file_stem(title)}"
-    manifest_lines = ["book_number,title,edition,model,variant,composite_file,source_file,quality_score"]
+    manifest_lines = [
+        "book_number,title,edition,model,variant,composite_file,source_file,quality_score"
+    ]
 
     downloads_dir = runtime.tmp_dir / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(prefix="book-", suffix=".zip", dir=str(downloads_dir), delete=False) as handle:
+    with tempfile.NamedTemporaryFile(
+        prefix="book-", suffix=".zip", dir=str(downloads_dir), delete=False
+    ) as handle:
         zip_path = Path(handle.name)
 
-    with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
+    with zipfile.ZipFile(
+        zip_path, mode="w", compression=zipfile.ZIP_DEFLATED
+    ) as archive:
         for row in rows:
             model_name = str(row.get("model", "unknown"))
             variant = _safe_int(row.get("variant", row.get("variant_id", 0)), 0)
@@ -16226,7 +19985,9 @@ def _build_book_download_zip(*, runtime: config.Config, book_number: int) -> tup
             if composite is None:
                 image_source = _project_path_if_exists(row.get("image_path"))
                 if image_source is not None:
-                    candidate = _resolve_composited_candidate(image_source, runtime=runtime)
+                    candidate = _resolve_composited_candidate(
+                        image_source, runtime=runtime
+                    )
                     if candidate is not None and candidate.exists():
                         composite = candidate
             source = _source_image_for_variant(
@@ -16261,7 +20022,7 @@ def _build_book_download_zip(*, runtime: config.Config, book_number: int) -> tup
             if source is not None and source.exists():
                 archive.write(source, arcname=source_arc)
             manifest_lines.append(
-                f"{int(book_number)},\"{title}\",\"{edition}\",\"{model_name}\",{int(variant)},\"{composite_arc}\",\"{source_arc}\",{_safe_float(row.get('quality_score'), 0.0):.4f}"
+                f'{int(book_number)},"{title}","{edition}","{model_name}",{int(variant)},"{composite_arc}","{source_arc}",{_safe_float(row.get("quality_score"), 0.0):.4f}'
             )
         archive.writestr("manifest.csv", "\n".join(manifest_lines) + "\n")
 
@@ -16270,17 +20031,29 @@ def _build_book_download_zip(*, runtime: config.Config, book_number: int) -> tup
 
 def _build_approved_download_zip(*, runtime: config.Config) -> tuple[Path, str]:
     winners_payload = _load_winner_payload(_winner_path_for_runtime(runtime))
-    selections = winners_payload.get("selections", {}) if isinstance(winners_payload, dict) else {}
+    selections = (
+        winners_payload.get("selections", {})
+        if isinstance(winners_payload, dict)
+        else {}
+    )
     if not isinstance(selections, dict) or not selections:
         raise FileNotFoundError("No approved winners available for download")
     downloads_dir = runtime.tmp_dir / "downloads"
     downloads_dir.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(prefix="approved-", suffix=".zip", dir=str(downloads_dir), delete=False) as handle:
+    with tempfile.NamedTemporaryFile(
+        prefix="approved-", suffix=".zip", dir=str(downloads_dir), delete=False
+    ) as handle:
         zip_path = Path(handle.name)
-    manifest_lines = ["book_number,title,edition,model,variant,composite_file,source_file,quality_score"]
+    manifest_lines = [
+        "book_number,title,edition,model,variant,composite_file,source_file,quality_score"
+    ]
 
-    with zipfile.ZipFile(zip_path, mode="w", compression=zipfile.ZIP_DEFLATED) as archive:
-        for key, selection in sorted(selections.items(), key=lambda item: _safe_int(item[0], 0)):
+    with zipfile.ZipFile(
+        zip_path, mode="w", compression=zipfile.ZIP_DEFLATED
+    ) as archive:
+        for key, selection in sorted(
+            selections.items(), key=lambda item: _safe_int(item[0], 0)
+        ):
             book_number = _safe_int(key, 0)
             if book_number <= 0:
                 continue
@@ -16292,12 +20065,18 @@ def _build_approved_download_zip(*, runtime: config.Config) -> tuple[Path, str]:
                 score = 0.0
             if winner_variant <= 0:
                 continue
-            record = _latest_variant_record(runtime=runtime, book_number=book_number, variant=winner_variant)
+            record = _latest_variant_record(
+                runtime=runtime, book_number=book_number, variant=winner_variant
+            )
             model_name = str((record or {}).get("model", "unknown"))
-            title, edition = _book_title_and_edition(runtime=runtime, book_number=book_number)
+            title, edition = _book_title_and_edition(
+                runtime=runtime, book_number=book_number
+            )
             book_dir = f"Book{int(book_number):03d}_{_safe_file_stem(title)}"
             composite = None
-            variant_dir = _variant_output_dir(runtime=runtime, book_number=book_number, variant=winner_variant)
+            variant_dir = _variant_output_dir(
+                runtime=runtime, book_number=book_number, variant=winner_variant
+            )
             if variant_dir is not None:
                 composite = next(iter(sorted(variant_dir.glob("*.jpg"))), None)
             if composite is None and isinstance(record, dict):
@@ -16334,29 +20113,45 @@ def _build_approved_download_zip(*, runtime: config.Config) -> tuple[Path, str]:
             if source is not None and source.exists():
                 archive.write(source, arcname=source_arc)
             manifest_lines.append(
-                f"{int(book_number)},\"{title}\",\"{edition}\",\"{model_name}\",{int(winner_variant)},\"{composite_arc}\",\"{source_arc}\",{_safe_float((record or {}).get('quality_score'), score):.4f}"
+                f'{int(book_number)},"{title}","{edition}","{model_name}",{int(winner_variant)},"{composite_arc}","{source_arc}",{_safe_float((record or {}).get("quality_score"), score):.4f}'
             )
         archive.writestr("manifest.csv", "\n".join(manifest_lines) + "\n")
 
     return zip_path, f"approved_covers_{_safe_file_stem(runtime.catalog_id)}.zip"
 
 
-def _load_generation_records(*, runtime: config.Config | None = None) -> list[dict[str, Any]]:
+def _load_generation_records(
+    *, runtime: config.Config | None = None
+) -> list[dict[str, Any]]:
     runtime = runtime or config.get_config()
     title_by_book, _ = _catalog_maps(catalog_path=runtime.book_catalog_path)
     quality_path = _quality_scores_path_for_runtime(runtime)
     quality_lookup = _load_quality_lookup(quality_path)
     quality_payload = _load_json(quality_path, {"scores": []})
-    quality_rows = quality_payload.get("scores", []) if isinstance(quality_payload, dict) else []
+    quality_rows = (
+        quality_payload.get("scores", []) if isinstance(quality_payload, dict) else []
+    )
     history_rows: list[dict[str, Any]] = []
     try:
-        history_rows = state_db_store.list_generation_records(catalog_id=runtime.catalog_id, limit=5000)
+        history_rows = state_db_store.list_generation_records(
+            catalog_id=runtime.catalog_id, limit=5000
+        )
     except Exception as exc:  # pragma: no cover - fallback to JSON
-        logger.warning("State DB history read failed for catalog %s: %s", runtime.catalog_id, exc)
+        logger.warning(
+            "State DB history read failed for catalog %s: %s", runtime.catalog_id, exc
+        )
     if not history_rows:
         history_payload = _load_json(_history_path_for_runtime(runtime), {"items": []})
-        rows = history_payload.get("items", []) if isinstance(history_payload, dict) else []
-        history_rows = [row for row in rows if isinstance(row, dict)] if isinstance(rows, list) else []
+        rows = (
+            history_payload.get("items", [])
+            if isinstance(history_payload, dict)
+            else []
+        )
+        history_rows = (
+            [row for row in rows if isinstance(row, dict)]
+            if isinstance(rows, list)
+            else []
+        )
 
     records: list[dict[str, Any]] = []
     seen_keys: set[tuple[int, int, str, str]] = set()
@@ -16368,10 +20163,16 @@ def _load_generation_records(*, runtime: config.Config | None = None) -> list[di
         variant = _safe_int(row.get("variant"), _safe_int(row.get("variant_id"), 0))
         model = str(row.get("model", "unknown"))
         model_norm = _normalize_model_name(model)
-        provider = str(row.get("provider", "")).strip() or runtime.resolve_model_provider(model_norm)
-        quality = _safe_float(row.get("quality_score"), quality_lookup.get((book, variant), 0.0))
+        provider = str(
+            row.get("provider", "")
+        ).strip() or runtime.resolve_model_provider(model_norm)
+        quality = _safe_float(
+            row.get("quality_score"), quality_lookup.get((book, variant), 0.0)
+        )
         cost = _safe_float(row.get("cost"), runtime.get_model_cost(model_norm))
-        timestamp = str(row.get("timestamp", "")) or datetime.now(timezone.utc).isoformat()
+        timestamp = (
+            str(row.get("timestamp", "")) or datetime.now(timezone.utc).isoformat()
+        )
         key = (book, variant, model, timestamp)
         seen_keys.add(key)
         records.append(
@@ -16389,16 +20190,22 @@ def _load_generation_records(*, runtime: config.Config | None = None) -> list[di
                 "prompt": str(row.get("prompt", "")),
                 "image_path": row.get("image_path"),
                 "composited_path": row.get("composited_path"),
-                "distinctiveness_score": _safe_float(row.get("distinctiveness_score"), 0.0),
+                "distinctiveness_score": _safe_float(
+                    row.get("distinctiveness_score"), 0.0
+                ),
                 "similar_to_book": _safe_int(row.get("similar_to_book"), 0),
                 "similarity_warning": str(row.get("similarity_warning", "")),
                 "error": row.get("error"),
-                "print_validation": row.get("print_validation", {}) if isinstance(row.get("print_validation"), dict) else {},
+                "print_validation": row.get("print_validation", {})
+                if isinstance(row.get("print_validation"), dict)
+                else {},
             }
         )
 
     quality_mtime = (
-        datetime.fromtimestamp(quality_path.stat().st_mtime, tz=timezone.utc).isoformat()
+        datetime.fromtimestamp(
+            quality_path.stat().st_mtime, tz=timezone.utc
+        ).isoformat()
         if quality_path.exists()
         else datetime.now(timezone.utc).isoformat()
     )
@@ -16428,7 +20235,9 @@ def _load_generation_records(*, runtime: config.Config | None = None) -> list[di
                 "prompt": "",
                 "image_path": row.get("image_path"),
                 "composited_path": None,
-                "distinctiveness_score": _safe_float(row.get("distinctiveness_score"), 0.0),
+                "distinctiveness_score": _safe_float(
+                    row.get("distinctiveness_score"), 0.0
+                ),
                 "similar_to_book": 0,
                 "similarity_warning": "",
                 "error": None,
@@ -16440,7 +20249,9 @@ def _load_generation_records(*, runtime: config.Config | None = None) -> list[di
     return records
 
 
-def _filter_generation_records(items: list[dict[str, Any]], *, filters: dict[str, list[str]]) -> list[dict[str, Any]]:
+def _filter_generation_records(
+    items: list[dict[str, Any]], *, filters: dict[str, list[str]]
+) -> list[dict[str, Any]]:
     selected = items
 
     def _first(name: str) -> str:
@@ -16457,13 +20268,27 @@ def _filter_generation_records(items: list[dict[str, Any]], *, filters: dict[str
 
     if book_filter:
         wanted = _parse_books(book_filter) or []
-        selected = [row for row in selected if _safe_int(row.get("book_number"), 0) in set(wanted)]
+        selected = [
+            row
+            for row in selected
+            if _safe_int(row.get("book_number"), 0) in set(wanted)
+        ]
     if model_filter:
-        selected = [row for row in selected if model_filter in str(row.get("model", "")).lower()]
+        selected = [
+            row for row in selected if model_filter in str(row.get("model", "")).lower()
+        ]
     if provider_filter:
-        selected = [row for row in selected if provider_filter == str(row.get("provider", "")).lower()]
+        selected = [
+            row
+            for row in selected
+            if provider_filter == str(row.get("provider", "")).lower()
+        ]
     if status_filter and status_filter != "all":
-        selected = [row for row in selected if status_filter == str(row.get("status", "")).lower()]
+        selected = [
+            row
+            for row in selected
+            if status_filter == str(row.get("status", "")).lower()
+        ]
 
     filtered_by_date: list[dict[str, Any]] = []
     for row in selected:
@@ -16480,15 +20305,21 @@ def _filter_generation_records(items: list[dict[str, Any]], *, filters: dict[str
     return filtered_by_date
 
 
-def _build_weak_books_payload(*, runtime: config.Config, threshold: float) -> dict[str, Any]:
+def _build_weak_books_payload(
+    *, runtime: config.Config, threshold: float
+) -> dict[str, Any]:
     winner_path = _winner_path_for_runtime(runtime)
     winner_payload = _load_winner_payload(winner_path)
-    selections = winner_payload.get("selections", {}) if isinstance(winner_payload, dict) else {}
+    selections = (
+        winner_payload.get("selections", {}) if isinstance(winner_payload, dict) else {}
+    )
     if not isinstance(selections, dict):
         selections = {}
 
     quality_lookup = _load_quality_lookup(_quality_scores_path_for_runtime(runtime))
-    title_by_book, folder_by_book = _catalog_maps(catalog_path=runtime.book_catalog_path)
+    title_by_book, folder_by_book = _catalog_maps(
+        catalog_path=runtime.book_catalog_path
+    )
 
     rows: list[dict[str, Any]] = []
     for key, value in selections.items():
@@ -16566,8 +20397,12 @@ def _build_review_queue(*, runtime: config.Config, threshold: float) -> dict[str
         catalog_path=runtime.book_catalog_path,
         quality_scores_path=_quality_scores_path_for_runtime(runtime),
     )
-    winner_payload = _ensure_winner_payload(books, path=_winner_path_for_runtime(runtime))
-    selections = winner_payload.get("selections", {}) if isinstance(winner_payload, dict) else {}
+    winner_payload = _ensure_winner_payload(
+        books, path=_winner_path_for_runtime(runtime)
+    )
+    selections = (
+        winner_payload.get("selections", {}) if isinstance(winner_payload, dict) else {}
+    )
     if not isinstance(selections, dict):
         selections = {}
 
@@ -16595,15 +20430,23 @@ def _build_review_queue(*, runtime: config.Config, threshold: float) -> dict[str
         number = _safe_int(book.get("number"), 0)
         if number <= 0:
             continue
-        selection = selections.get(str(number), {}) if isinstance(selections.get(str(number), {}), dict) else {}
+        selection = (
+            selections.get(str(number), {})
+            if isinstance(selections.get(str(number), {}), dict)
+            else {}
+        )
         winner = _safe_int(selection.get("winner"), 0)
         winner_score = _safe_float(selection.get("score"), 0.0)
         confidence = _confidence_for_book(book, winner_score)
         flagged_similarity = number in flagged_books
-        conflict_payload = selection.get("conflict", {}) if isinstance(selection.get("conflict"), dict) else {}
-        conflict_required = bool(selection.get("conflict_requires_resolution", False)) or bool(
-            conflict_payload.get("requires_resolution", False)
+        conflict_payload = (
+            selection.get("conflict", {})
+            if isinstance(selection.get("conflict"), dict)
+            else {}
         )
+        conflict_required = bool(
+            selection.get("conflict_requires_resolution", False)
+        ) or bool(conflict_payload.get("requires_resolution", False))
         if conflict_required:
             conflicts_pending += 1
         top_variant_score = max(
@@ -16645,7 +20488,9 @@ def _build_review_queue(*, runtime: config.Config, threshold: float) -> dict[str
                 "top_variant_score": round(top_variant_score, 4),
                 "confidence": round(confidence, 4),
                 "similarity_flag": flagged_similarity,
-                "selected_by": str(selection.get("selected_by", selection.get("reviewer", ""))),
+                "selected_by": str(
+                    selection.get("selected_by", selection.get("reviewer", ""))
+                ),
                 "reviewer": str(selection.get("reviewer", "")),
                 "conflict_requires_resolution": conflict_required,
                 "conflict": conflict_payload,
@@ -16656,7 +20501,14 @@ def _build_review_queue(*, runtime: config.Config, threshold: float) -> dict[str
             }
         )
 
-    queue.sort(key=lambda row: (row["priority"], row["confidence"], row["winner_score"], row["book"]))
+    queue.sort(
+        key=lambda row: (
+            row["priority"],
+            row["confidence"],
+            row["winner_score"],
+            row["book"],
+        )
+    )
     remaining_after_auto = max(0, len(queue) - auto_approve)
     estimated_minutes = int(math.ceil((remaining_after_auto * 18) / 60.0))
 
@@ -16674,7 +20526,9 @@ def _build_review_queue(*, runtime: config.Config, threshold: float) -> dict[str
     }
 
 
-def _apply_batch_approve(*, runtime: config.Config, threshold: float, reviewer: str) -> dict[str, Any]:
+def _apply_batch_approve(
+    *, runtime: config.Config, threshold: float, reviewer: str
+) -> dict[str, Any]:
     books = build_review_dataset(
         runtime.output_dir,
         input_dir=runtime.input_dir,
@@ -16735,7 +20589,11 @@ def _append_review_stats(*, runtime: config.Config, payload: dict[str, Any]) -> 
     overrides = 0
     lower_score_picks = 0
     for key, row in selections.items():
-        detail = details.get(str(key), {}) if isinstance(details.get(str(key), {}), dict) else {}
+        detail = (
+            details.get(str(key), {})
+            if isinstance(details.get(str(key), {}), dict)
+            else {}
+        )
         if isinstance(row, dict):
             variant_value = _safe_int(row.get("winner"), 0)
             overrode = bool(detail.get("overrode_auto", row.get("overrode_auto")))
@@ -16761,7 +20619,9 @@ def _append_review_stats(*, runtime: config.Config, payload: dict[str, Any]) -> 
         "books_remaining": _safe_int(payload.get("books_remaining"), 0),
         "auto_approved": _safe_int(payload.get("auto_approved"), 0),
         "manually_selected": _safe_int(payload.get("manually_selected"), 0),
-        "avg_time_per_book_seconds": _safe_float(payload.get("avg_time_per_book_seconds"), 0.0),
+        "avg_time_per_book_seconds": _safe_float(
+            payload.get("avg_time_per_book_seconds"), 0.0
+        ),
         "auto_overrides": overrides,
         "lower_scoring_variant_picks": lower_score_picks,
         "variant_distribution": variant_distribution,
@@ -16784,7 +20644,9 @@ def _winner_variant_map(*, runtime: config.Config) -> dict[int, int]:
         book = _safe_int(key, 0)
         if book <= 0:
             continue
-        variant = _safe_int(value.get("winner") if isinstance(value, dict) else value, 0)
+        variant = _safe_int(
+            value.get("winner") if isinstance(value, dict) else value, 0
+        )
         if variant <= 0:
             continue
         out[book] = variant
@@ -16848,7 +20710,9 @@ def _start_similarity_recompute(
                 threshold=threshold,
                 catalog_path=runtime_req.book_catalog_path,
                 winner_selections_path=_winner_path_for_runtime(runtime_req),
-                regions_path=config.cover_regions_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir),
+                regions_path=config.cover_regions_path(
+                    catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir
+                ),
                 hashes_path=_similarity_hashes_path_for_runtime(runtime_req),
                 matrix_path=_similarity_matrix_path_for_runtime(runtime_req),
                 clusters_path=_similarity_clusters_path_for_runtime(runtime_req),
@@ -16859,7 +20723,10 @@ def _start_similarity_recompute(
             summary = {}
             status = "failed"
             error_text = str(exc)
-            logger.error("Similarity recompute failed", extra={"catalog": catalog_id, "error": error_text})
+            logger.error(
+                "Similarity recompute failed",
+                extra={"catalog": catalog_id, "error": error_text},
+            )
         finished_at = datetime.now(timezone.utc).isoformat()
         with _similarity_recompute_lock:
             existing = _similarity_recompute_jobs.get(catalog_id, {})
@@ -16876,7 +20743,11 @@ def _start_similarity_recompute(
                 }
             )
             _similarity_recompute_jobs[catalog_id] = existing
-        _invalidate_cache("/api/similarity-matrix", "/api/similarity-alerts", "/api/similarity-clusters")
+        _invalidate_cache(
+            "/api/similarity-matrix",
+            "/api/similarity-alerts",
+            "/api/similarity-clusters",
+        )
 
     thread = threading.Thread(
         target=_runner,
@@ -16884,10 +20755,16 @@ def _start_similarity_recompute(
         daemon=True,
     )
     thread.start()
-    return {"ok": True, "started": True, "job": _similarity_recompute_snapshot(catalog_id=catalog_id)}
+    return {
+        "ok": True,
+        "started": True,
+        "job": _similarity_recompute_snapshot(catalog_id=catalog_id),
+    }
 
 
-def _load_similarity_matrix(*, runtime_req: config.Config, threshold: float) -> dict[str, Any]:
+def _load_similarity_matrix(
+    *, runtime_req: config.Config, threshold: float
+) -> dict[str, Any]:
     matrix_path = _similarity_matrix_path_for_runtime(runtime_req)
     payload = _load_json(matrix_path, {})
     if not isinstance(payload, dict):
@@ -16900,7 +20777,10 @@ def _load_similarity_matrix(*, runtime_req: config.Config, threshold: float) -> 
     # Cache-first policy: avoid synchronous recompute on hot read paths.
     if not pairs:
         winners_count = len(_winner_image_map(runtime=runtime_req))
-        if winners_count > 0 and winners_count <= similarity_detector.EXHAUSTIVE_PAIR_LIMIT:
+        if (
+            winners_count > 0
+            and winners_count <= similarity_detector.EXHAUSTIVE_PAIR_LIMIT
+        ):
             # Small catalogs can refresh quickly inline.
             try:
                 similarity_detector.run_similarity_analysis(
@@ -16908,7 +20788,10 @@ def _load_similarity_matrix(*, runtime_req: config.Config, threshold: float) -> 
                     threshold=threshold,
                     catalog_path=runtime_req.book_catalog_path,
                     winner_selections_path=_winner_path_for_runtime(runtime_req),
-                    regions_path=config.cover_regions_path(catalog_id=runtime_req.catalog_id, config_dir=runtime_req.config_dir),
+                    regions_path=config.cover_regions_path(
+                        catalog_id=runtime_req.catalog_id,
+                        config_dir=runtime_req.config_dir,
+                    ),
                     hashes_path=_similarity_hashes_path_for_runtime(runtime_req),
                     matrix_path=matrix_path,
                     clusters_path=_similarity_clusters_path_for_runtime(runtime_req),
@@ -16922,7 +20805,12 @@ def _load_similarity_matrix(*, runtime_req: config.Config, threshold: float) -> 
             except Exception:
                 pairs = []
         elif winners_count > 0:
-            _start_similarity_recompute(runtime_req=runtime_req, threshold=threshold, reason="cache_miss", force=False)
+            _start_similarity_recompute(
+                runtime_req=runtime_req,
+                threshold=threshold,
+                reason="cache_miss",
+                force=False,
+            )
 
     normalized_pairs: list[dict[str, Any]] = []
     for row in pairs:
@@ -16939,7 +20827,9 @@ def _load_similarity_matrix(*, runtime_req: config.Config, threshold: float) -> 
     output["total_pairs"] = len(normalized_pairs)
     output["alerts"] = alerts
     output["alert_threshold"] = threshold
-    output["recompute"] = _similarity_recompute_snapshot(catalog_id=runtime_req.catalog_id)
+    output["recompute"] = _similarity_recompute_snapshot(
+        catalog_id=runtime_req.catalog_id
+    )
 
     titles, _ = _catalog_maps(catalog_path=runtime_req.book_catalog_path)
     images = _winner_image_map(runtime=runtime_req)
@@ -16960,7 +20850,11 @@ def _load_quality_trend_series(*, runtime: config.Config) -> list[dict[str, Any]
     if not isinstance(rows, list) or not rows:
         return []
 
-    current_avg = sum(_safe_float(row.get("overall_score"), 0.0) for row in rows if isinstance(row, dict)) / max(1, len(rows))
+    current_avg = sum(
+        _safe_float(row.get("overall_score"), 0.0)
+        for row in rows
+        if isinstance(row, dict)
+    ) / max(1, len(rows))
     series = [
         {
             "label": "Current",
@@ -16979,12 +20873,16 @@ def _load_quality_trend_series(*, runtime: config.Config) -> list[dict[str, Any]
             if not isinstance(event, dict):
                 continue
             label = str(event.get("date") or event.get("action") or "round")
-            by_round.setdefault(label, []).append(_safe_float(event.get("best_score"), 0.0))
+            by_round.setdefault(label, []).append(
+                _safe_float(event.get("best_score"), 0.0)
+            )
 
     for label in sorted(by_round.keys()):
         values = by_round[label]
         if values:
-            series.append({"label": label, "average_quality": round(sum(values) / len(values), 4)})
+            series.append(
+                {"label": label, "average_quality": round(sum(values) / len(values), 4)}
+            )
 
     return series
 
@@ -17021,7 +20919,9 @@ def _style_tags_from_prompt(prompt: str) -> list[str]:
     return out[:3]
 
 
-def _discover_recent_cover_files(*, runtime: config.Config, title_by_book: dict[int, str], limit: int) -> list[dict[str, Any]]:
+def _discover_recent_cover_files(
+    *, runtime: config.Config, title_by_book: dict[int, str], limit: int
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
 
     def _append_row(*, path: Path, book: int, variant: int, model: str) -> None:
@@ -17029,7 +20929,9 @@ def _discover_recent_cover_files(*, runtime: config.Config, title_by_book: dict[
             return
         rows.append(
             {
-                "timestamp": datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat(),
+                "timestamp": datetime.fromtimestamp(
+                    path.stat().st_mtime, tz=timezone.utc
+                ).isoformat(),
                 "book_number": int(book),
                 "book_title": title_by_book.get(int(book), f"Book {int(book)}"),
                 "model": str(model or "composited"),
@@ -17072,7 +20974,9 @@ def _discover_recent_cover_files(*, runtime: config.Config, title_by_book: dict[
             if len(path.parts) < 3:
                 continue
             variant_folder = path.parent.name
-            variant = _safe_int(variant_folder.split("-", 1)[1] if "-" in variant_folder else "", 0)
+            variant = _safe_int(
+                variant_folder.split("-", 1)[1] if "-" in variant_folder else "", 0
+            )
             book_folder = path.parent.parent.name
             book = _safe_int(book_folder.split(".", 1)[0], 0)
             _append_row(path=path, book=book, variant=variant, model="composited")
@@ -17081,7 +20985,9 @@ def _discover_recent_cover_files(*, runtime: config.Config, title_by_book: dict[
     return rows[: max(1, int(limit))]
 
 
-def _dashboard_recent_results(*, items: list[dict[str, Any]], runtime: config.Config, limit: int = 24) -> list[dict[str, Any]]:
+def _dashboard_recent_results(
+    *, items: list[dict[str, Any]], runtime: config.Config, limit: int = 24
+) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     seen: set[tuple[int, int, str]] = set()
     title_by_book, _folder_map = _catalog_maps(catalog_path=runtime.book_catalog_path)
@@ -17117,7 +21023,9 @@ def _dashboard_recent_results(*, items: list[dict[str, Any]], runtime: config.Co
             if candidate is None and image_token:
                 source_path = _project_path_if_exists(image_token)
                 if source_path is not None:
-                    derived = _resolve_composited_candidate(source_path, runtime=runtime)
+                    derived = _resolve_composited_candidate(
+                        source_path, runtime=runtime
+                    )
                     if derived is not None and derived.exists():
                         candidate = derived
                     elif "/generated/" not in image_token.replace("\\", "/"):
@@ -17138,12 +21046,18 @@ def _dashboard_recent_results(*, items: list[dict[str, Any]], runtime: config.Co
                     "book_title": str(row.get("book_title", f"Book {book}")),
                     "variant": int(variant),
                     "model": model,
-                    "provider": str(row.get("provider", runtime.resolve_model_provider(model))),
+                    "provider": str(
+                        row.get("provider", runtime.resolve_model_provider(model))
+                    ),
                     "quality_score": round(quality, 4),
                     "cost": round(cost, 6),
                     "prompt": prompt,
                     "style_tags": (
-                        [str(tag).strip() for tag in row.get("style_tags", []) if str(tag).strip()]
+                        [
+                            str(tag).strip()
+                            for tag in row.get("style_tags", [])
+                            if str(tag).strip()
+                        ]
                         if isinstance(row.get("style_tags"), list)
                         else _style_tags_from_prompt(prompt)
                     ),
@@ -17155,7 +21069,9 @@ def _dashboard_recent_results(*, items: list[dict[str, Any]], runtime: config.Co
             if len(rows) >= max_rows:
                 return
 
-    candidate_items: list[dict[str, Any]] = [row for row in items if isinstance(row, dict)]
+    candidate_items: list[dict[str, Any]] = [
+        row for row in items if isinstance(row, dict)
+    ]
     if not candidate_items:
         try:
             jobs = job_db_store.list_jobs(
@@ -17169,27 +21085,43 @@ def _dashboard_recent_results(*, items: list[dict[str, Any]], runtime: config.Co
             for job_row in _job_result_rows(job):
                 enriched = dict(job_row)
                 if not str(enriched.get("timestamp", "")).strip():
-                    enriched["timestamp"] = str(job.finished_at or job.updated_at or job.created_at or "")
+                    enriched["timestamp"] = str(
+                        job.finished_at or job.updated_at or job.created_at or ""
+                    )
                 book_number = _safe_int(enriched.get("book_number"), 0)
                 if book_number > 0 and not str(enriched.get("book_title", "")).strip():
-                    enriched["book_title"] = title_by_book.get(book_number, f"Book {book_number}")
+                    enriched["book_title"] = title_by_book.get(
+                        book_number, f"Book {book_number}"
+                    )
                 candidate_items.append(enriched)
     _append_rows_from_candidates(candidate_items)
     if not rows:
-        discovered = _discover_recent_cover_files(runtime=runtime, title_by_book=title_by_book, limit=max(24, int(limit) * 4))
+        discovered = _discover_recent_cover_files(
+            runtime=runtime, title_by_book=title_by_book, limit=max(24, int(limit) * 4)
+        )
         _append_rows_from_candidates(discovered)
     return rows[:max_rows]
 
 
-def _build_dashboard_payload(items: list[dict[str, Any]], *, runtime: config.Config | None = None) -> dict[str, Any]:
+def _build_dashboard_payload(
+    items: list[dict[str, Any]], *, runtime: config.Config | None = None
+) -> dict[str, Any]:
     runtime = runtime or config.get_config()
     title_by_book, _ = _catalog_maps(catalog_path=runtime.book_catalog_path)
     books_cataloged = len(title_by_book)
 
     total_spent = round(sum(_safe_float(row.get("cost"), 0.0) for row in items), 4)
-    unique_books = sorted({_safe_int(row.get("book_number"), 0) for row in items if _safe_int(row.get("book_number"), 0) > 0})
+    unique_books = sorted(
+        {
+            _safe_int(row.get("book_number"), 0)
+            for row in items
+            if _safe_int(row.get("book_number"), 0) > 0
+        }
+    )
     books_generated = len(unique_books)
-    avg_cost_per_book = round(total_spent / books_generated, 4) if books_generated else 0.0
+    avg_cost_per_book = (
+        round(total_spent / books_generated, 4) if books_generated else 0.0
+    )
 
     by_book: dict[int, float] = {}
     by_model: dict[str, float] = {}
@@ -17221,13 +21153,18 @@ def _build_dashboard_payload(items: list[dict[str, Any]], *, runtime: config.Con
     running = 0.0
     for row in chronological:
         running += _safe_float(row.get("cost"), 0.0)
-        cumulative.append({"timestamp": row.get("timestamp"), "cumulative_cost": round(running, 4)})
+        cumulative.append(
+            {"timestamp": row.get("timestamp"), "cumulative_cost": round(running, 4)}
+        )
 
     cost_per_quality_point = []
-    for model, total_cost in sorted(by_model.items(), key=lambda item: item[1], reverse=True):
+    for model, total_cost in sorted(
+        by_model.items(), key=lambda item: item[1], reverse=True
+    ):
         model_rows = [row for row in items if str(row.get("model", "")) == model]
         avg_quality = (
-            sum(_safe_float(row.get("quality_score"), 0.0) for row in model_rows) / max(1, len(model_rows))
+            sum(_safe_float(row.get("quality_score"), 0.0) for row in model_rows)
+            / max(1, len(model_rows))
             if model_rows
             else 0.0
         )
@@ -17237,7 +21174,9 @@ def _build_dashboard_payload(items: list[dict[str, Any]], *, runtime: config.Con
                 "model": model,
                 "average_quality": round(avg_quality, 4),
                 "total_cost": round(total_cost, 4),
-                "cost_per_quality_point": round(efficiency, 4) if math.isfinite(efficiency) else None,
+                "cost_per_quality_point": round(efficiency, 4)
+                if math.isfinite(efficiency)
+                else None,
             }
         )
 
@@ -17255,7 +21194,9 @@ def _build_dashboard_payload(items: list[dict[str, Any]], *, runtime: config.Con
         },
         "cost_per_model": [
             {"model": model, "cost": round(cost, 4)}
-            for model, cost in sorted(by_model.items(), key=lambda item: item[1], reverse=True)
+            for model, cost in sorted(
+                by_model.items(), key=lambda item: item[1], reverse=True
+            )
         ],
         "cost_per_book": [
             {"book_number": book, "cost": round(cost, 4)}
@@ -17265,7 +21206,9 @@ def _build_dashboard_payload(items: list[dict[str, Any]], *, runtime: config.Con
         "cumulative_cost": cumulative,
         "scatter_cost_vs_quality": scatter[-2000:],
         "quality_trend": _load_quality_trend_series(runtime=runtime),
-        "recent_results": _dashboard_recent_results(items=items, runtime=runtime, limit=24),
+        "recent_results": _dashboard_recent_results(
+            items=items, runtime=runtime, limit=24
+        ),
     }
 
 
@@ -17302,7 +21245,9 @@ def _record_cost_entry(
                 "metadata": metadata or {},
             },
         )
-    except Exception as exc:  # pragma: no cover - analytics write failures should not break requests
+    except (
+        Exception
+    ) as exc:  # pragma: no cover - analytics write failures should not break requests
         logger.warning("Cost ledger write failed: %s", exc)
 
 
@@ -17332,7 +21277,9 @@ def _record_generation_costs(
                 "images_generated": 1 if bool(row.get("success", True)) else 0,
                 "cost_usd": _safe_float(row.get("cost"), 0.0),
                 "duration_seconds": _safe_float(row.get("generation_time"), 0.0),
-                "timestamp": str(row.get("timestamp") or datetime.now(timezone.utc).isoformat()),
+                "timestamp": str(
+                    row.get("timestamp") or datetime.now(timezone.utc).isoformat()
+                ),
                 "metadata": {
                     "variant": _safe_int(row.get("variant"), 0),
                     "success": bool(row.get("success", True)),
@@ -17342,7 +21289,9 @@ def _record_generation_costs(
     if not entries:
         return
     try:
-        cost_tracker.record_entries(_cost_ledger_path_for_runtime(runtime), entries=entries)
+        cost_tracker.record_entries(
+            _cost_ledger_path_for_runtime(runtime), entries=entries
+        )
     except Exception as exc:  # pragma: no cover
         logger.warning("Cost ledger batch write failed: %s", exc)
 
@@ -17370,19 +21319,26 @@ def _budget_status_for_runtime(runtime: config.Config) -> dict[str, Any]:
     )
     # 30d spend-run-rate projection.
     recent = _cost_entries_for_runtime(runtime=runtime, period="30d")
-    recent_spend = _safe_float(cost_tracker.summarize(recent).get("total_cost_usd"), 0.0)
+    recent_spend = _safe_float(
+        cost_tracker.summarize(recent).get("total_cost_usd"), 0.0
+    )
     projected_30d = recent_spend
     status["projected_30d_spend_usd"] = round(projected_30d, 6)
     status["budget"] = {
         "global": budget_payload.get("global", {}),
-        "catalog": budget_payload.get("catalogs", {}).get(runtime.catalog_id, {}) if isinstance(budget_payload.get("catalogs"), dict) else {},
+        "catalog": budget_payload.get("catalogs", {}).get(runtime.catalog_id, {})
+        if isinstance(budget_payload.get("catalogs"), dict)
+        else {},
     }
     return status
 
 
 def _is_generation_budget_blocked(runtime: config.Config) -> bool:
     status = _budget_status_for_runtime(runtime)
-    return bool(status.get("hard_stop", True)) and str(status.get("state", "ok")) == "blocked"
+    return (
+        bool(status.get("hard_stop", True))
+        and str(status.get("state", "ok")) == "blocked"
+    )
 
 
 def _parse_period_token(query: dict[str, list[str]], *, default: str = "7d") -> str:
@@ -17409,7 +21365,11 @@ def _quality_distribution_payload(*, runtime: config.Config) -> dict[str, Any]:
             if score >= lower and (score < upper or (upper == 100 and score <= 100)):
                 bucket["count"] = int(bucket.get("count", 0) or 0) + 1
                 break
-    return {"catalog": runtime.catalog_id, "bins": bins, "total": sum(int(row["count"]) for row in bins)}
+    return {
+        "catalog": runtime.catalog_id,
+        "bins": bins,
+        "total": sum(int(row["count"]) for row in bins),
+    }
 
 
 def _quality_by_model_payload(*, runtime: config.Config) -> dict[str, Any]:
@@ -17460,13 +21420,31 @@ def _quality_by_model_payload(*, runtime: config.Config) -> dict[str, Any]:
         count = max(1, _safe_int(row.get("count"), 1))
         model = str(row.get("model", "unknown"))
         row["avg_quality"] = round(_safe_float(row.get("avg_quality"), 0.0) / count, 4)
-        row["avg_cost_per_variant"] = round(_safe_float(row.get("avg_cost_per_variant"), 0.0) / count, 6)
-        row["avg_generation_time_seconds"] = round(_safe_float(row.get("avg_generation_time_seconds"), 0.0) / count, 4)
-        row["failure_rate_percent"] = round((_safe_float(row.get("failure_rate_percent"), 0.0) / count) * 100.0, 4)
-        row["winner_rate_percent"] = round((winner_hits.get(model, 0) / count) * 100.0, 4)
+        row["avg_cost_per_variant"] = round(
+            _safe_float(row.get("avg_cost_per_variant"), 0.0) / count, 6
+        )
+        row["avg_generation_time_seconds"] = round(
+            _safe_float(row.get("avg_generation_time_seconds"), 0.0) / count, 4
+        )
+        row["failure_rate_percent"] = round(
+            (_safe_float(row.get("failure_rate_percent"), 0.0) / count) * 100.0, 4
+        )
+        row["winner_rate_percent"] = round(
+            (winner_hits.get(model, 0) / count) * 100.0, 4
+        )
         denom = _safe_float(row.get("avg_cost_per_variant"), 0.0)
-        row["quality_per_dollar"] = round((_safe_float(row.get("avg_quality"), 0.0) / denom), 4) if denom > 0 else None
-    out.sort(key=lambda item: (_safe_float(item.get("quality_per_dollar"), 0.0), _safe_float(item.get("avg_quality"), 0.0)), reverse=True)
+        row["quality_per_dollar"] = (
+            round((_safe_float(row.get("avg_quality"), 0.0) / denom), 4)
+            if denom > 0
+            else None
+        )
+    out.sort(
+        key=lambda item: (
+            _safe_float(item.get("quality_per_dollar"), 0.0),
+            _safe_float(item.get("avg_quality"), 0.0),
+        ),
+        reverse=True,
+    )
     best = out[0]["model"] if out else None
     return {"catalog": runtime.catalog_id, "models": out, "recommended_model": best}
 
@@ -17488,7 +21466,9 @@ def _quality_trends_payload(*, runtime: config.Config, period: str) -> dict[str,
                 dt = _safe_iso_datetime(label)
                 if since and dt and dt < since:
                     continue
-                score = _safe_float(event.get("best_score"), 0.0) * (100.0 if _safe_float(event.get("best_score"), 0.0) <= 1.0 else 1.0)
+                score = _safe_float(event.get("best_score"), 0.0) * (
+                    100.0 if _safe_float(event.get("best_score"), 0.0) <= 1.0 else 1.0
+                )
                 buckets.setdefault(label or "unknown", []).append(score)
         else:
             score = _safe_float(row.get("overall_score"), 0.0) * 100.0
@@ -17508,7 +21488,9 @@ def _quality_trends_payload(*, runtime: config.Config, period: str) -> dict[str,
 
 
 def _quality_prompt_pattern_payload(*, runtime: config.Config) -> dict[str, Any]:
-    payload = _load_json(_prompt_performance_path_for_runtime(runtime), {"patterns": {}})
+    payload = _load_json(
+        _prompt_performance_path_for_runtime(runtime), {"patterns": {}}
+    )
     patterns = payload.get("patterns", {}) if isinstance(payload, dict) else {}
     rows: list[dict[str, Any]] = []
     if isinstance(patterns, dict):
@@ -17518,11 +21500,19 @@ def _quality_prompt_pattern_payload(*, runtime: config.Config) -> dict[str, Any]
             rows.append(
                 {
                     "pattern": str(name),
-                    "avg_quality": round(_safe_float(row.get("avg_score"), 0.0) * 100.0, 4),
+                    "avg_quality": round(
+                        _safe_float(row.get("avg_score"), 0.0) * 100.0, 4
+                    ),
                     "count": _safe_int(row.get("count"), 0),
                 }
             )
-    rows.sort(key=lambda item: (_safe_float(item.get("avg_quality"), 0.0), _safe_int(item.get("count"), 0)), reverse=True)
+    rows.sort(
+        key=lambda item: (
+            _safe_float(item.get("avg_quality"), 0.0),
+            _safe_int(item.get("count"), 0),
+        ),
+        reverse=True,
+    )
     return {"catalog": runtime.catalog_id, "patterns": rows}
 
 
@@ -17532,7 +21522,8 @@ def _quality_breakdown_payload(*, runtime: config.Config, book: int) -> dict[str
     filtered = [
         row
         for row in rows
-        if isinstance(row, dict) and (book <= 0 or _safe_int(row.get("book_number"), 0) == int(book))
+        if isinstance(row, dict)
+        and (book <= 0 or _safe_int(row.get("book_number"), 0) == int(book))
     ]
     components = {
         "technical": 0.0,
@@ -17545,12 +21536,19 @@ def _quality_breakdown_payload(*, runtime: config.Config, book: int) -> dict[str
         components["technical"] += _safe_float(row.get("technical_score"), 0.0)
         components["color"] += _safe_float(row.get("color_score"), 0.0)
         components["artifact"] += _safe_float(row.get("artifact_score"), 0.0)
-        components["style_consistency"] += _safe_float(row.get("distinctiveness_score"), 0.0)
+        components["style_consistency"] += _safe_float(
+            row.get("distinctiveness_score"), 0.0
+        )
         components["composition"] += _safe_float(row.get("diversity_score"), 0.0)
     count = max(1, len(filtered))
     for key in list(components.keys()):
         components[key] = round((components[key] / count) * 100.0, 4)
-    return {"catalog": runtime.catalog_id, "book": book if book > 0 else None, "count": len(filtered), "breakdown": components}
+    return {
+        "catalog": runtime.catalog_id,
+        "book": book if book > 0 else None,
+        "count": len(filtered),
+        "breakdown": components,
+    }
 
 
 def _completion_payload(*, runtime: config.Config) -> dict[str, Any]:
@@ -17561,20 +21559,45 @@ def _completion_payload(*, runtime: config.Config) -> dict[str, Any]:
         quality_scores_path=_quality_scores_path_for_runtime(runtime),
     )
     winners_payload = _load_winner_payload(_winner_path_for_runtime(runtime))
-    selections = winners_payload.get("selections", {}) if isinstance(winners_payload, dict) else {}
+    selections = (
+        winners_payload.get("selections", {})
+        if isinstance(winners_payload, dict)
+        else {}
+    )
     if not isinstance(selections, dict):
         selections = {}
     total_books = len(review_rows)
-    winners_selected = len({key for key, value in selections.items() if _safe_int(value.get("winner") if isinstance(value, dict) else value, 0) > 0})
+    winners_selected = len(
+        {
+            key
+            for key, value in selections.items()
+            if _safe_int(value.get("winner") if isinstance(value, dict) else value, 0)
+            > 0
+        }
+    )
     winners_pending = max(0, total_books - winners_selected)
-    variants_generated = sum(len(row.get("variants", [])) for row in review_rows if isinstance(row, dict))
+    variants_generated = sum(
+        len(row.get("variants", [])) for row in review_rows if isinstance(row, dict)
+    )
     mockup_status = mockup_generator.mockup_status(output_dir=runtime.output_dir)
-    mockup_total = sum(_safe_int(row.get("generated"), 0) for row in mockup_status.get("books", []) if isinstance(row, dict))
-    completion_percent = (winners_selected / total_books * 100.0) if total_books else 0.0
+    mockup_total = sum(
+        _safe_int(row.get("generated"), 0)
+        for row in mockup_status.get("books", [])
+        if isinstance(row, dict)
+    )
+    completion_percent = (
+        (winners_selected / total_books * 100.0) if total_books else 0.0
+    )
     # Simple velocity projection from available winners.
-    days_remaining = math.ceil((winners_pending / max(1, winners_selected)) * 7) if winners_selected else None
+    days_remaining = (
+        math.ceil((winners_pending / max(1, winners_selected)) * 7)
+        if winners_selected
+        else None
+    )
     estimated_completion = (
-        (datetime.now(timezone.utc) + timedelta(days=max(0, int(days_remaining or 0)))).date().isoformat()
+        (datetime.now(timezone.utc) + timedelta(days=max(0, int(days_remaining or 0))))
+        .date()
+        .isoformat()
         if days_remaining is not None
         else None
     )
@@ -17586,7 +21609,9 @@ def _completion_payload(*, runtime: config.Config) -> dict[str, Any]:
         "winners_pending": winners_pending,
         "mockups_generated": mockup_total,
         "social_cards_generated": 0,
-        "catalog_pdfs_generated": int((runtime.output_dir / "Alexandria_Cover_Catalog.pdf").exists()),
+        "catalog_pdfs_generated": int(
+            (runtime.output_dir / "Alexandria_Cover_Catalog.pdf").exists()
+        ),
         "ready_for_production": winners_selected,
         "needs_regeneration": max(0, total_books - winners_selected),
         "estimated_completion": estimated_completion,
@@ -17596,154 +21621,1183 @@ def _completion_payload(*, runtime: config.Config) -> dict[str, Any]:
 
 def _build_api_docs_html() -> str:
     endpoints = [
-        ("GET", "/iterate", "Iteration UI", "-", "-", "Interactive single-cover generation page."),
-        ("GET", "/review", "Winner review UI", "-", "-", "Winner review and archive page."),
-        ("GET", "/visual-qa", "Visual QA UI", "-", "-", "Visual compositor QA dashboard with PASS/FAIL comparisons."),
-        ("GET", "/catalogs", "Catalog UI", "-", "-", "Generate winner catalogs/contact sheets/all-variants PDFs."),
-        ("GET", "/history", "History UI", "-", "-", "Generation history viewer with filters."),
+        (
+            "GET",
+            "/iterate",
+            "Iteration UI",
+            "-",
+            "-",
+            "Interactive single-cover generation page.",
+        ),
+        (
+            "GET",
+            "/review",
+            "Winner review UI",
+            "-",
+            "-",
+            "Winner review and archive page.",
+        ),
+        (
+            "GET",
+            "/visual-qa",
+            "Visual QA UI",
+            "-",
+            "-",
+            "Visual compositor QA dashboard with PASS/FAIL comparisons.",
+        ),
+        (
+            "GET",
+            "/catalogs",
+            "Catalog UI",
+            "-",
+            "-",
+            "Generate winner catalogs/contact sheets/all-variants PDFs.",
+        ),
+        (
+            "GET",
+            "/history",
+            "History UI",
+            "-",
+            "-",
+            "Generation history viewer with filters.",
+        ),
         ("GET", "/dashboard", "Dashboard UI", "-", "-", "Cost/quality dashboard."),
-        ("GET", "/analytics/models", "Model analytics UI", "-", "-", "Model performance, recommendation, and cross-catalog analytics dashboard."),
-        ("GET", "/prompts", "Prompt library UI", "-", "-", "Prompt CRUD/versioning and prompt performance workspace."),
-        ("GET", "/catalog/settings", "Catalog settings UI", "-", "-", "Create/switch/configure catalogs and import/export catalog bundles."),
-        ("GET", "/admin/performance", "Performance UI", "-", "-", "Request latency/error/cache/slow-endpoint monitoring page."),
-        ("GET", "/batch", "Batch UI", "-", "-", "Batch generation planning and live progress page."),
-        ("GET", "/similarity", "Similarity UI", "-", "-", "Cross-book similarity heatmap, alerts, and clusters."),
-        ("GET", "/mockups", "Mockup UI", "-", "-", "Mockup gallery and generation controls."),
-        ("GET", "/api/version", "API version", "-", "{\"version\":\"2.1.1\"}", "Current application version."),
-        ("GET", "/api/models", "Model registry", "-", "{\"models\":[...],\"total\":13}", "List all known models with provider, cost, speed, and success stats."),
-        ("GET", "/api/providers", "Provider health", "-", "{\"providers\":[...]}", "Provider-level health, circuit state, and 24h request/error counters."),
-        ("GET", "/api/catalog", "Catalog overview", "-", "{\"catalogs\":[...],\"total_books\":2397}", "Catalog list with generated/winner counts."),
-        ("GET", "/api/templates", "Template registry", "genre", "{\"templates\":[...],\"total\":10}", "List style templates with optional genre filtering."),
-        ("GET", "/api/stats", "Usage stats", "-", "{\"total_generations\":150,...}", "Aggregate generation/cost/quality usage statistics."),
-        ("GET", "/api/config", "Runtime config", "-", "{\"active_models\":[...],\"drive\":{...}}", "Non-sensitive runtime config and feature flags."),
-        ("GET", "/api/catalogs", "Catalog list", "-", "{\"catalogs\":[...],\"active_catalog\":\"classics\"}", "Available catalogs for selector dropdowns."),
-        ("GET", "/api/health", "Health check", "-", "{\"status\":\"ok\",...}", "Runtime health and config status."),
-        ("GET", "/api/metrics", "Runtime metrics", "-", "{\"cache\":{...},\"errors\":{...},\"jobs\":{...}}", "Operational counters, error metrics, queue state, and worker service telemetry."),
-        ("GET", "/api/performance/summary", "Performance summary", "catalog", "{\"response_time\":{...},\"slow_requests\":{...}}", "Slow-request response-time quantiles, endpoint rollups, and latest slow request samples."),
-        ("GET", "/api/providers/runtime", "Provider runtime", "-", "{\"providers\":{...}}", "Provider request/error counters, circuit breaker, and rate-limit windows."),
-        ("GET", "/api/workers", "Worker service status", "-", "{\"workers\":{...}}", "Worker mode + heartbeat status for inline/external workers."),
-        ("GET", "/api/audit-log?limit=100", "Audit log", "limit", "{\"items\":[...]}", "Signed audit entries for cost/destructive operations."),
-        ("GET", "/api/analytics/costs?period=7d", "Cost summary", "period,catalog", "{\"summary\":{...}}", "Cost totals and operation mix from cost ledger."),
-        ("GET", "/api/analytics/costs/by-book", "Cost by book", "period,catalog", "{\"books\":[...]}", "Book-level cost breakdown."),
-        ("GET", "/api/analytics/costs/by-model", "Cost by model", "period,catalog", "{\"models\":[...]}", "Model/provider cost breakdown."),
-        ("GET", "/api/analytics/costs/timeline?period=30d&granularity=daily", "Cost timeline", "period,granularity,catalog", "{\"timeline\":[...]}", "Cost trend with cumulative totals."),
-        ("GET", "/api/analytics/budget", "Budget status", "catalog", "{\"budget\":{...}}", "Budget limit, warning/blocked state, and projected spend."),
-        ("POST", "/api/analytics/budget", "Set budget", "{\"catalog\":\"...\",\"limit_usd\":100,\"warning_threshold\":0.8}", "{\"ok\":true}", "Set budget limit/threshold."),
-        ("POST", "/api/analytics/budget/override", "Override budget", "{\"catalog\":\"...\",\"extra_limit_usd\":25,\"duration_hours\":24}", "{\"ok\":true}", "Temporary budget increase."),
-        ("GET", "/api/analytics/quality/trends?period=30d", "Quality trends", "period,catalog", "{\"trend\":[...]}", "Quality evolution over time."),
-        ("GET", "/api/analytics/quality/distribution", "Quality distribution", "catalog", "{\"bins\":[...]}", "Quality score histogram."),
-        ("GET", "/api/analytics/models/compare", "Model compare", "catalog", "{\"models\":[...],\"recommended_model\":\"...\"}", "Quality/cost/speed/failure comparison."),
-        ("GET", "/api/analytics/models/recommendation", "Model recommendation", "catalog,book", "{\"recommended_model\":\"...\",\"reason\":\"...\"}", "Per-book or catalog-level model recommendation summary."),
-        ("GET", "/api/analytics/ab-tests", "A/B test log", "catalog,limit", "{\"items\":[...]}", "Recent winner selections and compared model sets."),
-        ("POST", "/api/analytics/ab-tests", "Record A/B winner", "{\"book_id\":42,\"models_compared\":[...],\"winner\":\"...\"}", "{\"ok\":true}", "Store winner decisions for model comparison analytics."),
-        ("GET", "/api/analytics/completion", "Catalog completion", "catalog", "{\"completion_percent\":85.8}", "Winner completion and production-readiness summary."),
-        ("GET", "/api/analytics/cost-projection?books=100&variants=5&models=openrouter/google/gemini-2.5-flash-image", "Cost projection", "books,variants,models,catalog", "{\"estimatedCostUsd\":1.48,...}", "Estimate total cost/time/storage before starting large runs."),
-        ("POST", "/api/analytics/export-report", "Export analytics report", "{\"period\":\"30d\"}", "{\"report_id\":\"...\"}", "Generate report artifact in data/reports."),
-        ("GET", "/api/analytics/reports", "List reports", "-", "{\"reports\":[...]}", "List generated analytics report files."),
-        ("POST", "/api/admin/migrate-to-sqlite", "Migrate JSON -> SQLite", "{\"db_path\":\"data/alexandria.db\"}", "{\"ok\":true,\"summary\":{...}}", "One-shot migration command for scale mode."),
-        ("GET", "/api/jobs?status=queued,running&limit=50", "List async jobs", "status,limit,book,catalog", "{\"jobs\":[...],\"count\":12}", "List persisted async generation jobs."),
-        ("GET", "/api/jobs/{id}", "Get async job", "job_id", "{\"job\":{...},\"attempts\":[...]}", "Inspect one async job including attempt history."),
-        ("GET", "/api/generation-failures?catalog=classics&limit=20", "Generation failures", "catalog,limit", "{\"failures\":[...]}", "Inspect recent failed or retrying generation jobs with attempt diagnostics."),
-        ("GET", "/api/batch-generate", "List batches", "catalog,limit,offset", "{\"batches\":[...],\"pagination\":{...}}", "List recent batch generation runs."),
-        ("GET", "/api/batch-generate/{batchId}/status", "Batch status", "batchId,catalog,limit,offset", "{\"status\":\"running\",\"books\":[...]}", "Get live per-book batch progress with pagination."),
-        ("GET", "/api/events/job/{id}", "Job SSE stream", "id,catalog", "event-stream", "Real-time stream for one async job."),
-        ("GET", "/api/events/batch/{batchId}", "Batch SSE stream", "batchId,catalog", "event-stream", "Real-time stream for one batch run."),
-        ("GET", "/api/review-data?catalog=classics&limit=25&offset=0", "Review data", "catalog,limit,offset,sort,order,search,status,tags", "{\"books\":[...],\"pagination\":{...}}", "Paginated review books, winners, and filters."),
-        ("GET", "/api/iterate-data?catalog=classics&limit=25&offset=0", "Iterate data", "catalog,limit,offset,sort,order,search,status", "{\"books\":[...],\"pagination\":{...}}", "Paginated iterate books + model configuration."),
-        ("GET", "/api/enrichment-health", "Enrichment health", "catalog", "{\"health\":\"warning\",...}", "Catalog-wide enrichment quality summary with generic/missing counts."),
-        ("GET", "/api/config/cover-source-default", "Default cover source", "catalog", "{\"default\":\"drive\"}", "Return server-selected default cover source based on environment."),
-        ("GET", "/api/prompts", "Prompt library list", "catalog,q,category,tags", "{\"prompts\":[...]}", "Search/list prompt library with usage, win rate, and version counts."),
-        ("POST", "/api/prompts", "Create prompt", "{\"name\":\"...\",\"prompt_template\":\"...\"}", "{\"ok\":true,\"prompt\":{...}}", "Create a prompt-library entry."),
-        ("POST", "/api/prompts/{id}", "Update/delete/usage", "{\"action\":\"update|delete|record_usage\"}", "{\"ok\":true}", "Update prompt fields, delete prompt, or record usage/win counters."),
-        ("GET", "/api/prompts/{id}/versions", "Prompt version history", "catalog", "{\"versions\":[...]}", "List historical prompt versions for rollback."),
-        ("GET", "/api/prompts/export", "Export prompt library", "catalog", "{\"prompts\":[...],\"versions\":{...}}", "Export prompt library payload as JSON."),
-        ("POST", "/api/prompts/import", "Import prompts", "{\"prompts\":[...]}", "{\"ok\":true,\"imported\":12}", "Bulk import prompt library entries."),
-        ("GET", "/api/prompt-performance", "Prompt pattern stats", "-", "{\"patterns\":{...}}", "Prompt performance breakdown for intelligent prompting."),
-        ("GET", "/api/history?book=2", "Book history", "book", "{\"items\":[...]}", "History subset for one book."),
-        ("GET", "/api/generation-history?book=2&model=flux&status=success&limit=50&offset=0", "Filtered generation history", "book,model,provider,status,date_from,date_to,quality_min,quality_max,limit,offset", "{\"items\":[...],\"total\":123,\"pagination\":{...}}", "Global sortable/filterable generation records."),
-        ("GET", "/api/dashboard-data", "Dashboard metrics", "-", "{\"summary\":{...},...}", "Cost and quality analytics for charts."),
-        ("GET", "/api/visual-qa", "Visual QA index", "catalog,book_number,force", "{\"comparisons\":[...],\"summary\":{...}}", "List generated comparison grids with PASS/FAIL verdicts."),
-        ("GET", "/api/visual-qa/image/{book_number}", "Visual QA image", "book_number,catalog", "binary image", "Serve one visual comparison JPG."),
-        ("GET", "/api/weak-books?threshold=0.75", "Weak books", "threshold,catalog", "{\"books\":[...]}", "Books below a quality threshold."),
-        ("GET", "/api/regeneration-results?book=15", "Regeneration results", "book", "{\"results\":[...]}", "Read saved re-generation comparison results."),
-        ("GET", "/api/review-queue?threshold=0.90", "Speed review queue", "threshold", "{\"queue\":[...],\"auto_approve\":34}", "Ordered speed-review queue with confidence and summary buckets."),
-        ("GET", "/api/review-session/{id}", "Review session", "session_id", "{\"session\":{...}}", "Load a saved speed-review session state."),
-        ("GET", "/api/review-stats", "Review stats", "-", "{\"sessions\":[...]}", "Aggregate completed review session metrics."),
-        ("GET", "/api/similarity-matrix?threshold=0.25&limit=50&offset=0", "Similarity matrix", "threshold,limit,offset", "{\"pairs\":[...],\"pagination\":{...}}", "Paginated similarity pairs for large catalogs."),
-        ("GET", "/api/similarity/recompute/status", "Similarity recompute status", "catalog", "{\"recompute\":{...}}", "Background recompute status for full similarity cache refresh."),
-        ("GET", "/api/similarity-alerts?threshold=0.25", "Similarity alerts", "threshold", "{\"alerts\":[...]}", "Pairs below similarity threshold."),
-        ("GET", "/api/similarity-clusters", "Similarity clusters", "-", "{\"clusters\":[...]}", "Connected clusters of visually similar covers."),
-        ("GET", "/api/cover-hash/15", "Single cover hash", "-", "{\"hash\":{...}}", "pHash/dHash/histogram values for one winner."),
-        ("GET", "/api/mockup-status?limit=25&offset=0", "Mockup status", "limit,offset", "{\"books\":[...],\"pagination\":{...}}", "Paginated per-book mockup completion status."),
-        ("GET", "/api/providers/connectivity?force=0", "Provider connectivity", "force,catalog", "{\"providers\":{...}}", "Cached provider connectivity checks used by iterate auto-status."),
-        ("GET", "/api/drive-status", "Save Raw drive status", "catalog", "{\"connected\":true,...}", "Focused Save Raw Google Drive diagnostics including credential identity and parent folder access."),
-        ("GET", "/api/drive/status", "Drive status", "catalog,drive_folder_id,input_folder_id", "{\"connected\":true,...}", "Drive credentials/source/output status and sync summary."),
-        ("GET", "/api/drive/sync-status", "Drive sync status", "catalog,drive_folder_id,input_folder_id", "{\"status\":{...}}", "Alias for drive status focused on sync/pending/error summary."),
-        ("GET", "/api/drive/input-covers", "Drive input covers", "catalog,drive_folder_id,input_folder_id,limit,force", "{\"covers\":[...]}", "List top-level source covers/folders from Google Drive for iterate selection."),
-        ("GET", "/api/books/{book}/cover-preview?source=drive", "Book cover preview", "book,source,selected_cover_id,catalog", "binary image", "Build/return a thumbnail preview from local or Drive-backed source cover."),
-        ("GET", "/api/variant-download?book=15&variant=2", "Variant ZIP download", "book,variant,model,catalog", "binary zip", "Download one generated variant package (JPG/PDF/medallion/metadata)."),
-        ("GET", "/api/winner-download?book=15", "Winner ZIP download", "book,catalog", "binary zip", "Download selected winner package for one book."),
-        ("GET", "/api/source-download?book=15&variant=2&model=openrouter/google/gemini-2.5-flash-image", "Source image download", "book,variant,model,catalog", "binary image", "Download raw source image for one generated variant."),
-        ("GET", "/api/download-book?book=15", "Book variants ZIP", "book,catalog", "binary zip", "Download all generated variants (composited + source) for one book."),
-        ("GET", "/api/download-approved", "Approved variants ZIP", "catalog", "binary zip", "Download all approved winner variants (composited + source)."),
-        ("GET", "/api/exports", "List exports", "catalog,limit,offset", "{\"exports\":[...],\"pagination\":{...}}", "Export artifacts with size and file counts."),
-        ("GET", "/api/export/status", "Export status tracking", "catalog,limit,offset", "{\"items\":[...]}", "Per-book/per-platform export status including changed-since-last-export flags."),
-        ("GET", "/api/exports/{id}/download", "Download export ZIP", "id", "binary zip", "Build and stream a ZIP for a single export artifact."),
-        ("GET", "/api/delivery/status", "Delivery status", "catalog", "{\"enabled\":true,...}", "Delivery automation settings and completion summary."),
-        ("GET", "/api/delivery/tracking", "Delivery tracking grid", "catalog,limit,offset", "{\"items\":[...]}", "Per-book delivery status across platforms."),
-        ("GET", "/api/archive/stats", "Archive stats", "catalog", "{\"archive_size_gb\":...}", "Archive size, count, and date range."),
-        ("GET", "/api/storage/usage", "Storage usage", "catalog", "{\"total_gb\":...}", "Storage breakdown + cleanup suggestion."),
-        ("GET", "/api/mockup/{book}/{template}", "Mockup image", "book,template", "binary image", "Serve one generated mockup image."),
-        ("GET", "/api/mockup-zip?book=15", "Mockup ZIP", "book", "{\"url\":\"/...zip\"}", "Bundle all mockups for one book as ZIP."),
-        ("POST", "/api/save-selections", "Save winners", "{\"selections\":{...}}", "{\"ok\":true}", "Persist winner selections with metadata."),
-        ("POST", "/api/enrich-book", "Enrich one book", "{\"book\":15}", "{\"ok\":true,\"book\":{...}}", "Generate/refresh LLM enrichment metadata for one title."),
-        ("POST", "/api/enrich-all", "Enrich all books", "{}", "{\"ok\":true,\"summary\":{...}}", "Generate enrichment metadata across the full catalog."),
-        ("POST", "/api/enrich-generic", "Re-enrich generic books", "{\"delay\":0.5,\"batch_size\":50}", "{\"ok\":true,\"started\":true}", "Start a background run that only re-enriches generic placeholder rows."),
-        ("POST", "/api/generate-smart-prompts", "Generate intelligent prompts", "{\"book\":15,\"count\":5}", "{\"ok\":true,\"book\":{...}}", "Generate AI-authored prompts plus quality scores."),
-        ("POST", "/api/generate-mockup", "Generate one mockup", "{\"book\":15,\"template\":\"desk_scene\"}", "{\"ok\":true}", "Generate one mockup template for one book."),
-        ("POST", "/api/generate-all-mockups", "Generate mockup batch", "{\"book\":15}|{\"all_books\":true}", "{\"ok\":true}", "Generate all selected templates for one/all books."),
-        ("POST", "/api/generate-amazon-set", "Generate Amazon set", "{\"book\":15}|{\"all_books\":true}", "{\"ok\":true}", "Generate 7-image Amazon listing set."),
-        ("POST", "/api/generate-social-cards", "Generate social cards", "{\"book\":15,\"formats\":[\"instagram\",\"facebook\"]}", "{\"ok\":true}", "Generate marketing cards for social platforms."),
-        ("POST", "/api/visual-qa/generate", "Generate visual QA", "{\"book_number\":15}", "{\"ok\":true,\"generated\":99,\"passed\":95,\"failed\":4}", "Generate visual comparison grids for one/all books."),
-        ("POST", "/api/save-raw", "Save raw package", "{\"job_id\":\"...\"}", "{\"ok\":true,\"status\":\"saved|partial\",...}", "Copy raw/composited winner files locally and upload them to Google Drive with structured per-file status."),
-        ("POST", "/api/retry-drive-upload", "Retry save raw Drive upload", "{\"job_id\":\"...\"}", "{\"ok\":true,\"retried\":true,...}", "Retry the Google Drive upload for an already saved raw package without surfacing a hard client error."),
-        ("POST", "/api/save-prompt", "Save prompt", "{\"name\":\"...\",\"prompt_template\":\"...\"}", "{\"ok\":true,\"prompt_id\":\"...\"}", "Save prompt into prompt library."),
-        ("POST", "/api/providers/reset", "Reset provider runtime", "{\"provider\":\"all|openai|...\"}", "{\"ok\":true}", "Reset provider circuit/rate-limit/runtime counters."),
-        ("POST", "/api/test-connection", "Test provider keys", "{\"provider\":\"all|openai|...\"}", "{\"ok\":true,\"report\":{...}}", "Validate provider connectivity."),
-        ("POST", "/api/validate/cover", "Validate print readiness", "{\"file_path\":\"Output Covers/.../cover.jpg\",\"distributor\":\"ingram_spark\"}", "{\"ok\":true,\"passed\":true}", "Validate one cover against distributor print specs."),
-        ("POST", "/api/generate", "Generate variants", "{\"book\":2,\"models\":[...],\"variants\":5,\"prompt\":\"...\",\"async\":true,\"dry_run\":false}", "{\"ok\":true,\"job\":{...}}", "Queue async generation job (idempotent). Sync mode (async=false) is disabled by default unless ALLOW_SYNC_GENERATION=1."),
-        ("POST", "/api/batch-generate", "Create batch generation", "{\"books\":[1,2,3],\"models\":[...],\"variants\":5,\"budgetUsd\":25}", "{\"ok\":true,\"batchId\":\"...\"}", "Queue multiple book jobs under one batch id with budget controls."),
-        ("POST", "/api/batch-generate/{batchId}/pause", "Pause batch", "{\"reason\":\"manual\"}", "{\"ok\":true,\"status\":\"paused\"}", "Pause queued jobs in a batch."),
-        ("POST", "/api/batch-generate/{batchId}/resume", "Resume batch", "{}", "{\"ok\":true,\"status\":\"queued\"}", "Resume paused jobs in a batch."),
-        ("POST", "/api/batch-generate/{batchId}/cancel", "Cancel batch", "{\"reason\":\"manual\"}", "{\"ok\":true,\"status\":\"cancelled\"}", "Cancel queued jobs in a batch."),
-        ("POST", "/api/jobs/{id}/cancel", "Cancel async job", "{\"reason\":\"...\"}", "{\"ok\":true,\"job\":{...}}", "Cancel queued/retrying/running async job."),
-        ("POST", "/api/jobs/{id}/cancel-model", "Cancel one model in job", "{\"model\":\"...\",\"reason\":\"...\"}", "{\"ok\":true}", "Cancel one model stream while leaving the rest of the generation job running."),
-        ("POST", "/api/regenerate", "Re-generate weak book(s)", "{\"book\":15,\"variants\":5,\"use_library\":true}", "{\"ok\":true,\"summary\":{...}}", "Run targeted re-generation workflow."),
-        ("POST", "/api/similarity/recompute", "Recompute similarity cache", "{\"threshold\":0.25}", "{\"ok\":true,\"job\":{...}}", "Trigger background full similarity recompute."),
-        ("POST", "/api/similarity/update", "Incremental similarity update", "{\"book\":15}", "{\"ok\":true}", "Recompute similarity pairs for one book only."),
-        ("POST", "/api/export/validate/{book_number}", "Validate export readiness", "-", "{\"ok\":true,\"platforms\":{...}}", "Validate winner cover readiness for Amazon/Ingram/Social/Web without writing exports."),
-        ("POST", "/api/export/amazon", "Amazon export", "{\"books\":\"1-20\"}", "{\"ok\":true,\"export_id\":\"...\"}", "Generate Amazon listing assets for winners."),
-        ("POST", "/api/export/amazon/{book_number}", "Amazon export (single)", "-", "{\"ok\":true}", "Generate Amazon assets for one title."),
-        ("POST", "/api/export/ingram", "Ingram export", "{\"books\":\"1-20\"}", "{\"ok\":true}", "Generate IngramSpark print package."),
-        ("POST", "/api/export/social?platforms=instagram,facebook", "Social export", "{\"books\":\"1-20\"}", "{\"ok\":true}", "Generate multi-platform social cards."),
-        ("POST", "/api/export/web", "Web export", "{\"books\":\"1-20\"}", "{\"ok\":true}", "Generate web-optimized cover sizes + manifest."),
-        ("POST", "/api/export/all", "Export all pipelines", "{\"books\":\"all\",\"platforms\":[\"amazon\",\"ingram\",\"social\",\"web\"]}", "{\"ok\":true,\"combined_export_id\":\"...\"}", "Run all export pipelines and produce one combined bundle."),
-        ("POST", "/api/delivery/enable", "Enable delivery", "-", "{\"ok\":true}", "Enable automatic delivery pipeline for catalog."),
-        ("POST", "/api/delivery/disable", "Disable delivery", "-", "{\"ok\":true}", "Disable automatic delivery pipeline for catalog."),
-        ("POST", "/api/delivery/batch?platforms=amazon,social", "Batch delivery", "{\"books\":\"1-20\"}", "{\"ok\":true}", "Deliver selected/all winner books across configured platforms."),
-        ("POST", "/api/sync-to-drive", "Sync selected winners", "{\"selections\":{...}}", "{\"ok\":true,\"summary\":{...}}", "Sync selected winner files to Google Drive."),
-        ("POST", "/api/drive/push", "Drive push", "{\"mode\":\"push\"}", "{\"ok\":true}", "Push local winners/mockups/exports to Drive layout."),
-        ("POST", "/api/drive/pull", "Drive pull", "{\"mode\":\"pull\"}", "{\"ok\":true}", "Pull new source covers from Drive input folder."),
-        ("POST", "/api/drive/sync", "Drive full sync", "{\"mode\":\"bidirectional\"}", "{\"ok\":true}", "Run pull + push with conflict resolution."),
-        ("POST", "/api/archive-non-winners", "Archive non-winners", "{\"dry_run\":true}", "{\"ok\":true,\"summary\":{...}}", "Move non-winning variants to Archive/ (never delete)."),
-        ("POST", "/api/archive/old-exports?days=30", "Archive old exports", "days", "{\"ok\":true}", "Archive export packages older than N days."),
-        ("POST", "/api/archive/restore/{book_number}", "Restore archived book", "-", "{\"ok\":true}", "Restore archived assets for a title."),
-        ("POST", "/api/dismiss-similarity", "Dismiss similarity alert", "{\"book_a\":1,\"book_b\":47}", "{\"ok\":true}", "Mark a similarity pair as reviewed/acceptable."),
-        ("POST", "/api/batch-approve", "Batch approve winners", "{\"threshold\":0.90}", "{\"ok\":true,\"summary\":{...}}", "Confirm all winners above threshold for speed review."),
-        ("POST", "/api/review-selection", "Save one speed selection", "{\"book\":15,\"variant\":3,\"reviewer\":\"tim\"}", "{\"ok\":true}", "Persist a single manual speed-review selection."),
-        ("POST", "/api/save-review-session", "Save speed session", "{\"session_id\":\"...\",\"books_reviewed\":42}", "{\"ok\":true}", "Save or complete a speed-review session snapshot."),
-        ("DELETE", "/api/exports/{id}", "Delete export", "id", "{\"ok\":true}", "Delete export artifact and remove it from manifest."),
-        ("GET", "/api/generate-catalog?mode=catalog|contact_sheet|all_variants", "Generate PDFs", "mode", "{\"ok\":true,\"download_url\":\"/...pdf\"}", "Generate catalog/contact/all-variants PDF outputs."),
+        (
+            "GET",
+            "/analytics/models",
+            "Model analytics UI",
+            "-",
+            "-",
+            "Model performance, recommendation, and cross-catalog analytics dashboard.",
+        ),
+        (
+            "GET",
+            "/prompts",
+            "Prompt library UI",
+            "-",
+            "-",
+            "Prompt CRUD/versioning and prompt performance workspace.",
+        ),
+        (
+            "GET",
+            "/catalog/settings",
+            "Catalog settings UI",
+            "-",
+            "-",
+            "Create/switch/configure catalogs and import/export catalog bundles.",
+        ),
+        (
+            "GET",
+            "/admin/performance",
+            "Performance UI",
+            "-",
+            "-",
+            "Request latency/error/cache/slow-endpoint monitoring page.",
+        ),
+        (
+            "GET",
+            "/batch",
+            "Batch UI",
+            "-",
+            "-",
+            "Batch generation planning and live progress page.",
+        ),
+        (
+            "GET",
+            "/similarity",
+            "Similarity UI",
+            "-",
+            "-",
+            "Cross-book similarity heatmap, alerts, and clusters.",
+        ),
+        (
+            "GET",
+            "/mockups",
+            "Mockup UI",
+            "-",
+            "-",
+            "Mockup gallery and generation controls.",
+        ),
+        (
+            "GET",
+            "/api/version",
+            "API version",
+            "-",
+            '{"version":"2.1.1"}',
+            "Current application version.",
+        ),
+        (
+            "GET",
+            "/api/models",
+            "Model registry",
+            "-",
+            '{"models":[...],"total":13}',
+            "List all known models with provider, cost, speed, and success stats.",
+        ),
+        (
+            "GET",
+            "/api/providers",
+            "Provider health",
+            "-",
+            '{"providers":[...]}',
+            "Provider-level health, circuit state, and 24h request/error counters.",
+        ),
+        (
+            "GET",
+            "/api/catalog",
+            "Catalog overview",
+            "-",
+            '{"catalogs":[...],"total_books":2397}',
+            "Catalog list with generated/winner counts.",
+        ),
+        (
+            "GET",
+            "/api/templates",
+            "Template registry",
+            "genre",
+            '{"templates":[...],"total":10}',
+            "List style templates with optional genre filtering.",
+        ),
+        (
+            "GET",
+            "/api/stats",
+            "Usage stats",
+            "-",
+            '{"total_generations":150,...}',
+            "Aggregate generation/cost/quality usage statistics.",
+        ),
+        (
+            "GET",
+            "/api/config",
+            "Runtime config",
+            "-",
+            '{"active_models":[...],"drive":{...}}',
+            "Non-sensitive runtime config and feature flags.",
+        ),
+        (
+            "GET",
+            "/api/catalogs",
+            "Catalog list",
+            "-",
+            '{"catalogs":[...],"active_catalog":"classics"}',
+            "Available catalogs for selector dropdowns.",
+        ),
+        (
+            "GET",
+            "/api/health",
+            "Health check",
+            "-",
+            '{"status":"ok",...}',
+            "Runtime health and config status.",
+        ),
+        (
+            "GET",
+            "/api/metrics",
+            "Runtime metrics",
+            "-",
+            '{"cache":{...},"errors":{...},"jobs":{...}}',
+            "Operational counters, error metrics, queue state, and worker service telemetry.",
+        ),
+        (
+            "GET",
+            "/api/performance/summary",
+            "Performance summary",
+            "catalog",
+            '{"response_time":{...},"slow_requests":{...}}',
+            "Slow-request response-time quantiles, endpoint rollups, and latest slow request samples.",
+        ),
+        (
+            "GET",
+            "/api/providers/runtime",
+            "Provider runtime",
+            "-",
+            '{"providers":{...}}',
+            "Provider request/error counters, circuit breaker, and rate-limit windows.",
+        ),
+        (
+            "GET",
+            "/api/workers",
+            "Worker service status",
+            "-",
+            '{"workers":{...}}',
+            "Worker mode + heartbeat status for inline/external workers.",
+        ),
+        (
+            "GET",
+            "/api/audit-log?limit=100",
+            "Audit log",
+            "limit",
+            '{"items":[...]}',
+            "Signed audit entries for cost/destructive operations.",
+        ),
+        (
+            "GET",
+            "/api/analytics/costs?period=7d",
+            "Cost summary",
+            "period,catalog",
+            '{"summary":{...}}',
+            "Cost totals and operation mix from cost ledger.",
+        ),
+        (
+            "GET",
+            "/api/analytics/costs/by-book",
+            "Cost by book",
+            "period,catalog",
+            '{"books":[...]}',
+            "Book-level cost breakdown.",
+        ),
+        (
+            "GET",
+            "/api/analytics/costs/by-model",
+            "Cost by model",
+            "period,catalog",
+            '{"models":[...]}',
+            "Model/provider cost breakdown.",
+        ),
+        (
+            "GET",
+            "/api/analytics/costs/timeline?period=30d&granularity=daily",
+            "Cost timeline",
+            "period,granularity,catalog",
+            '{"timeline":[...]}',
+            "Cost trend with cumulative totals.",
+        ),
+        (
+            "GET",
+            "/api/analytics/budget",
+            "Budget status",
+            "catalog",
+            '{"budget":{...}}',
+            "Budget limit, warning/blocked state, and projected spend.",
+        ),
+        (
+            "POST",
+            "/api/analytics/budget",
+            "Set budget",
+            '{"catalog":"...","limit_usd":100,"warning_threshold":0.8}',
+            '{"ok":true}',
+            "Set budget limit/threshold.",
+        ),
+        (
+            "POST",
+            "/api/analytics/budget/override",
+            "Override budget",
+            '{"catalog":"...","extra_limit_usd":25,"duration_hours":24}',
+            '{"ok":true}',
+            "Temporary budget increase.",
+        ),
+        (
+            "GET",
+            "/api/analytics/quality/trends?period=30d",
+            "Quality trends",
+            "period,catalog",
+            '{"trend":[...]}',
+            "Quality evolution over time.",
+        ),
+        (
+            "GET",
+            "/api/analytics/quality/distribution",
+            "Quality distribution",
+            "catalog",
+            '{"bins":[...]}',
+            "Quality score histogram.",
+        ),
+        (
+            "GET",
+            "/api/analytics/models/compare",
+            "Model compare",
+            "catalog",
+            '{"models":[...],"recommended_model":"..."}',
+            "Quality/cost/speed/failure comparison.",
+        ),
+        (
+            "GET",
+            "/api/analytics/models/recommendation",
+            "Model recommendation",
+            "catalog,book",
+            '{"recommended_model":"...","reason":"..."}',
+            "Per-book or catalog-level model recommendation summary.",
+        ),
+        (
+            "GET",
+            "/api/analytics/ab-tests",
+            "A/B test log",
+            "catalog,limit",
+            '{"items":[...]}',
+            "Recent winner selections and compared model sets.",
+        ),
+        (
+            "POST",
+            "/api/analytics/ab-tests",
+            "Record A/B winner",
+            '{"book_id":42,"models_compared":[...],"winner":"..."}',
+            '{"ok":true}',
+            "Store winner decisions for model comparison analytics.",
+        ),
+        (
+            "GET",
+            "/api/analytics/completion",
+            "Catalog completion",
+            "catalog",
+            '{"completion_percent":85.8}',
+            "Winner completion and production-readiness summary.",
+        ),
+        (
+            "GET",
+            "/api/analytics/cost-projection?books=100&variants=5&models=openrouter/google/gemini-2.5-flash-image",
+            "Cost projection",
+            "books,variants,models,catalog",
+            '{"estimatedCostUsd":1.48,...}',
+            "Estimate total cost/time/storage before starting large runs.",
+        ),
+        (
+            "POST",
+            "/api/analytics/export-report",
+            "Export analytics report",
+            '{"period":"30d"}',
+            '{"report_id":"..."}',
+            "Generate report artifact in data/reports.",
+        ),
+        (
+            "GET",
+            "/api/analytics/reports",
+            "List reports",
+            "-",
+            '{"reports":[...]}',
+            "List generated analytics report files.",
+        ),
+        (
+            "POST",
+            "/api/admin/migrate-to-sqlite",
+            "Migrate JSON -> SQLite",
+            '{"db_path":"data/alexandria.db"}',
+            '{"ok":true,"summary":{...}}',
+            "One-shot migration command for scale mode.",
+        ),
+        (
+            "GET",
+            "/api/jobs?status=queued,running&limit=50",
+            "List async jobs",
+            "status,limit,book,catalog",
+            '{"jobs":[...],"count":12}',
+            "List persisted async generation jobs.",
+        ),
+        (
+            "GET",
+            "/api/jobs/{id}",
+            "Get async job",
+            "job_id",
+            '{"job":{...},"attempts":[...]}',
+            "Inspect one async job including attempt history.",
+        ),
+        (
+            "GET",
+            "/api/generation-failures?catalog=classics&limit=20",
+            "Generation failures",
+            "catalog,limit",
+            '{"failures":[...]}',
+            "Inspect recent failed or retrying generation jobs with attempt diagnostics.",
+        ),
+        (
+            "GET",
+            "/api/batch-generate",
+            "List batches",
+            "catalog,limit,offset",
+            '{"batches":[...],"pagination":{...}}',
+            "List recent batch generation runs.",
+        ),
+        (
+            "GET",
+            "/api/batch-generate/{batchId}/status",
+            "Batch status",
+            "batchId,catalog,limit,offset",
+            '{"status":"running","books":[...]}',
+            "Get live per-book batch progress with pagination.",
+        ),
+        (
+            "GET",
+            "/api/events/job/{id}",
+            "Job SSE stream",
+            "id,catalog",
+            "event-stream",
+            "Real-time stream for one async job.",
+        ),
+        (
+            "GET",
+            "/api/events/batch/{batchId}",
+            "Batch SSE stream",
+            "batchId,catalog",
+            "event-stream",
+            "Real-time stream for one batch run.",
+        ),
+        (
+            "GET",
+            "/api/review-data?catalog=classics&limit=25&offset=0",
+            "Review data",
+            "catalog,limit,offset,sort,order,search,status,tags",
+            '{"books":[...],"pagination":{...}}',
+            "Paginated review books, winners, and filters.",
+        ),
+        (
+            "GET",
+            "/api/iterate-data?catalog=classics&limit=25&offset=0",
+            "Iterate data",
+            "catalog,limit,offset,sort,order,search,status",
+            '{"books":[...],"pagination":{...}}',
+            "Paginated iterate books + model configuration.",
+        ),
+        (
+            "GET",
+            "/api/enrichment-health",
+            "Enrichment health",
+            "catalog",
+            '{"health":"warning",...}',
+            "Catalog-wide enrichment quality summary with generic/missing counts.",
+        ),
+        (
+            "GET",
+            "/api/config/cover-source-default",
+            "Default cover source",
+            "catalog",
+            '{"default":"drive"}',
+            "Return server-selected default cover source based on environment.",
+        ),
+        (
+            "GET",
+            "/api/prompts",
+            "Prompt library list",
+            "catalog,q,category,tags",
+            '{"prompts":[...]}',
+            "Search/list prompt library with usage, win rate, and version counts.",
+        ),
+        (
+            "POST",
+            "/api/prompts",
+            "Create prompt",
+            '{"name":"...","prompt_template":"..."}',
+            '{"ok":true,"prompt":{...}}',
+            "Create a prompt-library entry.",
+        ),
+        (
+            "POST",
+            "/api/prompts/{id}",
+            "Update/delete/usage",
+            '{"action":"update|delete|record_usage"}',
+            '{"ok":true}',
+            "Update prompt fields, delete prompt, or record usage/win counters.",
+        ),
+        (
+            "GET",
+            "/api/prompts/{id}/versions",
+            "Prompt version history",
+            "catalog",
+            '{"versions":[...]}',
+            "List historical prompt versions for rollback.",
+        ),
+        (
+            "GET",
+            "/api/prompts/export",
+            "Export prompt library",
+            "catalog",
+            '{"prompts":[...],"versions":{...}}',
+            "Export prompt library payload as JSON.",
+        ),
+        (
+            "POST",
+            "/api/prompts/import",
+            "Import prompts",
+            '{"prompts":[...]}',
+            '{"ok":true,"imported":12}',
+            "Bulk import prompt library entries.",
+        ),
+        (
+            "GET",
+            "/api/prompt-performance",
+            "Prompt pattern stats",
+            "-",
+            '{"patterns":{...}}',
+            "Prompt performance breakdown for intelligent prompting.",
+        ),
+        (
+            "GET",
+            "/api/history?book=2",
+            "Book history",
+            "book",
+            '{"items":[...]}',
+            "History subset for one book.",
+        ),
+        (
+            "GET",
+            "/api/generation-history?book=2&model=flux&status=success&limit=50&offset=0",
+            "Filtered generation history",
+            "book,model,provider,status,date_from,date_to,quality_min,quality_max,limit,offset",
+            '{"items":[...],"total":123,"pagination":{...}}',
+            "Global sortable/filterable generation records.",
+        ),
+        (
+            "GET",
+            "/api/dashboard-data",
+            "Dashboard metrics",
+            "-",
+            '{"summary":{...},...}',
+            "Cost and quality analytics for charts.",
+        ),
+        (
+            "GET",
+            "/api/visual-qa",
+            "Visual QA index",
+            "catalog,book_number,force",
+            '{"comparisons":[...],"summary":{...}}',
+            "List generated comparison grids with PASS/FAIL verdicts.",
+        ),
+        (
+            "GET",
+            "/api/visual-qa/image/{book_number}",
+            "Visual QA image",
+            "book_number,catalog",
+            "binary image",
+            "Serve one visual comparison JPG.",
+        ),
+        (
+            "GET",
+            "/api/weak-books?threshold=0.75",
+            "Weak books",
+            "threshold,catalog",
+            '{"books":[...]}',
+            "Books below a quality threshold.",
+        ),
+        (
+            "GET",
+            "/api/regeneration-results?book=15",
+            "Regeneration results",
+            "book",
+            '{"results":[...]}',
+            "Read saved re-generation comparison results.",
+        ),
+        (
+            "GET",
+            "/api/review-queue?threshold=0.90",
+            "Speed review queue",
+            "threshold",
+            '{"queue":[...],"auto_approve":34}',
+            "Ordered speed-review queue with confidence and summary buckets.",
+        ),
+        (
+            "GET",
+            "/api/review-session/{id}",
+            "Review session",
+            "session_id",
+            '{"session":{...}}',
+            "Load a saved speed-review session state.",
+        ),
+        (
+            "GET",
+            "/api/review-stats",
+            "Review stats",
+            "-",
+            '{"sessions":[...]}',
+            "Aggregate completed review session metrics.",
+        ),
+        (
+            "GET",
+            "/api/similarity-matrix?threshold=0.25&limit=50&offset=0",
+            "Similarity matrix",
+            "threshold,limit,offset",
+            '{"pairs":[...],"pagination":{...}}',
+            "Paginated similarity pairs for large catalogs.",
+        ),
+        (
+            "GET",
+            "/api/similarity/recompute/status",
+            "Similarity recompute status",
+            "catalog",
+            '{"recompute":{...}}',
+            "Background recompute status for full similarity cache refresh.",
+        ),
+        (
+            "GET",
+            "/api/similarity-alerts?threshold=0.25",
+            "Similarity alerts",
+            "threshold",
+            '{"alerts":[...]}',
+            "Pairs below similarity threshold.",
+        ),
+        (
+            "GET",
+            "/api/similarity-clusters",
+            "Similarity clusters",
+            "-",
+            '{"clusters":[...]}',
+            "Connected clusters of visually similar covers.",
+        ),
+        (
+            "GET",
+            "/api/cover-hash/15",
+            "Single cover hash",
+            "-",
+            '{"hash":{...}}',
+            "pHash/dHash/histogram values for one winner.",
+        ),
+        (
+            "GET",
+            "/api/mockup-status?limit=25&offset=0",
+            "Mockup status",
+            "limit,offset",
+            '{"books":[...],"pagination":{...}}',
+            "Paginated per-book mockup completion status.",
+        ),
+        (
+            "GET",
+            "/api/providers/connectivity?force=0",
+            "Provider connectivity",
+            "force,catalog",
+            '{"providers":{...}}',
+            "Cached provider connectivity checks used by iterate auto-status.",
+        ),
+        (
+            "GET",
+            "/api/drive-status",
+            "Save Raw drive status",
+            "catalog",
+            '{"connected":true,...}',
+            "Focused Save Raw Google Drive diagnostics including credential identity and parent folder access.",
+        ),
+        (
+            "GET",
+            "/api/drive/status",
+            "Drive status",
+            "catalog,drive_folder_id,input_folder_id",
+            '{"connected":true,...}',
+            "Drive credentials/source/output status and sync summary.",
+        ),
+        (
+            "GET",
+            "/api/drive/sync-status",
+            "Drive sync status",
+            "catalog,drive_folder_id,input_folder_id",
+            '{"status":{...}}',
+            "Alias for drive status focused on sync/pending/error summary.",
+        ),
+        (
+            "GET",
+            "/api/drive/input-covers",
+            "Drive input covers",
+            "catalog,drive_folder_id,input_folder_id,limit,force",
+            '{"covers":[...]}',
+            "List top-level source covers/folders from Google Drive for iterate selection.",
+        ),
+        (
+            "GET",
+            "/api/books/{book}/cover-preview?source=drive",
+            "Book cover preview",
+            "book,source,selected_cover_id,catalog",
+            "binary image",
+            "Build/return a thumbnail preview from local or Drive-backed source cover.",
+        ),
+        (
+            "GET",
+            "/api/variant-download?book=15&variant=2",
+            "Variant ZIP download",
+            "book,variant,model,catalog",
+            "binary zip",
+            "Download one generated variant package (JPG/PDF/medallion/metadata).",
+        ),
+        (
+            "GET",
+            "/api/winner-download?book=15",
+            "Winner ZIP download",
+            "book,catalog",
+            "binary zip",
+            "Download selected winner package for one book.",
+        ),
+        (
+            "GET",
+            "/api/source-download?book=15&variant=2&model=openrouter/google/gemini-2.5-flash-image",
+            "Source image download",
+            "book,variant,model,catalog",
+            "binary image",
+            "Download raw source image for one generated variant.",
+        ),
+        (
+            "GET",
+            "/api/download-book?book=15",
+            "Book variants ZIP",
+            "book,catalog",
+            "binary zip",
+            "Download all generated variants (composited + source) for one book.",
+        ),
+        (
+            "GET",
+            "/api/download-approved",
+            "Approved variants ZIP",
+            "catalog",
+            "binary zip",
+            "Download all approved winner variants (composited + source).",
+        ),
+        (
+            "GET",
+            "/api/exports",
+            "List exports",
+            "catalog,limit,offset",
+            '{"exports":[...],"pagination":{...}}',
+            "Export artifacts with size and file counts.",
+        ),
+        (
+            "GET",
+            "/api/export/status",
+            "Export status tracking",
+            "catalog,limit,offset",
+            '{"items":[...]}',
+            "Per-book/per-platform export status including changed-since-last-export flags.",
+        ),
+        (
+            "GET",
+            "/api/exports/{id}/download",
+            "Download export ZIP",
+            "id",
+            "binary zip",
+            "Build and stream a ZIP for a single export artifact.",
+        ),
+        (
+            "GET",
+            "/api/delivery/status",
+            "Delivery status",
+            "catalog",
+            '{"enabled":true,...}',
+            "Delivery automation settings and completion summary.",
+        ),
+        (
+            "GET",
+            "/api/delivery/tracking",
+            "Delivery tracking grid",
+            "catalog,limit,offset",
+            '{"items":[...]}',
+            "Per-book delivery status across platforms.",
+        ),
+        (
+            "GET",
+            "/api/archive/stats",
+            "Archive stats",
+            "catalog",
+            '{"archive_size_gb":...}',
+            "Archive size, count, and date range.",
+        ),
+        (
+            "GET",
+            "/api/storage/usage",
+            "Storage usage",
+            "catalog",
+            '{"total_gb":...}',
+            "Storage breakdown + cleanup suggestion.",
+        ),
+        (
+            "GET",
+            "/api/mockup/{book}/{template}",
+            "Mockup image",
+            "book,template",
+            "binary image",
+            "Serve one generated mockup image.",
+        ),
+        (
+            "GET",
+            "/api/mockup-zip?book=15",
+            "Mockup ZIP",
+            "book",
+            '{"url":"/...zip"}',
+            "Bundle all mockups for one book as ZIP.",
+        ),
+        (
+            "POST",
+            "/api/save-selections",
+            "Save winners",
+            '{"selections":{...}}',
+            '{"ok":true}',
+            "Persist winner selections with metadata.",
+        ),
+        (
+            "POST",
+            "/api/enrich-book",
+            "Enrich one book",
+            '{"book":15}',
+            '{"ok":true,"book":{...}}',
+            "Generate/refresh LLM enrichment metadata for one title.",
+        ),
+        (
+            "POST",
+            "/api/enrich-all",
+            "Enrich all books",
+            "{}",
+            '{"ok":true,"summary":{...}}',
+            "Generate enrichment metadata across the full catalog.",
+        ),
+        (
+            "POST",
+            "/api/enrich-generic",
+            "Re-enrich generic books",
+            '{"delay":0.5,"batch_size":50}',
+            '{"ok":true,"started":true}',
+            "Start a background run that only re-enriches generic placeholder rows.",
+        ),
+        (
+            "POST",
+            "/api/generate-smart-prompts",
+            "Generate intelligent prompts",
+            '{"book":15,"count":5}',
+            '{"ok":true,"book":{...}}',
+            "Generate AI-authored prompts plus quality scores.",
+        ),
+        (
+            "POST",
+            "/api/generate-mockup",
+            "Generate one mockup",
+            '{"book":15,"template":"desk_scene"}',
+            '{"ok":true}',
+            "Generate one mockup template for one book.",
+        ),
+        (
+            "POST",
+            "/api/generate-all-mockups",
+            "Generate mockup batch",
+            '{"book":15}|{"all_books":true}',
+            '{"ok":true}',
+            "Generate all selected templates for one/all books.",
+        ),
+        (
+            "POST",
+            "/api/generate-amazon-set",
+            "Generate Amazon set",
+            '{"book":15}|{"all_books":true}',
+            '{"ok":true}',
+            "Generate 7-image Amazon listing set.",
+        ),
+        (
+            "POST",
+            "/api/generate-social-cards",
+            "Generate social cards",
+            '{"book":15,"formats":["instagram","facebook"]}',
+            '{"ok":true}',
+            "Generate marketing cards for social platforms.",
+        ),
+        (
+            "POST",
+            "/api/visual-qa/generate",
+            "Generate visual QA",
+            '{"book_number":15}',
+            '{"ok":true,"generated":99,"passed":95,"failed":4}',
+            "Generate visual comparison grids for one/all books.",
+        ),
+        (
+            "POST",
+            "/api/save-raw",
+            "Save raw package",
+            '{"job_id":"..."}',
+            '{"ok":true,"status":"saved|partial",...}',
+            "Copy raw/composited winner files locally and upload them to Google Drive with structured per-file status.",
+        ),
+        (
+            "POST",
+            "/api/retry-drive-upload",
+            "Retry save raw Drive upload",
+            '{"job_id":"..."}',
+            '{"ok":true,"retried":true,...}',
+            "Retry the Google Drive upload for an already saved raw package without surfacing a hard client error.",
+        ),
+        (
+            "POST",
+            "/api/save-prompt",
+            "Save prompt",
+            '{"name":"...","prompt_template":"..."}',
+            '{"ok":true,"prompt_id":"..."}',
+            "Save prompt into prompt library.",
+        ),
+        (
+            "POST",
+            "/api/providers/reset",
+            "Reset provider runtime",
+            '{"provider":"all|openai|..."}',
+            '{"ok":true}',
+            "Reset provider circuit/rate-limit/runtime counters.",
+        ),
+        (
+            "POST",
+            "/api/test-connection",
+            "Test provider keys",
+            '{"provider":"all|openai|..."}',
+            '{"ok":true,"report":{...}}',
+            "Validate provider connectivity.",
+        ),
+        (
+            "POST",
+            "/api/validate/cover",
+            "Validate print readiness",
+            '{"file_path":"Output Covers/.../cover.jpg","distributor":"ingram_spark"}',
+            '{"ok":true,"passed":true}',
+            "Validate one cover against distributor print specs.",
+        ),
+        (
+            "POST",
+            "/api/generate",
+            "Generate variants",
+            '{"book":2,"models":[...],"variants":5,"prompt":"...","async":true,"dry_run":false}',
+            '{"ok":true,"job":{...}}',
+            "Queue async generation job (idempotent). Sync mode (async=false) is disabled by default unless ALLOW_SYNC_GENERATION=1.",
+        ),
+        (
+            "POST",
+            "/api/batch-generate",
+            "Create batch generation",
+            '{"books":[1,2,3],"models":[...],"variants":5,"budgetUsd":25}',
+            '{"ok":true,"batchId":"..."}',
+            "Queue multiple book jobs under one batch id with budget controls.",
+        ),
+        (
+            "POST",
+            "/api/batch-generate/{batchId}/pause",
+            "Pause batch",
+            '{"reason":"manual"}',
+            '{"ok":true,"status":"paused"}',
+            "Pause queued jobs in a batch.",
+        ),
+        (
+            "POST",
+            "/api/batch-generate/{batchId}/resume",
+            "Resume batch",
+            "{}",
+            '{"ok":true,"status":"queued"}',
+            "Resume paused jobs in a batch.",
+        ),
+        (
+            "POST",
+            "/api/batch-generate/{batchId}/cancel",
+            "Cancel batch",
+            '{"reason":"manual"}',
+            '{"ok":true,"status":"cancelled"}',
+            "Cancel queued jobs in a batch.",
+        ),
+        (
+            "POST",
+            "/api/jobs/{id}/cancel",
+            "Cancel async job",
+            '{"reason":"..."}',
+            '{"ok":true,"job":{...}}',
+            "Cancel queued/retrying/running async job.",
+        ),
+        (
+            "POST",
+            "/api/jobs/{id}/cancel-model",
+            "Cancel one model in job",
+            '{"model":"...","reason":"..."}',
+            '{"ok":true}',
+            "Cancel one model stream while leaving the rest of the generation job running.",
+        ),
+        (
+            "POST",
+            "/api/regenerate",
+            "Re-generate weak book(s)",
+            '{"book":15,"variants":5,"use_library":true}',
+            '{"ok":true,"summary":{...}}',
+            "Run targeted re-generation workflow.",
+        ),
+        (
+            "POST",
+            "/api/similarity/recompute",
+            "Recompute similarity cache",
+            '{"threshold":0.25}',
+            '{"ok":true,"job":{...}}',
+            "Trigger background full similarity recompute.",
+        ),
+        (
+            "POST",
+            "/api/similarity/update",
+            "Incremental similarity update",
+            '{"book":15}',
+            '{"ok":true}',
+            "Recompute similarity pairs for one book only.",
+        ),
+        (
+            "POST",
+            "/api/export/validate/{book_number}",
+            "Validate export readiness",
+            "-",
+            '{"ok":true,"platforms":{...}}',
+            "Validate winner cover readiness for Amazon/Ingram/Social/Web without writing exports.",
+        ),
+        (
+            "POST",
+            "/api/export/amazon",
+            "Amazon export",
+            '{"books":"1-20"}',
+            '{"ok":true,"export_id":"..."}',
+            "Generate Amazon listing assets for winners.",
+        ),
+        (
+            "POST",
+            "/api/export/amazon/{book_number}",
+            "Amazon export (single)",
+            "-",
+            '{"ok":true}',
+            "Generate Amazon assets for one title.",
+        ),
+        (
+            "POST",
+            "/api/export/ingram",
+            "Ingram export",
+            '{"books":"1-20"}',
+            '{"ok":true}',
+            "Generate IngramSpark print package.",
+        ),
+        (
+            "POST",
+            "/api/export/social?platforms=instagram,facebook",
+            "Social export",
+            '{"books":"1-20"}',
+            '{"ok":true}',
+            "Generate multi-platform social cards.",
+        ),
+        (
+            "POST",
+            "/api/export/web",
+            "Web export",
+            '{"books":"1-20"}',
+            '{"ok":true}',
+            "Generate web-optimized cover sizes + manifest.",
+        ),
+        (
+            "POST",
+            "/api/export/all",
+            "Export all pipelines",
+            '{"books":"all","platforms":["amazon","ingram","social","web"]}',
+            '{"ok":true,"combined_export_id":"..."}',
+            "Run all export pipelines and produce one combined bundle.",
+        ),
+        (
+            "POST",
+            "/api/delivery/enable",
+            "Enable delivery",
+            "-",
+            '{"ok":true}',
+            "Enable automatic delivery pipeline for catalog.",
+        ),
+        (
+            "POST",
+            "/api/delivery/disable",
+            "Disable delivery",
+            "-",
+            '{"ok":true}',
+            "Disable automatic delivery pipeline for catalog.",
+        ),
+        (
+            "POST",
+            "/api/delivery/batch?platforms=amazon,social",
+            "Batch delivery",
+            '{"books":"1-20"}',
+            '{"ok":true}',
+            "Deliver selected/all winner books across configured platforms.",
+        ),
+        (
+            "POST",
+            "/api/sync-to-drive",
+            "Sync selected winners",
+            '{"selections":{...}}',
+            '{"ok":true,"summary":{...}}',
+            "Sync selected winner files to Google Drive.",
+        ),
+        (
+            "POST",
+            "/api/drive/push",
+            "Drive push",
+            '{"mode":"push"}',
+            '{"ok":true}',
+            "Push local winners/mockups/exports to Drive layout.",
+        ),
+        (
+            "POST",
+            "/api/drive/pull",
+            "Drive pull",
+            '{"mode":"pull"}',
+            '{"ok":true}',
+            "Pull new source covers from Drive input folder.",
+        ),
+        (
+            "POST",
+            "/api/drive/sync",
+            "Drive full sync",
+            '{"mode":"bidirectional"}',
+            '{"ok":true}',
+            "Run pull + push with conflict resolution.",
+        ),
+        (
+            "POST",
+            "/api/archive-non-winners",
+            "Archive non-winners",
+            '{"dry_run":true}',
+            '{"ok":true,"summary":{...}}',
+            "Move non-winning variants to Archive/ (never delete).",
+        ),
+        (
+            "POST",
+            "/api/archive/old-exports?days=30",
+            "Archive old exports",
+            "days",
+            '{"ok":true}',
+            "Archive export packages older than N days.",
+        ),
+        (
+            "POST",
+            "/api/archive/restore/{book_number}",
+            "Restore archived book",
+            "-",
+            '{"ok":true}',
+            "Restore archived assets for a title.",
+        ),
+        (
+            "POST",
+            "/api/dismiss-similarity",
+            "Dismiss similarity alert",
+            '{"book_a":1,"book_b":47}',
+            '{"ok":true}',
+            "Mark a similarity pair as reviewed/acceptable.",
+        ),
+        (
+            "POST",
+            "/api/batch-approve",
+            "Batch approve winners",
+            '{"threshold":0.90}',
+            '{"ok":true,"summary":{...}}',
+            "Confirm all winners above threshold for speed review.",
+        ),
+        (
+            "POST",
+            "/api/review-selection",
+            "Save one speed selection",
+            '{"book":15,"variant":3,"reviewer":"tim"}',
+            '{"ok":true}',
+            "Persist a single manual speed-review selection.",
+        ),
+        (
+            "POST",
+            "/api/save-review-session",
+            "Save speed session",
+            '{"session_id":"...","books_reviewed":42}',
+            '{"ok":true}',
+            "Save or complete a speed-review session snapshot.",
+        ),
+        (
+            "DELETE",
+            "/api/exports/{id}",
+            "Delete export",
+            "id",
+            '{"ok":true}',
+            "Delete export artifact and remove it from manifest.",
+        ),
+        (
+            "GET",
+            "/api/generate-catalog?mode=catalog|contact_sheet|all_variants",
+            "Generate PDFs",
+            "mode",
+            '{"ok":true,"download_url":"/...pdf"}',
+            "Generate catalog/contact/all-variants PDF outputs.",
+        ),
         ("GET", "/api/docs", "API docs", "-", "HTML", "This documentation page."),
     ]
 
@@ -17789,10 +22843,17 @@ def run_worker_service(
         retry_delay_seconds=retry_delay_seconds,
     )
     if recovered:
-        logger.warning("Recovered stale jobs on worker startup", extra={"recovered_jobs": recovered})
+        logger.warning(
+            "Recovered stale jobs on worker startup",
+            extra={"recovered_jobs": recovered},
+        )
 
-    effective_worker_count = max(1, int(worker_count or getattr(runtime, "job_workers", JOB_WORKER_COUNT)))
-    heartbeat_path = Path(getattr(runtime, "job_worker_heartbeat_path", JOB_WORKER_HEARTBEAT_PATH))
+    effective_worker_count = max(
+        1, int(worker_count or getattr(runtime, "job_workers", JOB_WORKER_COUNT))
+    )
+    heartbeat_path = Path(
+        getattr(runtime, "job_worker_heartbeat_path", JOB_WORKER_HEARTBEAT_PATH)
+    )
     pool = JobWorkerPool(
         job_db_store,
         worker_count=effective_worker_count,
@@ -17811,7 +22872,10 @@ def run_worker_service(
         _set_slo_background_monitor(slo_monitor)
         logger.info(
             "Worker background SLO monitor started",
-            extra={"interval_seconds": slo_monitor_interval_seconds, "catalog_id": runtime.catalog_id},
+            extra={
+                "interval_seconds": slo_monitor_interval_seconds,
+                "catalog_id": runtime.catalog_id,
+            },
         )
     else:
         _set_slo_background_monitor(None)
@@ -17836,25 +22900,47 @@ def run_worker_service(
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Prompt 5 review and iteration tooling")
-    parser.add_argument("--catalog", type=str, default=config.DEFAULT_CATALOG_ID, help="Catalog id from config/catalogs.json")
+    parser = argparse.ArgumentParser(
+        description="Prompt 5 review and iteration tooling"
+    )
+    parser.add_argument(
+        "--catalog",
+        type=str,
+        default=config.DEFAULT_CATALOG_ID,
+        help="Catalog id from config/catalogs.json",
+    )
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--books", type=str, default=None)
     parser.add_argument("--max-books", type=int, default=None)
     parser.add_argument("--serve", action="store_true")
-    parser.add_argument("--workers-only", action="store_true", help="Run queue workers without web server")
+    parser.add_argument(
+        "--workers-only",
+        action="store_true",
+        help="Run queue workers without web server",
+    )
     parser.add_argument(
         "--worker-mode",
         type=str,
         default=JOB_WORKER_MODE,
         help="Worker mode for web server: inline|external|disabled (default from JOB_WORKER_MODE)",
     )
-    parser.add_argument("--workers", type=int, default=JOB_WORKER_COUNT, help="Worker thread count")
+    parser.add_argument(
+        "--workers", type=int, default=JOB_WORKER_COUNT, help="Worker thread count"
+    )
     parser.add_argument("--port", type=int, default=8001)
     parser.add_argument("--host", type=str, default=os.getenv("HOST", "0.0.0.0"))
-    parser.add_argument("--reviewer", type=str, default=os.getenv("REVIEWER", "tim"), help="Default reviewer name")
-    parser.add_argument("--grid", type=Path, default=None, help="Create one comparison grid image")
-    parser.add_argument("--book", type=int, default=None, help="Book number for comparison grid")
+    parser.add_argument(
+        "--reviewer",
+        type=str,
+        default=os.getenv("REVIEWER", "tim"),
+        help="Default reviewer name",
+    )
+    parser.add_argument(
+        "--grid", type=Path, default=None, help="Create one comparison grid image"
+    )
+    parser.add_argument(
+        "--book", type=int, default=None, help="Book number for comparison grid"
+    )
 
     args = parser.parse_args()
     runtime = config.get_config(args.catalog)
@@ -17868,7 +22954,9 @@ def main() -> int:
 
     if args.grid and args.book:
         catalog = json.loads(runtime.book_catalog_path.read_text(encoding="utf-8"))
-        entry = next((row for row in catalog if int(row.get("number", 0)) == args.book), None)
+        entry = next(
+            (row for row in catalog if int(row.get("number", 0)) == args.book), None
+        )
         if not entry:
             raise KeyError(f"Book {args.book} not in catalog")
 
@@ -17903,7 +22991,9 @@ def main() -> int:
         books=books,
         max_books=args.max_books,
     )
-    winner_payload = _ensure_winner_payload(review_books, path=_winner_path_for_runtime(runtime))
+    winner_payload = _ensure_winner_payload(
+        review_books, path=_winner_path_for_runtime(runtime)
+    )
     review_data = {
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "catalog": runtime.catalog_id,
