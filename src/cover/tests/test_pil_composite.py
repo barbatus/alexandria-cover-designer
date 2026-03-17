@@ -22,14 +22,15 @@ class TestPilComposite:
     ):
         out_jpg = OUTPUT_DIR / "pil_composited.jpg"
 
-        result = pil_composite(
+        results = pil_composite(
             source_pdf_path=sample_template_pdf,
-            ai_art_path=sample_art_png,
-            output_jpg_path=out_jpg,
+            ai_art_paths=[sample_art_png],
+            output_jpg_paths=[out_jpg],
         )
 
         assert out_jpg.exists()
-        assert result.size == (3784, 2777)
+        assert len(results) == 1
+        assert results[0].size == (3784, 2777)
 
     def test_gold_frame_preserved(
         self,
@@ -39,15 +40,15 @@ class TestPilComposite:
         """Gold frame pixels must match the original template outside the art circle."""
         out_jpg = OUTPUT_DIR / "pil_composited_frame_check.jpg"
 
-        composited = pil_composite(
+        results = pil_composite(
             source_pdf_path=sample_template_pdf,
-            ai_art_path=sample_art_png,
-            output_jpg_path=out_jpg,
+            ai_art_paths=[sample_art_png],
+            output_jpg_paths=[out_jpg],
         )
 
         foreground = _extract_foreground(sample_template_pdf)
         orig_arr = np.array(foreground.convert("RGB"))
-        comp_arr = np.array(composited)
+        comp_arr = np.array(results[0])
 
         h, w = orig_arr.shape[:2]
         corner_orig = orig_arr[: h // 8, : w // 8]
@@ -60,10 +61,12 @@ class TestPilComposite:
         sample_template_pdf: Path,
         sample_art_png: Path,
     ):
+        out_jpg = OUTPUT_DIR / "pil_composited_final.jpg"
+
         pil_composite(
             source_pdf_path=sample_template_pdf,
-            ai_art_path=sample_art_png,
-            output_jpg_path=OUTPUT_DIR / "pil_composited_final.jpg",
+            ai_art_paths=[sample_art_png],
+            output_jpg_paths=[out_jpg],
         )
 
-        assert (OUTPUT_DIR / "pil_composited_final.jpg").exists()
+        assert out_jpg.exists()

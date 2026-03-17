@@ -179,25 +179,26 @@ def _extract_foreground(pdf_path: Path) -> Image.Image:
 
 def pil_composite(
     source_pdf_path: Path,
-    ai_art_path: Path,
-    output_jpg_path: Path,
+    ai_art_paths: list[Path],
+    output_jpg_paths: list[Path],
     *,
     shape: str = "circle",
     margin_px: int = ART_MARGIN_PX,
     feather_px: int = ART_FEATHER_PX,
     border_trim_ratio: float = BORDER_TRIM_RATIO,
-) -> Image.Image:
-    """Composite AI art into a cover template.
+    save: bool = True,
+) -> list[Image.Image]:
+    """Composite AI art(s) into a cover template.
 
     1. Read Im0 dimensions from the PDF to determine target art size.
-    2. Prepare art as RGBA PNG with feathered edges.
+    2. Prepare each art as RGBA PNG with feathered edges.
     3. Extract the foreground layer from the PDF (background + text + gold
        frame + protrusions, with the medallion opening as transparent alpha).
     4. Place resized art behind the foreground — art shows through the opening.
+
+    Returns a list of composited RGB images, one per art/output pair.
     """
     source_pdf_path = Path(source_pdf_path)
-    ai_art_path = Path(ai_art_path)
-    output_jpg_path = Path(output_jpg_path)
 
     # Derive art placement geometry from the PDF's Im0 XObject.
     geo = _art_placement_from_pdf(source_pdf_path)
@@ -205,40 +206,46 @@ def pil_composite(
     art_radius = geo["art_radius"]
     diameter = art_radius * 2
 
-    # Prepare art as RGBA PNG with feathered edges at the target diameter.
-    art_png_path = output_jpg_path.with_name(output_jpg_path.stem + "_art_prepared.png")
-    prepare_art_png(
-        ai_art_path,
-        art_png_path,
-        target_width=diameter,
-        target_height=diameter,
-        shape=shape,
-        margin_px=margin_px,
-        feather_px=feather_px,
-        border_trim_ratio=border_trim_ratio,
-    )
-
     foreground = _extract_foreground(source_pdf_path)
-    art = Image.open(art_png_path).convert("RGBA")
-
     cx, cy = center
 
-    # Art layer behind the foreground
-    art_layer = Image.new("RGBA", foreground.size, (0, 0, 0, 0))
-    art_layer.paste(art, (cx - art_radius, cy - art_radius))
+    results: list[Image.Image] = []
 
-    # Foreground on top — SMask alpha reveals art through the medallion opening
-    result = Image.alpha_composite(art_layer, foreground)
+    for ai_art_path, out_path in zip(ai_art_paths, output_jpg_paths):
+        # Prepare art as RGBA PNG with feathered edges at the target diameter.
+        art_png_path = out_path.with_name(out_path.stem + "_art_prepared.png")
+        prepare_art_png(
+            ai_art_path,
+            art_png_path,
+            target_width=diameter,
+            target_height=diameter,
+            shape=shape,
+            margin_px=margin_px,
+            feather_px=feather_px,
+            border_trim_ratio=border_trim_ratio,
+        )
 
-    # Clean up intermediate PNG.
-    try:
-        art_png_path.unlink()
-    except OSError:
-        pass
+        art = Image.open(art_png_path).convert("RGBA")
 
-    composited_rgb = result.convert("RGB")
-    output_jpg_path.parent.mkdir(parents=True, exist_ok=True)
-    composited_rgb.save(
-        output_jpg_path, format="JPEG", quality=JPEG_QUALITY, subsampling=0
-    )
-    return composited_rgb
+        # Art layer behind the foreground
+        art_layer = Image.new("RGBA", foreground.size, (0, 0, 0, 0))
+        art_layer.paste(art, (cx - art_radius, cy - art_radius))
+
+        # Foreground on top — SMask alpha reveals art through the medallion opening
+        result = Image.alpha_composite(art_layer, foreground)
+
+        # Clean up intermediate PNG.
+        try:
+            art_png_path.unlink()
+        except OSError:
+            pass
+
+        composited_rgb = result.convert("RGB")
+        if save:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            composited_rgb.save(
+                out_path, format="JPEG", quality=JPEG_QUALITY, subsampling=0
+            )
+        results.append(composited_rgb)
+
+    return results

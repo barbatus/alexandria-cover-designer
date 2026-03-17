@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from src import config, safe_json
 from src.cover.llm_composite import llm_composite
@@ -23,13 +23,13 @@ EXPECTED_COVER_SIZE = (3784, 2777)
 EXPECTED_DPI = 300
 
 
-def composite_single(
+def composite(
     *,
     source_pdf_path: Path,
-    ai_art_path: Path,
-    output_jpg_path: Path,
+    ai_art_paths: list[Path],
+    output_jpg_paths: list[Path],
     shape: str = "circle",
-    mode: str = "pil",
+    mode: Literal["pil" | "llm"] = "pil",
     center: tuple[int, int] | None = None,
     width: int = 0,
     height: int = 0,
@@ -39,8 +39,8 @@ def composite_single(
             raise ValueError("center is required for llm mode")
         llm_composite(
             book_cover_pdf_path=source_pdf_path,
-            ai_art_path=ai_art_path,
-            output_jpg_path=output_jpg_path,
+            ai_art_paths=ai_art_paths,
+            output_jpg_paths=output_jpg_paths,
             center=center,
             width=width,
             height=height,
@@ -48,14 +48,14 @@ def composite_single(
     else:
         pil_composite(
             source_pdf_path=source_pdf_path,
-            ai_art_path=ai_art_path,
-            output_jpg_path=output_jpg_path,
+            ai_art_paths=ai_art_paths,
+            output_jpg_paths=output_jpg_paths,
             shape=shape,
         )
 
     return {
         "success": True,
-        "output_jpg": str(output_jpg_path),
+        "output_jpgs": [str(p) for p in output_jpg_paths],
         "mode": mode,
     }
 
@@ -78,6 +78,7 @@ def composite_all_variants(
     if not image_rows:
         raise FileNotFoundError(f"No generated variants for book {book_number}")
 
+    art_paths: list[Path] = []
     outputs: list[Path] = []
     report_items: list[dict[str, Any]] = []
 
@@ -90,13 +91,7 @@ def composite_all_variants(
         else:
             out_jpg = output_dir / str(book_number) / model / f"variant_{variant}.jpg"
 
-        composite_single(
-            source_pdf_path=source_pdf,
-            ai_art_path=row["path"],
-            output_jpg_path=out_jpg,
-            shape=shape,
-        )
-
+        art_paths.append(row["path"])
         outputs.append(out_jpg)
         report_items.append(
             {
@@ -108,6 +103,13 @@ def composite_all_variants(
                 "model": model,
             }
         )
+
+    composite(
+        source_pdf_path=source_pdf,
+        ai_art_paths=art_paths,
+        output_jpg_paths=outputs,
+        shape=shape,
+    )
 
     report = {
         "book_number": int(book_number),

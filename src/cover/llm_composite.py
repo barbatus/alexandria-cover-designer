@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import io
 import logging
+import textwrap
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,7 @@ from PIL import Image
 from src import config as cfg
 
 logger = logging.getLogger(__name__)
+import numpy as np
 
 JPEG_QUALITY = 100
 RENDER_DPI = 300
@@ -29,18 +31,31 @@ RENDER_DPI = 300
 # Padding around the art area to include the full golden ring in the crop.
 RING_PAD_PX = 120
 
-LLM_PROMPT = (
-    "You are given two images:\n"
-    "1. A cropped section of a book cover containing a golden ornamental ring/frame "
-    "with old artwork inside it.\n"
-    "2. New artwork that should replace the old artwork inside the golden ring.\n\n"
-    "Replace the old artwork inside the golden ring with the new artwork. "
-    "The golden ring frame, its ornamental details, and any protrusions must remain "
-    "perfectly intact and unchanged. Blend the new art naturally into the circular "
-    "opening so it looks like the original cover was designed with this art. "
-    "Keep the same lighting, color temperature, and style consistency. "
-    "Return ONLY the edited image at the exact same dimensions as image 1."
-)
+LLM_PROMPT = textwrap.dedent("""\
+    You are given two images.
+
+    ## Image 1 — Book cover crop
+    A cropped section of a book cover containing a golden ornamental ring/frame
+    with old artwork inside it.
+
+    ## Image 2 — New artwork
+    New artwork that must replace the old artwork inside the golden ring.
+
+    ## Task
+    Replace the old artwork inside the golden ring with the new artwork.
+
+    ## Rules
+    - If the new artwork is rectangular, ignore any borders, margins, or blank
+      edges and select the most important circular region from the actual
+      artwork content, capturing the key subjects and focal points. Place that
+      circular crop inside the ring.
+    - The golden ring frame, its ornamental details, and any protrusions must
+      remain perfectly intact and unchanged.
+    - Blend the new art naturally so it looks like the cover was originally
+      designed with this art.
+    - Match the lighting, color temperature, and style of the surrounding cover.
+    - Return ONLY the edited image at the exact same dimensions as Image 1.
+""")
 
 
 def _image_to_base64(img: Image.Image, fmt: str = "PNG") -> str:
@@ -60,28 +75,16 @@ def _call_openrouter(
     model: str = "google/gemini-3-pro-image-preview",
     timeout: int = 120,
 ) -> Image.Image:
-    """Send images to OpenRouter and get edited image back."""
-    crop_b64 = _image_to_base64(cropped)
-    art_b64 = _image_to_base64(new_art)
+    """Send cropped cover + one art image to OpenRouter and get edited image back."""
+    content: list[dict[str, Any]] = [
+        {"type": "text", "text": LLM_PROMPT},
+        {"type": "image_url", "image_url": {"url": _image_to_base64(cropped)}},
+        {"type": "image_url", "image_url": {"url": _image_to_base64(new_art)}},
+    ]
 
     payload = {
         "model": model,
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": LLM_PROMPT},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": crop_b64},
-                    },
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": art_b64},
-                    },
-                ],
-            }
-        ],
+        "messages": [{"role": "user", "content": content}],
         "modalities": ["image", "text"],
         "stream": False,
     }
@@ -145,6 +148,23 @@ def _decode_image_ref(ref: str) -> Image.Image | None:
     return None
 
 
+def _auto_trim(img: Image.Image) -> Image.Image:
+    """Trim uniform borders/margins from an image."""
+    rgb = img.convert("RGB")
+    bg = rgb.getpixel((0, 0))
+
+    arr = np.array(rgb)
+    diff = np.abs(arr.astype(int) - np.array(bg, dtype=int)).max(axis=2)
+    mask = diff > 30  # pixels that differ from the border color
+    if not mask.any():
+        return img
+    rows = mask.any(axis=1)
+    cols = mask.any(axis=0)
+    y0, y1 = np.argmax(rows), len(rows) - np.argmax(rows[::-1])
+    x0, x1 = np.argmax(cols), len(cols) - np.argmax(cols[::-1])
+    return img.crop((x0, y0, x1, y1))
+
+
 def _render_pdf(pdf_path: Path, dpi: int = RENDER_DPI) -> Image.Image:
     """Render the first page of a PDF to a PIL RGB image."""
     doc = fitz.open(str(pdf_path))
@@ -158,32 +178,32 @@ def _render_pdf(pdf_path: Path, dpi: int = RENDER_DPI) -> Image.Image:
 
 def llm_composite(
     book_cover_pdf_path: Path,
-    ai_art_path: Path,
-    output_jpg_path: Path,
+    ai_art_paths: list[Path],
+    output_jpg_paths: list[Path],
     *,
     center: tuple[int, int],
     width: int,
     height: int,
     model: str = "google/gemini-3-pro-image-preview",
     ring_pad_px: int = RING_PAD_PX,
-) -> Image.Image:
-    """Composite AI art into a cover PDF using an LLM for blending.
+    save: bool = True,
+) -> list[Image.Image]:
+    """Composite AI art(s) into a cover PDF using an LLM for blending.
 
     1. Render the cover PDF to get the full image (with old art).
     2. Crop the medallion region (center +/- width/height + padding).
-    3. Send cropped region + new art to the LLM via OpenRouter.
-    4. Paste the LLM result back and save as JPG.
+    3. Send cropped region + each art image to the LLM via OpenRouter.
+    4. Paste each LLM result back and save as JPG.
+
+    Returns a list of composited RGB images.
     """
     book_cover_pdf_path = Path(book_cover_pdf_path)
-    ai_art_path = Path(ai_art_path)
-    output_jpg_path = Path(output_jpg_path)
 
     cx, cy = center
     half_w = width // 2
     half_h = height // 2
 
     cover = _render_pdf(book_cover_pdf_path)
-    new_art = Image.open(ai_art_path).convert("RGBA")
 
     # Crop the medallion rectangle (art area + ring padding).
     x0 = max(0, cx - half_w - ring_pad_px)
@@ -192,33 +212,37 @@ def llm_composite(
     y1 = min(cover.height, cy + half_h + ring_pad_px)
     cropped = cover.crop((x0, y0, x1, y1))
 
-    # Resize new art to fit the medallion.
-    art_resized = new_art.resize((width, height), Image.LANCZOS)
-
     logger.info(
-        "LLM composite: crop=(%d,%d,%d,%d) %dx%d, art=%dx%d, model=%s",
+        "LLM composite: crop=(%d,%d,%d,%d) %dx%d, arts=%d, model=%s",
         x0,
         y0,
         x1,
         y1,
         cropped.width,
         cropped.height,
-        art_resized.width,
-        art_resized.height,
+        len(ai_art_paths),
         model,
     )
 
-    # Call LLM via OpenRouter.
-    edited = _call_openrouter(cropped, art_resized, api_key=cfg.OPENROUTER_API_KEY, model=model)
+    results: list[Image.Image] = []
 
-    # Resize LLM output to match the original crop size and paste back.
-    edited = edited.resize((x1 - x0, y1 - y0), Image.LANCZOS)
-    result = cover.copy()
-    result.paste(edited, (x0, y0))
+    for art_path, out_path in zip(ai_art_paths, output_jpg_paths):
+        art = _auto_trim(Image.open(art_path).convert("RGBA"))
+        max_dim = max(width, height)
+        art.thumbnail((max_dim, max_dim), Image.LANCZOS)
+        edited = _call_openrouter(
+            cropped, art, api_key=cfg.OPENROUTER_API_KEY, model=model
+        )
 
-    # Save JPG.
-    output_jpg_path.parent.mkdir(parents=True, exist_ok=True)
-    result.save(output_jpg_path, format="JPEG", quality=JPEG_QUALITY, subsampling=0)
+        # Resize LLM output to match the original crop size and paste back.
+        edited = edited.resize((x1 - x0, y1 - y0), Image.LANCZOS)
+        result = cover.copy()
+        result.paste(edited, (x0, y0))
 
-    logger.info("LLM composite saved: %s", output_jpg_path)
-    return result
+        if save:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            result.save(out_path, format="JPEG", quality=JPEG_QUALITY, subsampling=0)
+            logger.info("LLM composite saved: %s", out_path)
+        results.append(result)
+
+    return results
